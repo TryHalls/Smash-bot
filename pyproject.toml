@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smashbot-android-diagnostics"
+version = "0.1.0"
+description = "Host-side diagnostics for the SMASH Android control and capture pipeline"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+smashbot-diagnostics = "smashbot_diagnostics.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["smashbot_diagnostics*"]

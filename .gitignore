@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Diagnostic output and generated screenshots
+artifacts/
+
+# Local tooling and OS files
+.coverage
+.mypy_cache/
+.DS_Store
