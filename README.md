@@ -429,14 +429,22 @@ mapped x/y, `inject_success`, matching PTS, valid D0/D1/D2 order, and
 
 ### Physical evidence and final decision
 
-The first physical pilot at
-`artifacts/task007/20260930T153811Z/report.json` remained `INCONCLUSIVE`
-because the strict five-frame pre-touch requirement was incompatible with the
-capacity-one latest-frame source: only frames `[0, 7]` were available and no
-ACTION_DOWN was sent. Host hardening then kept `baseline_frame_count` as the
-desired count, accepted a minimum of two distinct stable frames, preserved the
-last collected frame as authoritative, and kept the existing marker-off and
-static-background rules unchanged.
+The Task 007 physical attempts are preserved chronologically without modifying
+their raw reports. The first physical pilot at
+`artifacts/task007/20260930T153811Z/report.json` sent its warm-up
+`ACTION_DOWN`, observed sequence 1, and reached Pointer Location marker-off
+recovery. It remained `INCONCLUSIVE` because the post-warm-up background
+differed materially from the initial baseline; the `[0, 7]` baseline sample
+indices do not belong to this pilot.
+
+The second attempt/setup at
+`artifacts/task007/20260930T161229Z/report.json` sent no `ACTION_DOWN`.
+It requested 5 baseline frames but collected only `[0, 7]`; the strict
+five-frame gate therefore stopped the run before warm-up. This motivated the
+host correction that keeps 5 as the desired sample count while accepting at
+least two distinct stable frames, preserving the last collected frame as
+authoritative and keeping the existing marker-off and static-background rules
+unchanged.
 
 The final pilot is preserved without modifying its raw report at
 `artifacts/task007/20260930T162759Z/report.json` (gitignored):
@@ -489,9 +497,13 @@ Static calibration uses a
 VFR-aware state machine: one marker-off baseline frame, an unmeasured warm-up
 press, a shared temporal-noise baseline from the post-warm-up marker-off frame,
 and then `baseline marker-off -> dispatch -> marker-on -> marker-off/baseline
-next` for each trial. It does not require multiple fresh no-touch frames before
-dispatch. The persistent calibration press is 450 ms. Task 002 screenshot
-capture remains unchanged and no screenshots or long recordings are committed.
+next` for each trial. For Task 003/005/006 this flow does not require multiple
+fresh no-touch frames before dispatch. The Task 007 exception is explicit:
+`task007_framed_h264` requires a stable pre-touch baseline formed by at least
+2 distinct collected no-touch frames before `ACTION_DOWN`; 5 remains the
+desired sample count. The persistent calibration press is 450 ms. Task 002
+screenshot capture remains unchanged and no screenshots or long recordings are
+committed.
 No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
 bypass, online automation, or generic scrcpy protocol library is included.
 Task 004's isolated v4.1 touch subset is the only control-socket addition.
