@@ -22,7 +22,7 @@ from typing import Any, Sequence
 
 from .adb import AdbClient
 from .reporting import new_run_directory, write_json, write_summary
-from .streaming import SCRCPY_VERSION, ensure_scrcpy_server
+from .streaming import SCRCPY_VERSION, ensure_scrcpy_server, prepare_scrcpy_child_environment
 
 
 DEFAULT_PACKAGE = "com.cascade.badminton.game"
@@ -628,9 +628,8 @@ def run_perception_capture(
         command = build_perception_capture_command(scrcpy, selected_serial, capture_path, duration)
         report["argv"] = command
         server_path = str(report["official_server"]["path"])
-        environment = os.environ.copy()
-        environment["SCRCPY_SERVER_PATH"] = server_path
-        report["environment_overrides"] = {"SCRCPY_SERVER_PATH": server_path}
+        environment, environment_overrides = prepare_scrcpy_child_environment(server_path)
+        report["environment_overrides"] = environment_overrides
         started = _utc_now()
         report["capture"]["started_at_utc"] = started
         try:

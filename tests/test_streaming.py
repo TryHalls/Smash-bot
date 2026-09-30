@@ -1,4 +1,5 @@
 import unittest
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,10 +14,35 @@ from smashbot_diagnostics.streaming import (
     decoder_command,
     evaluate_gate,
     profile_dict,
+    prepare_scrcpy_child_environment,
 )
 
 
 class StreamingTests(unittest.TestCase):
+    def test_common_scrcpy_environment_prefers_x11_and_preserves_parent(self):
+        original = {key: os.environ.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "SDL_VIDEODRIVER")}
+        os.environ["DISPLAY"] = ":0"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+        os.environ.pop("SDL_VIDEODRIVER", None)
+        child, overrides = prepare_scrcpy_child_environment("/verified/server")
+        self.assertEqual(child["DISPLAY"], ":0")
+        self.assertEqual(child["SDL_VIDEODRIVER"], "x11")
+        self.assertNotIn("WAYLAND_DISPLAY", child)
+        self.assertEqual(child["SCRCPY_SERVER_PATH"], "/verified/server")
+        self.assertEqual(overrides, {
+            "SDL_VIDEODRIVER": "x11",
+            "WAYLAND_DISPLAY": "unset",
+            "SCRCPY_SERVER_PATH": "/verified/server",
+        })
+        self.assertEqual(os.environ.get("DISPLAY"), ":0")
+        self.assertEqual(os.environ.get("WAYLAND_DISPLAY"), "wayland-0")
+        self.assertIsNone(os.environ.get("SDL_VIDEODRIVER"))
+        for key, value in original.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
     def test_decoder_profiles_change_only_the_low_delay_flag(self):
         input_args = ["-f", "h264", "-i", "pipe:0"]
         baseline = decoder_command("ffmpeg", input_args, "baseline_current")

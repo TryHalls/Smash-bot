@@ -68,12 +68,19 @@ class PerceptionCaptureTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.output = self.root / "artifacts" / "task008"
         self.log = self.root / "scrcpy-env.txt"
+        self.environment_log = self.root / "scrcpy-child-environment.json"
         self.old_log = os.environ.get("TASK008_FAKE_LOG")
+        self.old_environment_log = os.environ.get("TASK008_ENV_LOG")
+        self.old_display_environment = {
+            key: os.environ.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "SDL_VIDEODRIVER")
+        }
         os.environ["TASK008_FAKE_LOG"] = str(self.log)
+        os.environ["TASK008_ENV_LOG"] = str(self.environment_log)
         self.scrcpy = _write_executable(
             self.root / "scrcpy",
             """
 import os, sys
+import json
 from pathlib import Path
 if '--version' in sys.argv:
     print(os.environ.get('TASK008_SCRCPY_VERSION', 'scrcpy 4.1'))
@@ -82,6 +89,12 @@ for arg in sys.argv:
     if arg.startswith('--record='):
         Path(arg.split('=', 1)[1]).write_bytes(b'fake-mkv')
 Path(os.environ['TASK008_FAKE_LOG']).write_text(os.environ.get('SCRCPY_SERVER_PATH', ''), encoding='utf-8')
+Path(os.environ['TASK008_ENV_LOG']).write_text(json.dumps({
+    'DISPLAY': os.environ.get('DISPLAY'),
+    'WAYLAND_DISPLAY': os.environ.get('WAYLAND_DISPLAY'),
+    'SDL_VIDEODRIVER': os.environ.get('SDL_VIDEODRIVER'),
+    'SCRCPY_SERVER_PATH': os.environ.get('SCRCPY_SERVER_PATH'),
+}), encoding='utf-8')
 raise SystemExit(int(os.environ.get('TASK008_SCRCPY_EXIT', '0')))
 """,
         )
@@ -123,6 +136,15 @@ else:
             os.environ.pop("TASK008_FAKE_LOG", None)
         else:
             os.environ["TASK008_FAKE_LOG"] = self.old_log
+        if self.old_environment_log is None:
+            os.environ.pop("TASK008_ENV_LOG", None)
+        else:
+            os.environ["TASK008_ENV_LOG"] = self.old_environment_log
+        for key, value in self.old_display_environment.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self.tmp.cleanup()
 
     def _server_identity(self):
@@ -208,6 +230,45 @@ else:
         self.assertEqual(report["status"], "PASS")
         self.assertEqual(self.log.read_text(encoding="utf-8"), str(self.server))
         self.assertEqual(report["environment_overrides"]["SCRCPY_SERVER_PATH"], str(self.server))
+
+    def test_task008_uses_x11_child_policy_without_mutating_parent(self):
+        os.environ["DISPLAY"] = ":0"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+        os.environ.pop("SDL_VIDEODRIVER", None)
+        parent_before = {
+            "DISPLAY": os.environ.get("DISPLAY"),
+            "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY"),
+            "SDL_VIDEODRIVER": os.environ.get("SDL_VIDEODRIVER"),
+        }
+        report = self._run()
+        child = json.loads(self.environment_log.read_text(encoding="utf-8"))
+        self.assertEqual(child["DISPLAY"], ":0")
+        self.assertEqual(child["SDL_VIDEODRIVER"], "x11")
+        self.assertIsNone(child["WAYLAND_DISPLAY"])
+        self.assertEqual(child["SCRCPY_SERVER_PATH"], str(self.server))
+        self.assertEqual(report["environment_overrides"]["SDL_VIDEODRIVER"], "x11")
+        self.assertEqual(report["environment_overrides"]["WAYLAND_DISPLAY"], "unset")
+        self.assertEqual(report["environment_overrides"]["SCRCPY_SERVER_PATH"], str(self.server))
+        self.assertEqual(os.environ["DISPLAY"], ":0")
+        self.assertEqual(os.environ["WAYLAND_DISPLAY"], "wayland-0")
+        self.assertIsNone(os.environ.get("SDL_VIDEODRIVER"))
+        self.assertEqual(
+            {key: os.environ.get(key) for key in parent_before},
+            parent_before,
+        )
+
+    def test_task008_argv_remains_passive_and_unchanged_with_environment_policy(self):
+        os.environ["DISPLAY"] = ":0"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
+        report = self._run()
+        self.assertEqual(
+            report["argv"],
+            build_perception_capture_command(
+                str(self.scrcpy), "TEST_SERIAL", Path(report["capture"]["path"]), 20.0
+            ),
+        )
+        self.assertNotIn("--render-driver", report["argv"])
+        self.assertFalse(any(token in {"--control", "input", "tap", "swipe", "keyevent"} for token in report["argv"]))
 
     def test_subprocess_failure_is_not_a_valid_dataset(self):
         os.environ["TASK008_SCRCPY_EXIT"] = "7"
