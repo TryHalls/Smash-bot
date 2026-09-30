@@ -9,6 +9,9 @@ venv/
 # Diagnostic output and generated screenshots
 artifacts/
 
+# Task 007 upstream checkout and generated server build
+.task007/
+
 # Local tooling and OS files
 .coverage
 .mypy_cache/

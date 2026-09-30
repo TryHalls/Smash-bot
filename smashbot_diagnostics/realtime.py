@@ -672,6 +672,14 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._last_media_packet_monotonic_seconds: float | None = None
         self._last_decoded_monotonic_seconds: float | None = None
 
+    def _new_framed_parser(self) -> Any:
+        """Factory hook for an explicitly isolated framed-video dialect."""
+
+        return FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+
+    def _verify_server_identity(self) -> dict[str, Any]:
+        return verify_server_identity(self.server_path)
+
     def start(self, *, control: bool = False) -> "FramedH264FrameSource":
         if self._started and not self._stopped:
             if control != self._control_enabled:
@@ -687,14 +695,14 @@ class FramedH264FrameSource(RawH264FrameSource):
             )
         if control:
             try:
-                self._server_identity = verify_server_identity(self.server_path)
+                self._server_identity = self._verify_server_identity()
             except Exception as exc:
                 raise RealtimeError(str(exc)) from exc
         self._stop.clear()
         self._stopped = False
         self._control_enabled = control
         self._started_monotonic = time.monotonic()
-        self._framed_parser = FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+        self._framed_parser = self._new_framed_parser()
         self._packet_merger.reset()
         self._packet_metadata.clear()
         with self._association_lock:
@@ -1024,6 +1032,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             association = {
                 "packet_sequence_index": packet["sequence_index"],
                 "scrcpy_pts_us": packet["pts_us"],
+                "associated_packet_pts_us": packet["pts_us"],
                 "packet_start_observed_monotonic_seconds": packet_start,
                 "packet_complete_monotonic_seconds": packet_complete,
                 # Task 005 compatibility alias; this is V1, not a PTS value.
@@ -1031,6 +1040,25 @@ class FramedH264FrameSource(RawH264FrameSource):
                 "decoded_frame_index": frame_index,
                 "decode_complete_monotonic_seconds": timestamp,
             }
+            # Task 007 packets carry an exact action/device snapshot in the
+            # same media AU that enters this FIFO. Preserve it on the frame
+            # association; never look up the latest telemetry after decode.
+            for key in (
+                "action_sequence",
+                "action_x",
+                "action_y",
+                "d0_nanos",
+                "d1_nanos",
+                "d2_nanos",
+                "inject_success",
+                "task007_flags",
+                "task007_telemetry",
+                "device_inject_call_ms",
+                "device_post_inject_to_encoded_output_ms",
+                "device_control_receive_to_encoded_output_ms",
+            ):
+                if key in packet:
+                    association[key] = packet[key]
             self._frame_associations.append(association)
             return association
 
@@ -1162,6 +1190,168 @@ class FramedH264FrameSource(RawH264FrameSource):
             self.buffer.put(decoded)
             with self._timestamps_lock:
                 self._timestamps.append(timestamp)
+
+
+class Task007FramedH264FrameSource(FramedH264FrameSource):
+    """Explicit Task 007 source using the diagnostic 56-byte sidecar."""
+
+    def _new_framed_parser(self) -> Any:
+        from .task007 import Task007FramedVideoParser
+
+        return Task007FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+
+    def _verify_server_identity(self) -> dict[str, Any]:
+        from .task007 import task007_server_identity
+
+        return task007_server_identity(self.server_path)
+
+    def metadata(self) -> dict[str, Any]:
+        result = super().metadata()
+        result["path"] = "task007_framed_h264"
+        result["task007_telemetry"] = {
+            "magic": "T7TM",
+            "version": 1,
+            "size_bytes": 56,
+            "sidecar_stripped_before_decoder": True,
+            "official_payload_size_excludes_sidecar": True,
+        }
+        return result
+
+
+FRAMED_VIDEO_PATHS = frozenset(("framed_h264", "task007_framed_h264"))
+
+
+def frame_source_class_for_video_path(video_path: str) -> type[RawH264FrameSource]:
+    """Select the isolated source only for the explicitly named video path."""
+
+    if video_path == "task007_framed_h264":
+        return Task007FramedH264FrameSource
+    if video_path == "framed_h264":
+        return FramedH264FrameSource
+    if video_path == "raw_h264":
+        return RawH264FrameSource
+    raise ValueError(f"unsupported video path: {video_path}")
+
+
+def validate_task007_response_association(
+    association: dict[str, Any] | None,
+    *,
+    expected_action_sequence: int,
+    expected_target: Swipe,
+    c0: float | None,
+    c1: float | None,
+    v2: float | None,
+) -> dict[str, Any]:
+    """Validate telemetry from the exact packet associated with one response frame."""
+
+    errors: list[str] = []
+    if association is None:
+        errors.append("response frame has no exact packet association")
+        return {"valid": False, "errors": errors}
+
+    telemetry = association.get("task007_telemetry")
+    if not telemetry:
+        errors.append("Task 007 telemetry is absent from the associated packet")
+    if association.get("inject_success") is not True:
+        errors.append("associated packet does not report inject_success=true")
+
+    action_sequence = association.get("action_sequence")
+    if not isinstance(action_sequence, int) or action_sequence == 0:
+        errors.append("associated packet action_sequence must be non-zero")
+    elif action_sequence != expected_action_sequence:
+        errors.append(
+            f"action_sequence discontinuity: expected {expected_action_sequence}, got {action_sequence}"
+        )
+    if association.get("action_x") != expected_target.x1:
+        errors.append(
+            f"action_x does not match mapped target: expected {expected_target.x1}, got {association.get('action_x')}"
+        )
+    if association.get("action_y") != expected_target.y1:
+        errors.append(
+            f"action_y does not match mapped target: expected {expected_target.y1}, got {association.get('action_y')}"
+        )
+
+    d0 = association.get("d0_nanos")
+    d1 = association.get("d1_nanos")
+    d2 = association.get("d2_nanos")
+    if not all(isinstance(value, int) for value in (d0, d1, d2)):
+        errors.append("associated packet is missing integer D0/D1/D2 telemetry")
+    elif not d0 <= d1 <= d2:
+        errors.append("Task 007 device order violates D0 <= D1 <= D2")
+
+    packet_pts = association.get("scrcpy_pts_us")
+    associated_packet_pts = association.get("associated_packet_pts_us", packet_pts)
+    if packet_pts is None or associated_packet_pts is None:
+        errors.append("associated packet PTS is absent")
+    elif packet_pts != associated_packet_pts:
+        errors.append("response-frame PTS does not match its associated packet PTS")
+
+    v0 = association.get("packet_start_observed_monotonic_seconds")
+    v1 = association.get(
+        "packet_complete_monotonic_seconds",
+        association.get("host_packet_complete_monotonic_seconds"),
+    )
+    if not all(value is not None for value in (c0, c1, v0, v1, v2)):
+        errors.append("C0/C1/V0/V1/V2 timestamps are incomplete")
+    elif not c0 <= c1 <= v0 <= v1 <= v2:
+        errors.append("host order violates C0 <= C1 <= V0 <= V1 <= V2")
+
+    result: dict[str, Any] = {
+        "valid": not errors,
+        "errors": errors,
+        "expected_action_sequence": expected_action_sequence,
+        "observed_action_sequence": action_sequence,
+        "expected_action_x": expected_target.x1,
+        "expected_action_y": expected_target.y1,
+        "observed_action_x": association.get("action_x"),
+        "observed_action_y": association.get("action_y"),
+        "associated_packet_pts_us": associated_packet_pts,
+        "response_frame_pts_us": packet_pts,
+        "telemetry_present": bool(telemetry),
+        "inject_success": association.get("inject_success"),
+        "d0_nanos": d0,
+        "d1_nanos": d1,
+        "d2_nanos": d2,
+        "host_order_valid": all(
+            value is not None for value in (c0, c1, v0, v1, v2)
+        ) and c0 <= c1 <= v0 <= v1 <= v2,
+    }
+    if all(isinstance(value, int) for value in (d0, d1, d2)):
+        result.update(
+            {
+                "device_inject_call_ms": (d1 - d0) / 1_000_000,
+                "device_post_inject_to_encoded_output_ms": (d2 - d1) / 1_000_000,
+                "device_control_receive_to_encoded_output_ms": (d2 - d0) / 1_000_000,
+            }
+        )
+    return result
+
+
+def task007_device_timing_metrics(
+    association: dict[str, Any],
+    prehost_decomposition: dict[str, Any],
+) -> dict[str, float]:
+    """Calculate Task 007 device metrics and preserve a negative residual."""
+
+    d0 = association.get("d0_nanos")
+    d1 = association.get("d1_nanos")
+    d2 = association.get("d2_nanos")
+    if not all(isinstance(value, int) for value in (d0, d1, d2)):
+        raise ValueError("Task 007 device timing requires integer D0/D1/D2")
+    if not d0 <= d1 <= d2:
+        raise ValueError("Task 007 device timing requires D0 <= D1 <= D2")
+    device_inject_call_ms = (d1 - d0) / 1_000_000
+    device_post_inject_to_encoded_output_ms = (d2 - d1) / 1_000_000
+    device_control_receive_to_encoded_output_ms = (d2 - d0) / 1_000_000
+    return {
+        "device_inject_call_ms": device_inject_call_ms,
+        "device_post_inject_to_encoded_output_ms": device_post_inject_to_encoded_output_ms,
+        "device_control_receive_to_encoded_output_ms": device_control_receive_to_encoded_output_ms,
+        "combined_transport_boundary_residual_ms": (
+            prehost_decomposition["pre_packet_start_observation_ms"]
+            - device_control_receive_to_encoded_output_ms
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -1791,6 +1981,185 @@ def _static_baseline_matches(summary: dict[str, Any]) -> bool:
     )
 
 
+def _task007_pre_touch_baseline(
+    detector: TouchResponseDetector | PointerLocationDetector,
+    frames: list[DecodedFrame],
+    *,
+    visualization_mode: str,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Build and validate Task 007's authoritative pre-touch baseline.
+
+    The first decoded frame is only a seed for collecting recent frames.  The
+    authoritative pixels are the last frame in the collected window, and every
+    recent frame must match it using the existing static-surface rule.
+    """
+
+    if len(frames) < 2:
+        raise RealtimeError("Task 007 pre-touch baseline requires at least two decoded frames")
+    baseline = detector.baseline([frame.pixels for frame in frames])
+    comparison_indices = (
+        detector.background_indices
+        if visualization_mode == "pointer_location"
+        else detector.indices
+    )
+    frame_evidence: list[dict[str, Any]] = []
+    stable = True
+    for frame in frames:
+        difference = _roi_difference_summary(
+            baseline["pixels"],
+            frame.pixels,
+            comparison_indices,
+        )
+        score = detector.score(baseline, frame.pixels)
+        marker_off = _calibration_pointer_up(score, visualization_mode)
+        matches = _static_baseline_matches(difference)
+        stable = stable and matches and marker_off
+        frame_evidence.append(
+            {
+                "frame_index": frame.frame_index,
+                "timestamp": frame.host_receive_decode_monotonic_seconds,
+                "marker_off": marker_off,
+                "static_match": matches,
+                "background_changed_fraction": difference["changed_fraction"],
+                "background_mean_absolute_change": difference["mean_absolute_change"],
+                "background_maximum_absolute_change": difference["maximum_absolute_change"],
+                "visual_marker_score": score,
+            }
+        )
+    evidence = {
+        "frame_indices": [frame.frame_index for frame in frames],
+        "frame_count": len(frames),
+        "authoritative_frame_index": frames[-1].frame_index,
+        "baseline_state": "pointer_up_stable_pre_touch",
+        "stable": stable,
+        "frames": frame_evidence,
+    }
+    return baseline, evidence, stable
+
+
+def _task007_candidates_and_recovery(
+    frames: list[DecodedFrame],
+    *,
+    detector: TouchResponseDetector | PointerLocationDetector,
+    baseline_frame: DecodedFrame,
+    baseline: dict[str, Any],
+    visualization_mode: str,
+    expected_action_sequence: int,
+    expected_target: Swipe,
+    c0: float | None,
+    c1: float | None,
+    completion: float | None,
+) -> tuple[
+    DecodedFrame | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    DecodedFrame | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    list[dict[str, Any]],
+]:
+    """Select Task 007 response/recovery frames using causal evidence first.
+
+    A visual positive is never selected as a response until the exact packet
+    association validates its telemetry. Recovery is then selected from later
+    frames, choosing the first marker-off frame whose masked background matches
+    the current authoritative baseline.
+    """
+
+    comparison_indices = (
+        detector.background_indices
+        if visualization_mode == "pointer_location"
+        else detector.indices
+    )
+    response_frame: DecodedFrame | None = None
+    response_score: dict[str, Any] | None = None
+    response_validation: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] = []
+
+    for frame in frames:
+        score = detector.score(baseline, frame.pixels)
+        marker_on = _calibration_marker_on(score, visualization_mode)
+        association = frame.packet_association or {}
+        validation: dict[str, Any] | None = None
+        if marker_on:
+            validation = validate_task007_response_association(
+                frame.packet_association,
+                expected_action_sequence=expected_action_sequence,
+                expected_target=expected_target,
+                c0=c0,
+                c1=c1,
+                v2=frame.host_receive_decode_monotonic_seconds,
+            )
+            candidate_valid = bool(validation.get("valid"))
+            rejection_reasons = list(validation.get("errors", []))
+        else:
+            candidate_valid = False
+            rejection_reasons = ["visual_marker_off"]
+        difference = _roi_difference_summary(
+            baseline_frame.pixels,
+            frame.pixels,
+            comparison_indices,
+        )
+        diagnostics.append(
+            {
+                "frame_index": frame.frame_index,
+                "timestamp": frame.host_receive_decode_monotonic_seconds,
+                "packet_sequence_index": association.get("packet_sequence_index"),
+                "pts_us": association.get("scrcpy_pts_us"),
+                "action_sequence": association.get("action_sequence"),
+                "action_x": association.get("action_x"),
+                "action_y": association.get("action_y"),
+                "visual_marker_state": "on" if marker_on else "off",
+                "visual_marker_score": score,
+                "causal_candidate_valid": candidate_valid,
+                "causal_candidate_rejected": marker_on and not candidate_valid,
+                "rejection_reasons": rejection_reasons,
+                "background_changed_fraction": difference["changed_fraction"],
+                "background_mean_absolute_change": difference["mean_absolute_change"],
+                "background_maximum_absolute_change": difference["maximum_absolute_change"],
+                "stable_recovery_candidate": False,
+            }
+        )
+        if response_frame is None and candidate_valid:
+            response_frame = frame
+            response_score = score
+            response_validation = validation
+
+    recovery_frame: DecodedFrame | None = None
+    recovery_score: dict[str, Any] | None = None
+    recovery_difference: dict[str, Any] | None = None
+    if response_frame is not None:
+        recovery_start = response_frame.host_receive_decode_monotonic_seconds
+        if completion is not None:
+            recovery_start = max(recovery_start, completion)
+        for frame, diagnostic in zip(frames, diagnostics):
+            if frame.host_receive_decode_monotonic_seconds < recovery_start:
+                continue
+            score = diagnostic["visual_marker_score"]
+            difference = {
+                "changed_fraction": diagnostic["background_changed_fraction"],
+                "mean_absolute_change": diagnostic["background_mean_absolute_change"],
+                "maximum_absolute_change": diagnostic["background_maximum_absolute_change"],
+            }
+            marker_off = _calibration_pointer_up(score, visualization_mode)
+            stable_candidate = marker_off and _static_baseline_matches(difference)
+            diagnostic["stable_recovery_candidate"] = stable_candidate
+            if stable_candidate and recovery_frame is None:
+                recovery_frame = frame
+                recovery_score = score
+                recovery_difference = difference
+
+    return (
+        response_frame,
+        response_score,
+        response_validation,
+        recovery_frame,
+        recovery_score,
+        recovery_difference,
+        diagnostics,
+    )
+
+
 def _dispatch_capture_window(
     controller: AdbGestureController,
     source: RawH264FrameSource,
@@ -1891,13 +2260,15 @@ def run_calibration(
 ) -> dict[str, Any]:
     if control_transport not in {"adb", "scrcpy_v4_1"}:
         raise ValueError(f"unsupported control transport: {control_transport}")
-    if video_path not in {"raw_h264", "framed_h264"}:
+    if video_path not in {"raw_h264", "framed_h264", "task007_framed_h264"}:
         raise ValueError(f"unsupported video path: {video_path}")
-    if video_path == "framed_h264" and control_transport != "scrcpy_v4_1":
-        raise ValueError("framed_h264 diagnostic path requires control_transport=scrcpy_v4_1")
-    if video_path == "framed_h264" and not (framed_h264_capability or {}).get("verified"):
+    framed_video = video_path in FRAMED_VIDEO_PATHS
+    task007_video = video_path == "task007_framed_h264"
+    if framed_video and control_transport != "scrcpy_v4_1":
+        raise ValueError(f"{video_path} diagnostic path requires control_transport=scrcpy_v4_1")
+    if framed_video and not (framed_h264_capability or {}).get("verified"):
         raise ValueError(
-            "framed_h264 diagnostic path requires an ffprobe-verified has_b_frames=0 capability sample"
+            f"{video_path} diagnostic path requires an ffprobe-verified has_b_frames=0 capability sample"
         )
     if decoder_profile not in DECODER_PROFILES:
         raise ValueError(f"unsupported decoder profile: {decoder_profile}")
@@ -1913,19 +2284,19 @@ def run_calibration(
     calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 450)
     target_sequence = (
         tuple(calibration_targets or FRAMED_CALIBRATION_TARGETS)
-        if video_path == "framed_h264"
+        if framed_video
         else (calibration_input_swipe,)
     )
-    if video_path == "framed_h264" and len(target_sequence) < 3:
-        raise ValueError("framed_h264 causal calibration requires at least three targets")
+    if framed_video and len(target_sequence) < 3:
+        raise ValueError(f"{video_path} causal calibration requires at least three targets")
     if any(target.duration_ms != 450 or target.x1 != target.x2 or target.y1 != target.y2 for target in target_sequence):
-        raise ValueError("framed_h264 causal calibration targets must be 450 ms stationary presses")
+        raise ValueError(f"{video_path} causal calibration targets must be 450 ms stationary presses")
     status = "INCONCLUSIVE"
     try:
         setup = settings.enable()
-        source_class = FramedH264FrameSource if video_path == "framed_h264" else RawH264FrameSource
+        source_class = frame_source_class_for_video_path(video_path)
         source_kwargs: dict[str, Any] = {"buffer_capacity": 1}
-        if video_path == "framed_h264":
+        if framed_video:
             source_kwargs.update(
                 {
                     "no_b_frames_verified": True,
@@ -1942,8 +2313,10 @@ def run_calibration(
         source_started = time.monotonic()
         setup["status"] = "ready"
         setup["video_path"] = video_path
-        if video_path == "framed_h264":
+        if framed_video:
             setup["framed_video"] = framed_video_contract()
+        if task007_video:
+            setup["task007"] = {"diagnostic_server_required": True}
         first_frame = source.latest_frame(timeout_seconds=5.0)
         if first_frame is None:
             raise RealtimeError("calibration source produced no decoded baseline frame")
@@ -1973,132 +2346,305 @@ def run_calibration(
         else:
             controller = AdbGestureController(adb)
             setup["control_transport"] = {"transport": "adb"}
-        warmup_input_swipe = target_sequence[-1] if video_path == "framed_h264" else calibration_input_swipe
-        warmup_mapped_swipe = mapped_target_sequence[-1] if video_path == "framed_h264" else mapped_calibration_swipe
+        warmup_input_swipe = target_sequence[-1] if framed_video else calibration_input_swipe
+        warmup_mapped_swipe = mapped_target_sequence[-1] if framed_video else mapped_calibration_swipe
         detector = (
             PointerLocationDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
             if visualization_mode == "pointer_location"
             else TouchResponseDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
         )
 
-        # VFR-aware setup: one decoded baseline frame, one unmeasured warm-up
-        # press, then retain the latest post-command no-touch frame.  The pair
-        # is the one shared temporal noise model for all subsequent trials.
-        warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
-            controller,
-            source,
-            warmup_input_swipe,
-            initial_frame_index=first_frame.frame_index,
-            response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
-            label="warmup",
-        )
-        warmup_completion = warmup_gesture.get("host_completion_monotonic_seconds")
-        warmup_post_completion = [
-            frame
-            for frame in warmup_frames
-            if warmup_completion is not None
-            and frame.host_receive_decode_monotonic_seconds >= warmup_completion
-        ]
-        post_warmup_frame = (warmup_post_completion or warmup_frames)[-1] if (warmup_post_completion or warmup_frames) else None
-        if post_warmup_frame is None:
-            raise RealtimeError("warm-up produced no decoded frame after dispatch")
-        if (post_warmup_frame.width, post_warmup_frame.height) != (first_frame.width, first_frame.height):
-            raise RealtimeError("decoded frame dimensions changed during warm-up")
+        if task007_video:
+            # Task 007 must establish a recent, stable no-touch state before
+            # the first ACTION_DOWN.  The first decoded frame is only a
+            # collection seed and is never the authoritative baseline.
+            requested_frame_count = baseline_frame_count
+            minimum_required_frame_count = 2
+            collection_target_count = max(minimum_required_frame_count, requested_frame_count)
+            collected_baseline_frames = _collect_distinct_frames(
+                source,
+                required_count=collection_target_count,
+                timeout_seconds=baseline_timeout_seconds,
+                initial_frames=[first_frame],
+            )
+            setup["task007"]["pre_touch_baseline"] = {
+                "requested_frame_count": requested_frame_count,
+                "collection_target_count": collection_target_count,
+                "collected_frame_count": len(collected_baseline_frames),
+                "timeout_seconds": baseline_timeout_seconds,
+                "collected_frame_indices": [frame.frame_index for frame in collected_baseline_frames],
+                "target_count_reached": len(collected_baseline_frames) >= requested_frame_count,
+                "minimum_required_frame_count": minimum_required_frame_count,
+            }
+            if len(collected_baseline_frames) < minimum_required_frame_count:
+                setup["task007"]["pre_touch_baseline"].update(
+                    {
+                        "stable": False,
+                        "stability_result": "FAIL",
+                        "failure": "fewer than two distinct no-touch frames were available before timeout",
+                    }
+                )
+                raise RealtimeError(
+                    "Task 007 requires at least two distinct no-touch frames before baseline timeout"
+                )
+            baseline_source_frames = collected_baseline_frames[-collection_target_count:]
+            shared_baseline, baseline_evidence, baseline_stable = _task007_pre_touch_baseline(
+                detector,
+                baseline_source_frames,
+                visualization_mode=visualization_mode,
+            )
+            setup["task007"]["pre_touch_baseline"].update(baseline_evidence)
+            setup["task007"]["pre_touch_baseline"].update(
+                {
+                    "collected_frame_count": len(collected_baseline_frames),
+                    "target_count_reached": len(collected_baseline_frames) >= requested_frame_count,
+                    "minimum_required_frame_count": minimum_required_frame_count,
+                    "stability_result": "PASS" if baseline_stable else "FAIL",
+                }
+            )
+            setup["shared_no_touch_baseline"] = {
+                key: value for key, value in shared_baseline.items() if key != "pixels"
+            }
+            setup["shared_no_touch_baseline"].update(
+                {
+                    "frame_indices": [frame.frame_index for frame in baseline_source_frames],
+                    "baseline_state": "pointer_up_stable_pre_touch",
+                    "pre_dispatch_new_frames_required": len(baseline_source_frames),
+                    "legacy_baseline_frame_count_argument": baseline_frame_count,
+                    "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
+                }
+            )
+            if not baseline_stable:
+                raise RealtimeError(
+                    "Task 007 pre-touch frames did not form a stable marker-off baseline"
+                )
+            baseline_frame = baseline_source_frames[-1]
 
-        comparison_indices = (
-            detector.background_indices
-            if visualization_mode == "pointer_location"
-            else detector.indices
-        )
-        post_warmup_difference = _roi_difference_summary(
-            first_frame.pixels,
-            post_warmup_frame.pixels,
-            comparison_indices,
-        )
-        setup["warmup"] = {
-            "gesture": warmup_gesture,
-            "dispatch_start_monotonic_seconds": warmup_started,
-            "command_completion_monotonic_seconds": warmup_completion,
-            "initial_baseline_frame_index": first_frame.frame_index,
-            "post_warmup_baseline_frame_index": post_warmup_frame.frame_index,
-            "state_trace": [
-                "baseline_marker_off",
-                "warmup_dispatch",
-                "marker_on_window_unmeasured",
-                "marker_off_baseline_next",
-            ],
-            "capture": warmup_capture,
-            "background_mask": {
-                "type": "pointer_location_exclusion_mask",
-                "excluded_top_bar_height": detector.top_bar_height,
-                "excluded_center": list(detector.center),
-                "excluded_half_width": 180,
-                "excluded_half_height": 240,
-            }
-            if visualization_mode == "pointer_location"
-            else None,
-        }
-        baseline_source_frames = (
-            warmup_post_completion[-2:]
-            if visualization_mode == "pointer_location" and len(warmup_post_completion) >= 2
-            else [first_frame, post_warmup_frame]
-        )
-        shared_baseline = detector.baseline([frame.pixels for frame in baseline_source_frames])
-        setup["shared_no_touch_baseline"] = {
-            key: value for key, value in shared_baseline.items() if key != "pixels"
-        }
-        setup["shared_no_touch_baseline"].update(
-            {
-                "frame_indices": [frame.frame_index for frame in baseline_source_frames],
-                "baseline_state": "pointer_up_with_persistent_trace"
+            warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
+                controller,
+                source,
+                warmup_input_swipe,
+                initial_frame_index=baseline_frame.frame_index,
+                response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
+                label="warmup",
+            )
+            warmup_completion = warmup_gesture.get("host_completion_monotonic_seconds")
+            if not warmup_frames:
+                raise RealtimeError("warm-up produced no decoded frame after dispatch")
+            if any(
+                (frame.width, frame.height) != (first_frame.width, first_frame.height)
+                for frame in warmup_frames
+            ):
+                raise RealtimeError("decoded frame dimensions changed during warm-up")
+            (
+                warmup_response_frame,
+                warmup_response_score,
+                warmup_response_validation,
+                warmup_recovery_frame,
+                warmup_recovery_score,
+                warmup_recovery_difference,
+                warmup_frame_diagnostics,
+            ) = _task007_candidates_and_recovery(
+                warmup_frames,
+                detector=detector,
+                baseline_frame=baseline_frame,
+                baseline=shared_baseline,
+                visualization_mode=visualization_mode,
+                expected_action_sequence=1,
+                expected_target=warmup_mapped_swipe,
+                c0=warmup_started,
+                c1=warmup_gesture.get("host_down_write_complete_monotonic_seconds"),
+                completion=warmup_completion,
+            )
+            warmup_task007_sequences = sorted(
+                {
+                    frame.packet_association.get("action_sequence")
+                    for frame in warmup_frames
+                    if frame.packet_association is not None
+                    and frame.packet_association.get("action_sequence") is not None
+                }
+            )
+            warmup_marker_on = any(
+                item["visual_marker_state"] == "on" for item in warmup_frame_diagnostics
+            )
+            setup["warmup"] = {
+                "gesture": warmup_gesture,
+                "dispatch_start_monotonic_seconds": warmup_started,
+                "command_completion_monotonic_seconds": warmup_completion,
+                "initial_baseline_frame_index": baseline_frame.frame_index,
+                "post_warmup_baseline_frame_index": (
+                    warmup_recovery_frame.frame_index if warmup_recovery_frame else None
+                ),
+                "state_trace": [
+                    "baseline_marker_off",
+                    "warmup_dispatch",
+                    "marker_on_causal_candidate",
+                    "marker_off_baseline_next",
+                ],
+                "capture": warmup_capture,
+                "background_mask": {
+                    "type": "pointer_location_exclusion_mask",
+                    "excluded_top_bar_height": detector.top_bar_height,
+                    "excluded_center": list(detector.center),
+                    "excluded_half_width": 180,
+                    "excluded_half_height": 240,
+                }
                 if visualization_mode == "pointer_location"
-                else "initial_and_post_warmup_no_touch",
-                "pre_dispatch_new_frames_required": 0,
-                "legacy_baseline_frame_count_argument": baseline_frame_count,
-                "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
-            }
-        )
-        warmup_frame_diagnostics = [
-            {
-                "frame_index": frame.frame_index,
-                "timestamp": frame.host_receive_decode_monotonic_seconds,
-                "score": detector.score(shared_baseline, frame.pixels),
-            }
-            for frame in warmup_frames
-        ]
-        warmup_scores = [item["score"] for item in warmup_frame_diagnostics]
-        warmup_marker_on = any(
-            _calibration_marker_on(score, visualization_mode) for score in warmup_scores
-        )
-        warmup_off_score = detector.score(shared_baseline, post_warmup_frame.pixels)
-        warmup_static_match = _static_baseline_matches(post_warmup_difference)
-        setup["warmup"].update(
-            {
+                else None,
                 "marker_on_detected": warmup_marker_on,
                 "marker_on_frame_indices": [
-                    frame.frame_index
-                    for frame, score in zip(warmup_frames, warmup_scores)
-                    if _calibration_marker_on(score, visualization_mode)
+                    item["frame_index"]
+                    for item in warmup_frame_diagnostics
+                    if item["visual_marker_state"] == "on"
                 ],
-                "marker_off_recovered": warmup_static_match
-                and _calibration_pointer_up(warmup_off_score, visualization_mode),
-                "post_warmup_no_touch_difference": post_warmup_difference,
-                "post_warmup_marker_score": warmup_off_score,
-                "launcher_state_unchanged": warmup_static_match,
-                "background_stable": warmup_static_match,
+                "marker_off_recovered": warmup_recovery_frame is not None,
+                "post_warmup_no_touch_difference": warmup_recovery_difference,
+                "post_warmup_marker_score": warmup_recovery_score,
+                "launcher_state_unchanged": warmup_recovery_frame is not None,
+                "background_stable": warmup_recovery_frame is not None,
                 "frame_diagnostics": warmup_frame_diagnostics,
+                "task007_action_sequences": warmup_task007_sequences,
+                "task007_expected_action_sequence": 1,
+                "task007_sequence_continuous": (
+                    1 in warmup_task007_sequences
+                    and all(sequence in {0, 1} for sequence in warmup_task007_sequences)
+                ),
+                "task007_causal_response_frame_index": (
+                    warmup_response_frame.frame_index if warmup_response_frame else None
+                ),
+                "task007_causal_response_validation": warmup_response_validation,
             }
-        )
-        if not warmup_gesture.get("success"):
-            raise RealtimeError(warmup_gesture.get("failure") or "warm-up gesture dispatch failed")
-        if not warmup_static_match:
-            raise RealtimeError(
-                "post-warm-up no-touch frame materially differs from initial launcher baseline"
+            if not warmup_gesture.get("success"):
+                raise RealtimeError(warmup_gesture.get("failure") or "warm-up gesture dispatch failed")
+            if warmup_response_frame is None:
+                raise RealtimeError(
+                    "Task 007 warm-up did not produce a causally valid marker-on frame"
+                )
+            if warmup_recovery_frame is None:
+                raise RealtimeError(
+                    "Task 007 warm-up did not produce a stable marker-off recovery frame"
+                )
+            baseline_frame = warmup_recovery_frame
+        else:
+            # Preserve the accepted Task 005/006 VFR behavior exactly for the
+            # official raw/framed paths.
+            warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
+                controller,
+                source,
+                warmup_input_swipe,
+                initial_frame_index=first_frame.frame_index,
+                response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
+                label="warmup",
             )
-        if not _calibration_pointer_up(warmup_off_score, visualization_mode):
-            raise RealtimeError("warm-up did not recover a marker-off baseline")
+            warmup_completion = warmup_gesture.get("host_completion_monotonic_seconds")
+            warmup_post_completion = [
+                frame
+                for frame in warmup_frames
+                if warmup_completion is not None
+                and frame.host_receive_decode_monotonic_seconds >= warmup_completion
+            ]
+            post_warmup_frame = (warmup_post_completion or warmup_frames)[-1] if (warmup_post_completion or warmup_frames) else None
+            if post_warmup_frame is None:
+                raise RealtimeError("warm-up produced no decoded frame after dispatch")
+            if (post_warmup_frame.width, post_warmup_frame.height) != (first_frame.width, first_frame.height):
+                raise RealtimeError("decoded frame dimensions changed during warm-up")
 
-        baseline_frame = post_warmup_frame
+            comparison_indices = (
+                detector.background_indices
+                if visualization_mode == "pointer_location"
+                else detector.indices
+            )
+            post_warmup_difference = _roi_difference_summary(
+                first_frame.pixels,
+                post_warmup_frame.pixels,
+                comparison_indices,
+            )
+            setup["warmup"] = {
+                "gesture": warmup_gesture,
+                "dispatch_start_monotonic_seconds": warmup_started,
+                "command_completion_monotonic_seconds": warmup_completion,
+                "initial_baseline_frame_index": first_frame.frame_index,
+                "post_warmup_baseline_frame_index": post_warmup_frame.frame_index,
+                "state_trace": [
+                    "baseline_marker_off",
+                    "warmup_dispatch",
+                    "marker_on_window_unmeasured",
+                    "marker_off_baseline_next",
+                ],
+                "capture": warmup_capture,
+                "background_mask": {
+                    "type": "pointer_location_exclusion_mask",
+                    "excluded_top_bar_height": detector.top_bar_height,
+                    "excluded_center": list(detector.center),
+                    "excluded_half_width": 180,
+                    "excluded_half_height": 240,
+                }
+                if visualization_mode == "pointer_location"
+                else None,
+            }
+            baseline_source_frames = (
+                warmup_post_completion[-2:]
+                if visualization_mode == "pointer_location" and len(warmup_post_completion) >= 2
+                else [first_frame, post_warmup_frame]
+            )
+            shared_baseline = detector.baseline([frame.pixels for frame in baseline_source_frames])
+            setup["shared_no_touch_baseline"] = {
+                key: value for key, value in shared_baseline.items() if key != "pixels"
+            }
+            setup["shared_no_touch_baseline"].update(
+                {
+                    "frame_indices": [frame.frame_index for frame in baseline_source_frames],
+                    "baseline_state": "pointer_up_with_persistent_trace"
+                    if visualization_mode == "pointer_location"
+                    else "initial_and_post_warmup_no_touch",
+                    "pre_dispatch_new_frames_required": 0,
+                    "legacy_baseline_frame_count_argument": baseline_frame_count,
+                    "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
+                }
+            )
+            warmup_frame_diagnostics = [
+                {
+                    "frame_index": frame.frame_index,
+                    "timestamp": frame.host_receive_decode_monotonic_seconds,
+                    "score": detector.score(shared_baseline, frame.pixels),
+                }
+                for frame in warmup_frames
+            ]
+            warmup_scores = [item["score"] for item in warmup_frame_diagnostics]
+            warmup_marker_on = any(
+                _calibration_marker_on(score, visualization_mode) for score in warmup_scores
+            )
+            warmup_off_score = detector.score(shared_baseline, post_warmup_frame.pixels)
+            warmup_static_match = _static_baseline_matches(post_warmup_difference)
+            setup["warmup"].update(
+                {
+                    "marker_on_detected": warmup_marker_on,
+                    "marker_on_frame_indices": [
+                        frame.frame_index
+                        for frame, score in zip(warmup_frames, warmup_scores)
+                        if _calibration_marker_on(score, visualization_mode)
+                    ],
+                    "marker_off_recovered": warmup_static_match
+                    and _calibration_pointer_up(warmup_off_score, visualization_mode),
+                    "post_warmup_no_touch_difference": post_warmup_difference,
+                    "post_warmup_marker_score": warmup_off_score,
+                    "launcher_state_unchanged": warmup_static_match,
+                    "background_stable": warmup_static_match,
+                    "frame_diagnostics": warmup_frame_diagnostics,
+                    "task007_action_sequences": None,
+                    "task007_expected_action_sequence": None,
+                    "task007_sequence_continuous": None,
+                }
+            )
+            if not warmup_gesture.get("success"):
+                raise RealtimeError(warmup_gesture.get("failure") or "warm-up gesture dispatch failed")
+            if not warmup_static_match:
+                raise RealtimeError(
+                    "post-warm-up no-touch frame materially differs from initial launcher baseline"
+                )
+            if not _calibration_pointer_up(warmup_off_score, visualization_mode):
+                raise RealtimeError("warm-up did not recover a marker-off baseline")
+            baseline_frame = post_warmup_frame
         for trial_index in range(1, trials + 1):
             time.sleep(spacing_seconds)
             target_index = (trial_index - 1) % len(target_sequence)
@@ -2138,7 +2684,7 @@ def run_calibration(
             baseline = dict(shared_baseline)
             baseline["pixels"] = baseline_frame.pixels
             quiescent_baseline: dict[str, Any] | None = None
-            if video_path == "framed_h264":
+            if framed_video:
                 trial["fifo_at_dispatch"] = source.pending_media_snapshot()
                 quiescent_baseline = source.wait_for_quiescent(
                     quiet_interval_seconds=quiescent_interval_seconds,
@@ -2157,57 +2703,94 @@ def run_calibration(
             response_score: dict[str, Any] | None = None
             frame_diagnostics: list[dict[str, Any]] = []
             stale_previous_target_frame_indices: list[int] = []
-            for frame in trial_frames:
-                current_score = current_detector.score(baseline, frame.pixels)
-                previous_score = previous_detector.score(baseline, frame.pixels)
-                previous_detected = bool(previous_score.get("crosshair_detected"))
-                if previous_detected:
-                    stale_previous_target_frame_indices.append(frame.frame_index)
-                frame_diagnostics.append(
-                    {
-                        "frame_index": frame.frame_index,
-                        "timestamp": frame.host_receive_decode_monotonic_seconds,
-                        "current_target_score": current_score,
-                        "previous_target_score": previous_score,
-                        "stale_previous_target": previous_detected,
-                    }
+            task007_candidate_validation: dict[str, Any] | None = None
+            if task007_video:
+                (
+                    response_frame,
+                    response_score,
+                    task007_candidate_validation,
+                    marker_off_frame,
+                    marker_off_score,
+                    marker_off_difference,
+                    frame_diagnostics,
+                ) = _task007_candidates_and_recovery(
+                    trial_frames,
+                    detector=current_detector,
+                    baseline_frame=baseline_frame,
+                    baseline=baseline,
+                    visualization_mode=visualization_mode,
+                    expected_action_sequence=trial_index + 1,
+                    expected_target=current_mapped_swipe,
+                    c0=started,
+                    c1=gesture.get("host_down_write_complete_monotonic_seconds"),
+                    completion=gesture.get("host_completion_monotonic_seconds"),
                 )
-                if response_frame is None and _calibration_marker_on(current_score, visualization_mode):
-                    response_frame = frame
-                    response_score = current_score
+                for frame, diagnostic in zip(trial_frames, frame_diagnostics):
+                    previous_score = previous_detector.score(baseline, frame.pixels)
+                    previous_detected = bool(previous_score.get("crosshair_detected"))
+                    diagnostic.update(
+                        {
+                            "current_target_score": diagnostic["visual_marker_score"],
+                            "previous_target_score": previous_score,
+                            "stale_previous_target": previous_detected,
+                        }
+                    )
+                    if previous_detected:
+                        stale_previous_target_frame_indices.append(frame.frame_index)
+                marker_off_recovered = marker_off_frame is not None
+            else:
+                for frame in trial_frames:
+                    current_score = current_detector.score(baseline, frame.pixels)
+                    previous_score = previous_detector.score(baseline, frame.pixels)
+                    previous_detected = bool(previous_score.get("crosshair_detected"))
+                    if previous_detected:
+                        stale_previous_target_frame_indices.append(frame.frame_index)
+                    frame_diagnostics.append(
+                        {
+                            "frame_index": frame.frame_index,
+                            "timestamp": frame.host_receive_decode_monotonic_seconds,
+                            "current_target_score": current_score,
+                            "previous_target_score": previous_score,
+                            "stale_previous_target": previous_detected,
+                        }
+                    )
+                    if response_frame is None and _calibration_marker_on(current_score, visualization_mode):
+                        response_frame = frame
+                        response_score = current_score
             completion = gesture.get("host_completion_monotonic_seconds")
-            post_completion_frames = [
-                frame
-                for frame in trial_frames
-                if completion is not None
-                and frame.host_receive_decode_monotonic_seconds >= completion
-            ]
-            marker_off_frame: DecodedFrame | None = None
-            marker_off_score: dict[str, Any] | None = None
-            for candidate in post_completion_frames:
-                candidate_score = current_detector.score(baseline, candidate.pixels)
-                if _calibration_pointer_up(candidate_score, visualization_mode):
-                    marker_off_frame = candidate
-                    marker_off_score = candidate_score
-                    break
-            marker_off_difference = (
-                _roi_difference_summary(
-                    baseline_frame.pixels,
-                    marker_off_frame.pixels,
-                    current_detector.background_indices
-                    if visualization_mode == "pointer_location"
-                    else current_detector.indices,
+            if not task007_video:
+                post_completion_frames = [
+                    frame
+                    for frame in trial_frames
+                    if completion is not None
+                    and frame.host_receive_decode_monotonic_seconds >= completion
+                ]
+                marker_off_frame = None
+                marker_off_score = None
+                for candidate in post_completion_frames:
+                    candidate_score = current_detector.score(baseline, candidate.pixels)
+                    if _calibration_pointer_up(candidate_score, visualization_mode):
+                        marker_off_frame = candidate
+                        marker_off_score = candidate_score
+                        break
+                marker_off_difference = (
+                    _roi_difference_summary(
+                        baseline_frame.pixels,
+                        marker_off_frame.pixels,
+                        current_detector.background_indices
+                        if visualization_mode == "pointer_location"
+                        else current_detector.indices,
+                    )
+                    if marker_off_frame is not None
+                    else None
                 )
-                if marker_off_frame is not None
-                else None
-            )
-            marker_off_recovered = bool(
-                marker_off_frame is not None
-                and marker_off_score is not None
-                and _calibration_pointer_up(marker_off_score, visualization_mode)
-                and marker_off_difference is not None
-                and _static_baseline_matches(marker_off_difference)
-            )
+                marker_off_recovered = bool(
+                    marker_off_frame is not None
+                    and marker_off_score is not None
+                    and _calibration_pointer_up(marker_off_score, visualization_mode)
+                    and marker_off_difference is not None
+                    and _static_baseline_matches(marker_off_difference)
+                )
             background_stable = bool(
                 marker_off_difference is not None
                 and _static_baseline_matches(marker_off_difference)
@@ -2258,11 +2841,13 @@ def run_calibration(
             )
             decomposition: dict[str, Any] | None = None
             prehost_decomposition: dict[str, Any] | None = None
+            task007_association_validation: dict[str, Any] | None = None
+            task007_device_timing: dict[str, float] | None = None
             first_post_t0_packet_diagnostic: dict[str, Any] | None = None
             relevant_packet_timing: dict[str, Any] | None = None
             association_diagnostics: dict[str, Any] | None = None
             fifo_at_response: dict[str, Any] | None = None
-            if video_path == "framed_h264" and started is not None:
+            if framed_video and started is not None:
                 first_post_t0_packet_diagnostic = source.first_media_packet_after(started)
                 fifo_at_response = source.pending_media_snapshot()
                 relevant_packet_timing = (
@@ -2293,6 +2878,24 @@ def run_calibration(
                         trial["invalid_reason"] = (
                             "current-target association is missing C1/V0/V1 host timestamps"
                         )
+            if task007_video and response_frame is not None:
+                task007_association_validation = validate_task007_response_association(
+                    relevant_packet_timing,
+                    expected_action_sequence=trial_index + 1,
+                    expected_target=current_mapped_swipe,
+                    c0=started,
+                    c1=gesture.get("host_down_write_complete_monotonic_seconds"),
+                    v2=response_frame.host_receive_decode_monotonic_seconds,
+                )
+                if task007_association_validation.get("valid") and prehost_decomposition is not None:
+                    try:
+                        task007_device_timing = task007_device_timing_metrics(
+                            relevant_packet_timing or {},
+                            prehost_decomposition,
+                        )
+                    except ValueError as exc:
+                        task007_association_validation["valid"] = False
+                        task007_association_validation.setdefault("errors", []).append(str(exc))
             trial.update(
                 {
                     "t0_action_down_write_monotonic_seconds": started,
@@ -2333,6 +2936,8 @@ def run_calibration(
                     "frame_association_diagnostics": association_diagnostics,
                     "decomposition": decomposition,
                     "prehost_decomposition": prehost_decomposition,
+                    "task007_association_validation": task007_association_validation,
+                    "task007_device_timing": task007_device_timing,
                 }
             )
             if trial.get("invalid_reason"):
@@ -2341,20 +2946,24 @@ def run_calibration(
                 trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
             elif not gesture.get("success") or started is None:
                 trial["invalid_reason"] = gesture.get("failure") or "gesture dispatch failed"
-            elif video_path == "framed_h264" and response_frame is None:
+            elif framed_video and response_frame is None:
                 trial["invalid_reason"] = "current target crosshair was not detected"
             elif (
-                video_path == "framed_h264"
+                framed_video
                 and response_frame is not None
                 and relevant_packet_timing is None
             ):
                 trial["invalid_reason"] = "crosshair frame had no associated media packet"
             elif (
-                video_path == "framed_h264"
+                framed_video
                 and association_diagnostics
                 and association_diagnostics.get("invariant_failures")
             ):
                 trial["invalid_reason"] = "packet/frame association invariant failed"
+            elif task007_video and not task007_association_validation:
+                trial["invalid_reason"] = "current-target response has no Task 007 association validation"
+            elif task007_video and not task007_association_validation.get("valid"):
+                trial["invalid_reason"] = "Task 007 response telemetry/association validation failed"
             elif not marker_off_recovered:
                 trial["invalid_reason"] = "marker-off baseline was not recovered after command completion"
             else:
@@ -2370,7 +2979,7 @@ def run_calibration(
                 baseline_frame = marker_off_frame
                 trial["state_trace"].append("marker_on_detected" if response_frame else "marker_on_not_detected")
                 trial["state_trace"].append("marker_off_baseline_next")
-            if video_path == "framed_h264" and marker_off_recovered and marker_off_frame is not None:
+            if framed_video and marker_off_recovered and marker_off_frame is not None:
                 # The next trial uses the recovered pointer-up frame even when
                 # the current trial was invalid for a pre-dispatch quiescence
                 # or decomposition reason.
@@ -2429,10 +3038,59 @@ def run_calibration(
     prehost_decomposition_trials = [
         trial for trial in valid if trial.get("prehost_decomposition")
     ]
+    task007_timing_trials = [
+        trial for trial in valid if trial.get("task007_device_timing")
+    ]
+    task007_device_timing_statistics: dict[str, Any] | None = None
+    if task007_video:
+        task007_device_timing_statistics = {
+            "structurally_valid_trials": len(task007_timing_trials),
+            "raw_samples": {
+                "device_inject_call_ms": [
+                    trial["task007_device_timing"]["device_inject_call_ms"]
+                    for trial in task007_timing_trials
+                ],
+                "device_post_inject_to_encoded_output_ms": [
+                    trial["task007_device_timing"]["device_post_inject_to_encoded_output_ms"]
+                    for trial in task007_timing_trials
+                ],
+                "device_control_receive_to_encoded_output_ms": [
+                    trial["task007_device_timing"]["device_control_receive_to_encoded_output_ms"]
+                    for trial in task007_timing_trials
+                ],
+                "combined_transport_boundary_residual_ms": [
+                    trial["task007_device_timing"]["combined_transport_boundary_residual_ms"]
+                    for trial in task007_timing_trials
+                ],
+            },
+        }
+        for metric, values in task007_device_timing_statistics["raw_samples"].items():
+            task007_device_timing_statistics[metric] = (
+                summarize_latencies([value / 1000 for value in values])
+                if values
+                else _inconclusive_latency_summary()
+            )
+        task007_device_timing_statistics["action_sequence_continuity"] = {
+            "warmup_expected": 1,
+            "warmup_observed": setup.get("warmup", {}).get("task007_action_sequences", []),
+            "trial_expected": list(range(2, trials + 2)),
+            "trial_observed": [
+                trial.get("task007_association_validation", {}).get("observed_action_sequence")
+                for trial in trials_report
+            ],
+            "strict": (
+                setup.get("warmup", {}).get("task007_sequence_continuous") is True
+                and [
+                    trial.get("task007_association_validation", {}).get("observed_action_sequence")
+                    for trial in trials_report
+                ]
+                == list(range(2, trials + 2))
+            ),
+        }
     decomposition_statistics: dict[str, Any] = {
         "video_path": video_path,
-        "quiescent_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
-        "quiescent_timeout_seconds": quiescent_timeout_seconds if video_path == "framed_h264" else None,
+        "quiescent_interval_seconds": quiescent_interval_seconds if framed_video else None,
+        "quiescent_timeout_seconds": quiescent_timeout_seconds if framed_video else None,
         "structurally_valid_decomposition_trials": len(decomposition_trials),
         "raw_samples": {
             "upstream_to_relevant_packet_ms": [
@@ -2468,6 +3126,7 @@ def run_calibration(
                 ],
             },
         },
+        "task007_device_timing": task007_device_timing_statistics,
     }
     for metric in ("upstream_to_relevant_packet_ms", "relevant_packet_to_decode_ms", "total_visible_ms"):
         values = decomposition_statistics["raw_samples"][metric]
@@ -2499,7 +3158,7 @@ def run_calibration(
             "video_path": video_path,
             "decoder_profile": decoder_profile,
             "calibration_target_sequence": [target.as_dict() for target in target_sequence],
-            "framed_h264_capability": framed_h264_capability if video_path == "framed_h264" else None,
+            "framed_h264_capability": framed_h264_capability if framed_video else None,
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
             "calibration_state_machine": [
@@ -2511,10 +3170,10 @@ def run_calibration(
             "pre_dispatch_new_frames_required": 0,
             "quiescent_baseline": {
                 "required": False,
-                "quiet_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
-                "timeout_seconds": quiescent_timeout_seconds if video_path == "framed_h264" else None,
+                "quiet_interval_seconds": quiescent_interval_seconds if framed_video else None,
+                "timeout_seconds": quiescent_timeout_seconds if framed_video else None,
                 "rule": "diagnostic only; no new complete media packet or decoded frame during the bounded quiet interval"
-                if video_path == "framed_h264"
+                if framed_video
                 else None,
             },
             "marker_on_rule": (
@@ -2546,7 +3205,7 @@ def run_calibration(
         "statistics": {
             **latency_summary,
             "valid_trials": len(valid),
-            "causal_structurally_valid_trials": len(valid) if video_path == "framed_h264" else None,
+            "causal_structurally_valid_trials": len(valid) if framed_video else None,
             "detected_trials": len(detected),
             "detection_success_rate": detection_success_rate,
             "current_target_detected_trials": len(current_target_detected),
@@ -2581,6 +3240,7 @@ def run_calibration(
             else "requires >=30 valid trials and >=95% automatic detection",
             "raw_detected_latency_samples_ms": latency_samples_ms,
             "video_decomposition": decomposition_statistics,
+            "task007_device_timing": task007_device_timing_statistics,
             "decoder_profile": decoder_profile,
             "calibration_target_sequence": [target.as_dict() for target in target_sequence],
         },

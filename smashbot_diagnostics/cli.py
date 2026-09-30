@@ -33,6 +33,7 @@ from .streaming import (
     run_scrcpy_baseline,
     run_v4l2_frame_benchmark,
 )
+from .task007 import Task007ServerIdentityError, task007_server_identity
 
 DEFAULT_PACKAGE = "com.cascade.badminton.game"
 DEFAULT_REPORT_BASE = Path("artifacts/diagnostics")
@@ -145,9 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     realtime.add_argument(
         "--video-path",
-        choices=("raw_h264", "framed_h264"),
+        choices=("raw_h264", "framed_h264", "task007_framed_h264"),
         default="raw_h264",
-        help="diagnostic video path; framed_h264 enables the Task 005 v4.1 packet-timing path",
+        help="diagnostic video path; task007_framed_h264 enables the explicit Task 007 telemetry path",
     )
     realtime.add_argument(
         "--h264-capability-sample",
@@ -736,15 +737,55 @@ def classify_calibration_stages(calibration: dict[str, Any]) -> dict[str, Any]:
     return {"stage_a": stage_a, "stage_b": stage_b}
 
 
+def _validate_task007_cli_requirements(
+    *,
+    video_path: str,
+    control_transport: str,
+    scrcpy_server: Path | None,
+) -> None:
+    """Reject incomplete Task 007 selection before any device work starts."""
+
+    if video_path != "task007_framed_h264":
+        return
+    if control_transport != "scrcpy_v4_1":
+        raise ValueError("task007_framed_h264 requires --control-transport scrcpy_v4_1")
+    if scrcpy_server is None:
+        raise ValueError("task007_framed_h264 requires an explicit --scrcpy-server")
+
+
+def _resolve_realtime_output_base(
+    *,
+    video_path: str,
+    control_transport: str,
+    output_base: Path,
+) -> Path:
+    """Apply only the implicit per-path roots; preserve explicit output paths."""
+
+    if output_base != Path("artifacts/realtime"):
+        return output_base
+    if video_path == "task007_framed_h264":
+        return Path("artifacts/task007")
+    if video_path == "framed_h264":
+        return Path("artifacts/task005")
+    if control_transport == "scrcpy_v4_1":
+        return Path("artifacts/task004")
+    return output_base
+
+
 def _realtime_benchmark(args: argparse.Namespace) -> int:
     if not args.static_screen_confirmed:
         raise ValueError("realtime-benchmark requires --static-screen-confirmed on a safe static Android screen")
+    _validate_task007_cli_requirements(
+        video_path=args.video_path,
+        control_transport=args.control_transport,
+        scrcpy_server=args.scrcpy_server,
+    )
     adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
-    output_base = args.output_base
-    if args.control_transport == "scrcpy_v4_1" and output_base == Path("artifacts/realtime"):
-        output_base = Path("artifacts/task004")
-    if args.video_path == "framed_h264" and output_base == Path("artifacts/realtime"):
-        output_base = Path("artifacts/task005")
+    output_base = _resolve_realtime_output_base(
+        video_path=args.video_path,
+        control_transport=args.control_transport,
+        output_base=args.output_base,
+    )
     run_dir = new_run_directory(output_base)
     capability = capability_report(adb, args.scrcpy, args.ffmpeg)
     selected_serial = capability.get("adb", {}).get("selected_serial")
@@ -806,14 +847,33 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         print(f"Summary: {run_dir / 'summary.txt'}")
         return 2
 
-    server = ensure_scrcpy_server(run_dir, str(args.scrcpy_server) if args.scrcpy_server else None)
+    if args.video_path == "task007_framed_h264":
+        assert args.scrcpy_server is not None
+        try:
+            identity = task007_server_identity(args.scrcpy_server)
+        except Task007ServerIdentityError as exc:
+            server = {
+                "available": False,
+                "path": str(args.scrcpy_server.expanduser().resolve()),
+                "diagnostic": True,
+                "verified": False,
+                "error": str(exc),
+            }
+        else:
+            server = {"available": True, **identity}
+    else:
+        server = ensure_scrcpy_server(run_dir, str(args.scrcpy_server) if args.scrcpy_server else None)
     report["scrcpy_server"] = server
     if not server.get("available"):
         report.update(
             {
                 "status": "FAIL",
                 "failure_evidence": {
-                    "reason": "verified official scrcpy v4.1 server unavailable",
+                    "reason": (
+                        "verified Task 007 scrcpy server unavailable"
+                        if args.video_path == "task007_framed_h264"
+                        else "verified official scrcpy v4.1 server unavailable"
+                    ),
                     "server": server,
                     "control_transport": args.control_transport,
                     "fallback_attempted": False,
@@ -830,14 +890,14 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         return 2
 
     framed_h264_capability: dict[str, Any] | None = None
-    if args.video_path == "framed_h264":
+    if args.video_path in {"framed_h264", "task007_framed_h264"}:
         ffprobe_path = args.ffprobe or str(Path(ffmpeg_path).with_name("ffprobe"))
         if not args.h264_capability_sample:
             report.update(
                 {
                     "status": "INCONCLUSIVE",
                     "failure_evidence": {
-                        "reason": "framed_h264 requires a short real-device ffprobe capability sample",
+                        "reason": f"{args.video_path} requires a short real-device ffprobe capability sample",
                         "control_transport": args.control_transport,
                         "fallback_attempted": False,
                     },
@@ -858,7 +918,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
                 {
                     "status": "INCONCLUSIVE",
                     "failure_evidence": {
-                        "reason": "could not verify has_b_frames=0; framed packet/frame FIFO not started",
+                        "reason": f"could not verify has_b_frames=0; {args.video_path} packet/frame FIFO not started",
                         "h264_capability": framed_h264_capability,
                         "control_transport": args.control_transport,
                         "fallback_attempted": False,
@@ -1056,7 +1116,13 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
         or "adb"
     )
     lines = [
-        "SMASH Bot Task 005 framed-video latency decomposition" if report_video_path == "framed_h264" else "SMASH Bot Task 003/004 real-time observe→act benchmark",
+        (
+            "SMASH Bot Task 007 device-encoded latency decomposition"
+            if report_video_path == "task007_framed_h264"
+            else "SMASH Bot Task 005 framed-video latency decomposition"
+            if report_video_path == "framed_h264"
+            else "SMASH Bot Task 003/004 real-time observe→act benchmark"
+        ),
         f"Status: {report.get('status', 'unknown')}",
         f"Device: {_value(report.get('capability', {}).get('adb'), 'selected_serial')}",
         f"Transport: {_value(report.get('capability', {}).get('adb'), 'transport')}",
@@ -1092,7 +1158,7 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"rate={calibration.get('detection_success_rate')}; evaluation={calibration.get('latency_evaluation')}; "
             f"median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
         )
-        if calibration.get("video_decomposition", {}).get("video_path") == "framed_h264":
+        if calibration.get("video_decomposition", {}).get("video_path") in {"framed_h264", "task007_framed_h264"}:
             lines.append(
                 "Causal targets: "
                 f"current={calibration.get('current_target_detected_trials')}/{calibration.get('trial_gestures_attempted')}; "
@@ -1101,7 +1167,7 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
                 f"decoder={calibration.get('decoder_profile')}"
             )
         decomposition = calibration.get("video_decomposition", {})
-        if decomposition.get("video_path") == "framed_h264":
+        if decomposition.get("video_path") in {"framed_h264", "task007_framed_h264"}:
             lines.append(
                 "T0/T1/T2 decomposition: "
                 f"valid={decomposition.get('structurally_valid_decomposition_trials')}; "
@@ -1119,6 +1185,16 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
                     f"V0→V1 median={prehost.get('packet_receive_observation_span_ms', {}).get('median_latency_ms')} ms; "
                     f"V1→V2 median={prehost.get('packet_complete_to_decode_ms', {}).get('median_latency_ms')} ms; "
                     f"total median={prehost.get('total_visible_ms', {}).get('median_latency_ms')} ms"
+                )
+            if decomposition.get("video_path") == "task007_framed_h264":
+                device = decomposition.get("task007_device_timing", {})
+                lines.append(
+                    "Task 007 device timing: "
+                    f"valid={device.get('structurally_valid_trials')}; "
+                    f"inject median={device.get('device_inject_call_ms', {}).get('median_latency_ms')} ms; "
+                    f"post-inject→encoded median={device.get('device_post_inject_to_encoded_output_ms', {}).get('median_latency_ms')} ms; "
+                    f"D0→encoded median={device.get('device_control_receive_to_encoded_output_ms', {}).get('median_latency_ms')} ms; "
+                    f"residual median={device.get('combined_transport_boundary_residual_ms', {}).get('median_latency_ms')} ms"
                 )
     if report.get("stage_a"):
         stage_a = report["stage_a"]
