@@ -1,8 +1,9 @@
 """Reusable raw-H.264 observe→act primitives and Task 003 measurements.
 
-The only video transport in this module is the documented scrcpy v4.1
-``raw_stream=true`` server path.  ADB remains the only input transport.  The
-module intentionally contains no game or perception logic: the calibration
+The video path remains the documented scrcpy v4.1 ``raw_stream=true`` server
+path.  Input transport selection is explicit: Task 003's ADB path remains the
+default, while Task 004 can attach the isolated scrcpy-v4.1 control socket.
+The module intentionally contains no game or perception logic: the calibration
 detector only compares a configured touch-marker ROI against a static-frame
 baseline.
 """
@@ -25,6 +26,7 @@ from typing import Any, Callable
 from .adb import AdbClient, AdbError
 from .metrics import percentile, summarize_latencies
 from .parsing import parse_display_sizes
+from .scrcpy_control import verify_server_identity
 from .streaming import (
     BASELINE_PROFILE,
     SCRCPY_VERSION,
@@ -257,6 +259,8 @@ class RawH264FrameSource:
         self._server_process: subprocess.Popen[bytes] | None = None
         self._decoder: subprocess.Popen[bytes] | None = None
         self._connection: socket.socket | None = None
+        self._control_connection: socket.socket | None = None
+        self._control_enabled = False
         self._relay_thread: threading.Thread | None = None
         self._producer_thread: threading.Thread | None = None
         self._server_log_threads: list[threading.Thread] = []
@@ -276,16 +280,25 @@ class RawH264FrameSource:
         self._socket_name: str | None = None
         self._server_command: list[str] = []
         self._started_monotonic: float | None = None
+        self._server_identity: dict[str, Any] | None = None
 
-    def start(self) -> "RawH264FrameSource":
+    def start(self, *, control: bool = False) -> "RawH264FrameSource":
         if self._started and not self._stopped:
+            if control != self._control_enabled:
+                raise RealtimeError("raw H.264 source already started with a different control-socket contract")
             return self
         if not self.adb.executable or not self.adb.serial:
             raise RealtimeError("ADB device is not selected; raw H.264 source has no alternative transport")
         if not Path(self.server_path).is_file():
             raise RealtimeError(f"verified scrcpy server does not exist: {self.server_path}")
+        if control:
+            try:
+                self._server_identity = verify_server_identity(self.server_path)
+            except Exception as exc:
+                raise RealtimeError(str(exc)) from exc
         self._stop.clear()
         self._stopped = False
+        self._control_enabled = control
         self._started_monotonic = time.monotonic()
         port = _free_tcp_port()
         scid = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
@@ -313,8 +326,9 @@ class RawH264FrameSource:
                 SCRCPY_VERSION,
                 f"scid={scid:08x}",
                 "tunnel_forward=true",
+                "video=true",
                 "audio=false",
-                "control=false",
+                f"control={'true' if control else 'false'}",
                 "cleanup=true",
                 "raw_stream=true",
                 f"max_size={self.profile.max_size}",
@@ -331,6 +345,11 @@ class RawH264FrameSource:
             self._start_server_log_threads()
             self._wait_for_server_ready()
             self._connection = self._connect_forwarded_socket(port)
+            # v4.1 DesktopConnection.open() accepts video, then audio, then
+            # control.  With audio=false, this second connection must be made
+            # before the server can start its video/control processors.
+            if control:
+                self._control_connection = self._connect_forwarded_socket(port)
             self._decoder = _start_decoder(self.ffmpeg, ["-f", "h264", "-i", "pipe:0"])
             self._start_decoder_stderr_thread()
             self._relay_thread = threading.Thread(target=self._relay, name="raw-h264-relay", daemon=True)
@@ -351,6 +370,13 @@ class RawH264FrameSource:
             return None
         return self.buffer.get_latest(timeout_seconds)
 
+    def control_socket(self) -> socket.socket:
+        """Return the persistent v4.1 control socket opened after video."""
+
+        if not self._control_enabled or self._control_connection is None:
+            raise RealtimeError("raw H.264 source was not started with control=true")
+        return self._control_connection
+
     def metadata(self) -> dict[str, Any]:
         return {
             "path": "raw_h264",
@@ -362,6 +388,16 @@ class RawH264FrameSource:
             "queue_capacity": self.buffer.capacity,
             "pixel_history_retained": False,
             "per_frame_adb_subprocesses": False,
+            "control_enabled": self._control_enabled,
+            "socket_configuration": {
+                "video": True,
+                "audio": False,
+                "control": self._control_enabled,
+                "socket_order": ["video", "control"] if self._control_enabled else ["video"],
+                "socket_count": 2 if self._control_enabled else 1,
+                "persistent_control_connection": self._control_enabled,
+            },
+            "server_identity": dict(self._server_identity) if self._server_identity else None,
         }
 
     def stream_statistics(self, start: float, end: float) -> dict[str, Any]:
@@ -399,6 +435,15 @@ class RawH264FrameSource:
                 pass
             try:
                 self._connection.close()
+            except OSError:
+                pass
+        if self._control_connection is not None:
+            try:
+                self._control_connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                self._control_connection.close()
             except OSError:
                 pass
         decoder = self._decoder
@@ -1014,12 +1059,33 @@ def run_concurrent_stress(
     gesture_count: int = 30,
     gesture_interval_seconds: float = 1.0,
     swipe: Swipe = Swipe(160, 1200, 700, 1200, 120),
+    control_transport: str = "adb",
 ) -> dict[str, Any]:
+    if control_transport not in {"adb", "scrcpy_v4_1"}:
+        raise ValueError(f"unsupported control transport: {control_transport}")
     source = RawH264FrameSource(adb, ffmpeg, server_path, buffer_capacity=1)
-    controller = AdbGestureController(adb)
+    controller: Any = AdbGestureController(adb)
+    controller_diagnostics: dict[str, Any] = {}
     try:
-        source.start()
-    except RealtimeError as exc:
+        source.start(control=control_transport == "scrcpy_v4_1") if control_transport == "scrcpy_v4_1" else source.start()
+        if control_transport == "scrcpy_v4_1":
+            first_frame = source.latest_frame(timeout_seconds=5.0)
+            if first_frame is None:
+                raise RealtimeError("scrcpy control source produced no decoded frame")
+            coordinate_transform, _ = query_display_coordinate_transform(
+                adb,
+                first_frame.width,
+                first_frame.height,
+            )
+            from .scrcpy_control import ScrcpyControlGestureController
+
+            controller = ScrcpyControlGestureController(
+                source.control_socket(),
+                frame_width=first_frame.width,
+                frame_height=first_frame.height,
+                map_swipe=coordinate_transform.map_swipe,
+            )
+    except (AdbError, RealtimeError) as exc:
         source.stop()
         return {"status": "FAIL", "error": str(exc), "path": "raw_h264", "source": source.stats()}
     consumer_stop = threading.Event()
@@ -1052,6 +1118,9 @@ def run_concurrent_stress(
         end = time.monotonic()
         consumer_stop.set()
         consumer.join(timeout=3)
+        controller_cleanup = controller.close() if hasattr(controller, "close") else {"cleanup_success": True, "cleanup_errors": []}
+        if hasattr(controller, "diagnostics"):
+            controller_diagnostics = controller.diagnostics()
         cleanup = source.stop()
     input_start = input_start or run_start
     input_end = input_end or end
@@ -1068,10 +1137,13 @@ def run_concurrent_stress(
             "gesture_interval_seconds": gesture_interval_seconds,
             "swipe": swipe.as_dict(),
             "safe_static_screen_required": True,
+            "control_transport": control_transport,
         },
         "stream": stream,
         "gestures": {"records": records, "statistics": gesture_statistics(records)},
         "source": source.stats(),
+        "control_diagnostics": controller_diagnostics,
+        "control_cleanup": controller_cleanup,
         "cleanup": cleanup,
     }
 
@@ -1252,9 +1324,12 @@ def run_calibration(
     baseline_frame_count: int = 5,
     baseline_timeout_seconds: float = 2.0,
     visualization_mode: str = "show_touches",
+    control_transport: str = "adb",
 ) -> dict[str, Any]:
+    if control_transport not in {"adb", "scrcpy_v4_1"}:
+        raise ValueError(f"unsupported control transport: {control_transport}")
     settings = TouchVisualizationSettings(adb, visualization_mode=visualization_mode)
-    controller = AdbGestureController(adb)
+    controller: Any | None = None
     source: RawH264FrameSource | None = None
     trials_report: list[dict[str, Any]] = []
     setup: dict[str, Any] = {"status": "not_started"}
@@ -1267,7 +1342,11 @@ def run_calibration(
     try:
         setup = settings.enable()
         source = RawH264FrameSource(adb, ffmpeg, server_path, buffer_capacity=1)
-        source.start()
+        if control_transport == "scrcpy_v4_1":
+            source.start(control=True)
+        else:
+            # Keep the Task 003 source-stub and default ADB behavior unchanged.
+            source.start()
         source_started = time.monotonic()
         setup["status"] = "ready"
         first_frame = source.latest_frame(timeout_seconds=5.0)
@@ -1282,6 +1361,19 @@ def run_calibration(
         mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
         setup["input_swipe"] = calibration_input_swipe.as_dict()
         setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
+        if control_transport == "scrcpy_v4_1":
+            from .scrcpy_control import ScrcpyControlGestureController
+
+            controller = ScrcpyControlGestureController(
+                source.control_socket(),
+                frame_width=first_frame.width,
+                frame_height=first_frame.height,
+                map_swipe=coordinate_transform.map_swipe,
+            )
+            setup["control_transport"] = controller.metadata()
+        else:
+            controller = AdbGestureController(adb)
+            setup["control_transport"] = {"transport": "adb"}
         detector = (
             PointerLocationDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
             if visualization_mode == "pointer_location"
@@ -1545,6 +1637,13 @@ def run_calibration(
         setup["error"] = str(exc)
     finally:
         source_finished = time.monotonic()
+        controller_cleanup = {"cleanup_success": True, "cleanup_errors": []}
+        controller_diagnostics: dict[str, Any] = {}
+        if controller is not None:
+            if hasattr(controller, "close"):
+                controller_cleanup = controller.close()
+            if hasattr(controller, "diagnostics"):
+                controller_diagnostics = controller.diagnostics()
         cleanup = source.stop() if source is not None else {"cleanup_success": True, "cleanup_errors": []}
         source_diagnostics = source.stats() if source is not None else {"status": "not_started"}
         source_stream = (
@@ -1559,6 +1658,10 @@ def run_calibration(
     successful_trial_gestures = [gesture for gesture in trial_gestures if gesture.get("success")]
     latency_samples_ms = [float(trial["dispatch_start_to_first_visible_response_ms"]) for trial in detected]
     detection_success_rate = len(detected) / len(valid) if valid else 0.0
+    warmup_gesture = setup.get("warmup", {}).get("gesture", {})
+    trial_write_successes = sum(1 for gesture in trial_gestures if gesture.get("success"))
+    all_control_gestures = ([warmup_gesture] if warmup_gesture else []) + trial_gestures
+    all_control_write_successes = sum(1 for gesture in all_control_gestures if gesture.get("success"))
     latency_evaluable = len(valid) >= 30 and detection_success_rate >= 0.95
     latency_summary = (
         summarize_latencies([value / 1000 for value in latency_samples_ms])
@@ -1575,6 +1678,7 @@ def run_calibration(
             "stress_swipe": swipe.as_dict(),
             "calibration_swipe": calibration_input_swipe.as_dict(),
             "visualization_mode": visualization_mode,
+            "control_transport": control_transport,
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
             "calibration_state_machine": [
@@ -1619,6 +1723,16 @@ def run_calibration(
             "trial_gestures_attempted": len(trial_gestures),
             "trial_gestures_dispatched": len(successful_trial_gestures),
             "trial_gesture_dispatch_rate": len(successful_trial_gestures) / len(trial_gestures) if trial_gestures else 0.0,
+            "control_writes": {
+                "trial_attempted": len(trial_gestures),
+                "trial_successful": trial_write_successes,
+                "trial_success_rate": trial_write_successes / len(trial_gestures) if trial_gestures else 0.0,
+                "including_warmup_attempted": len(all_control_gestures),
+                "including_warmup_successful": all_control_write_successes,
+                "including_warmup_success_rate": all_control_write_successes / len(all_control_gestures)
+                if all_control_gestures
+                else 0.0,
+            },
             "marker_off_recovered_trials": sum(1 for trial in trials_report if trial.get("marker_off_recovered")),
             "background_stable_trials": sum(1 for trial in trials_report if trial.get("background_stable")),
             "latency_evaluable": latency_evaluable,
@@ -1631,6 +1745,8 @@ def run_calibration(
         "coordinate_mapping": display_report,
         "source_diagnostics": source_diagnostics,
         "source_stream": source_stream,
+        "control_diagnostics": controller_diagnostics,
+        "control_cleanup": controller_cleanup,
         "settings_restoration": restoration,
         "cleanup": cleanup,
     }

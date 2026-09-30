@@ -194,6 +194,96 @@ transport. That architectural decision is deferred to Task 004 / Issue #7;
 PR #6 remains limited to the accepted video pipeline, ADB reliability
 evidence, and the documented latency failure.
 
+## Task 004: scrcpy v4.1 control-latency spike
+
+Task 004 evaluates only the official scrcpy v4.1 control socket while keeping
+the accepted raw H.264 frame source, decoder, portrait mapping, latest-frame
+semantics, and Pointer Location detector unchanged. The control run is
+explicitly selected; it never falls back to another input transport.
+
+For `video=true`, `audio=false`, `control=true`, the v4.1 server accepts two
+forwarded sockets in this order: `video`, then `control`. The control socket is
+persistent for the run. Touch messages use the exact v4.1 32-byte
+`INJECT_TOUCH_EVENT` layout: type `2`, action byte (`DOWN=0`, `UP=1`,
+`MOVE=2`), generic-finger pointer id `UINT64_C(-2)`, signed big-endian
+coordinates, unsigned big-endian video width/height, Q16 pressure, and zero
+action-button/buttons. Coordinates are mapped into the decoded video space and
+the message carries that exact decoded frame size; a size mismatch is rejected
+by the v4.1 server. The pinned server SHA-256 is verified before control is
+enabled.
+
+The transport-neutral swipe API sends a synchronous, bounded sequence of
+`ACTION_DOWN`, linear `ACTION_MOVE` events every 10 ms, and `ACTION_UP` at the
+requested duration. The monotonic timestamp immediately before the DOWN write
+is the latency origin. Socket-write and scheduling failures are reported
+separately from visible-response latency. Cleanup closes the control socket,
+video socket, decoder, server, and ADB forward deterministically.
+
+The host suite includes v4.1 golden-byte, socket-contract, coordinate/size,
+event-order, duration, bounded-scheduling, disconnect, cleanup, and pinned
+server-identity tests. The physical sequence was Stage A followed by the
+authorized static Stage B run; the moving SMASH phase was not run.
+
+```bash
+python3 -m smashbot_diagnostics realtime-benchmark \
+  --adb /path/to/adb \
+  --scrcpy /path/to/scrcpy \
+  --ffmpeg /path/to/ffmpeg \
+  --scrcpy-server /path/to/scrcpy-server \
+  --transport wireless_tcp --serial DEVICE_SERIAL \
+  --control-transport scrcpy_v4_1 \
+  --calibration-visualization pointer_location \
+  --calibration-trials 5 --calibration-only \
+  --static-screen-confirmed --output-base artifacts/task004
+```
+
+This command writes gitignored JSON and summary artifacts under
+`artifacts/task004/<timestamp>/`. Stage B is classified independently from
+Stage A: a 30-trial run is never classified as a Stage A failure.
+
+### Final Task 004 decision
+
+Stage A passed in the accepted five-trial pilot
+(`artifacts/task004/20260930T105610Z/report.json`):
+
+- 5/5 gestures dispatched successfully, with the frozen 450 ms gesture and
+  47 control events per gesture.
+- 5/5 trials structurally valid, 5/5 `crosshair_detected=true`, 5/5
+  pointer-up recoveries, and 5/5 stable masked-background checks.
+- Settings were restored exactly (`pointer_location=null`,
+  `show_touches=0`), with zero control/video disconnects and zero
+  write/scheduling/decode errors.
+
+The authorized Stage B run is recorded at
+`artifacts/task004/20260930T110614Z/report.json` and remains formally:
+`stage_b.status = INCONCLUSIVE`. It had 30/30 gestures dispatched, but only
+28/30 structurally valid trials, so the frozen Stage B gate requiring at least
+30 valid trials is not evaluable. The run had 30/30 marker-on detections
+(100%; 28/28 within the structurally valid subset), 28/30 pointer-up
+recoveries, and 28/30 stable masked-background checks. The two invalid trials
+failed only recovery of the marker-off baseline; their crosshair detections
+were still observed. No detector, threshold, ROI, timing, or result was
+changed to alter this classification.
+
+The separate architectural decision is determined by the observed latency
+bound, without changing the formal gate status:
+
+- The 28 valid raw latencies were all at least 223.714 ms; 19/28 exceeded
+  250 ms.
+- Their observed median was 274.677 ms and p95 was 353.563 ms.
+- Even assigning 0 ms to both invalid trials would produce an approximately
+  269.932 ms median over 30 trials, still above the 150 ms limit; the p95
+  would also remain above 250 ms.
+
+Therefore the formal Stage B result is **INCONCLUSIVE**, while scrcpy v4.1
+control is architecturally **rejected for the current visible-latency
+objective**. Completing only the two missing trials cannot make the frozen
+latency gate pass. Stage C / moving SMASH is **NOT RUN** because Stage B did
+not pass. No third transport was attempted. The pinned scrcpy v4.1 control
+implementation and its host tests remain available as diagnostic
+infrastructure, and further transport investigation is deferred to Task 005 /
+Issue #8.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
@@ -207,5 +297,5 @@ next` for each trial. It does not require multiple fresh no-touch frames before
 dispatch. The persistent calibration press is 450 ms. Task 002 screenshot
 capture remains unchanged and no screenshots or long recordings are committed.
 No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
-bypass, online automation, scrcpy control integration, or custom scrcpy framed
-protocol is included.
+bypass, online automation, or generic scrcpy protocol library is included.
+Task 004's isolated v4.1 touch subset is the only control-socket addition.
