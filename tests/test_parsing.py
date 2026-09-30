@@ -29,6 +29,8 @@ class ParsingTests(unittest.TestCase):
         info = transport_info("192.168.1.42:37123")
         self.assertEqual(info["detected"], "wireless_tcp")
         self.assertTrue(info["network_endpoint"])
+        mdns_info = transport_info("adb-uc4x4xm7aqeqgmi7-n79at5._adb-tls-connect._tcp")
+        self.assertEqual(mdns_info["detected"], "wireless_tcp")
         self.assertEqual(transport_info("SERIAL123")["detected"], "unknown")
 
     def test_device_property_parsers(self):

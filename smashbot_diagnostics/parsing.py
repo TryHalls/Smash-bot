@@ -59,9 +59,9 @@ def transport_info(serial: str) -> dict[str, str | bool]:
     """Classify a device using only evidence available from ``adb devices``.
 
     ADB does not expose the physical link medium in ``devices -l``. A
-    ``host:port`` serial is therefore reported as wireless TCP based on its
-    network-endpoint form; other serials remain ``unknown`` instead of being
-    silently labelled USB.
+    ``host:port`` or ADB TLS mDNS serial is therefore reported as wireless TCP
+    based on its network-service form; other serials remain ``unknown``
+    instead of being silently labelled USB.
     """
 
     if serial.startswith("emulator-"):
@@ -69,6 +69,12 @@ def transport_info(serial: str) -> dict[str, str | bool]:
             "detected": "emulator",
             "evidence": "serial uses emulator-NNNN form",
             "network_endpoint": False,
+        }
+    if serial.startswith("adb-") and "._adb-tls-connect._tcp" in serial:
+        return {
+            "detected": "wireless_tcp",
+            "evidence": "serial uses ADB TLS mDNS wireless-service form",
+            "network_endpoint": True,
         }
     if _NETWORK_SERIAL_RE.fullmatch(serial):
         return {

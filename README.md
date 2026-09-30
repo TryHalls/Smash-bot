@@ -43,6 +43,8 @@ For an explicit wireless audit, select the network serial and transport:
 
 With `--transport auto` (the default), a `host:port` ADB serial is detected as `wireless_tcp`. Passing `--transport wireless_tcp` records the intended transport and rejects a conflicting known transport. ADB does not expose the physical medium for every serial, so the report preserves the detection evidence instead of silently calling an unknown serial USB.
 
+Some Android Wireless debugging sessions appear through mDNS with a serial such as `adb-<id>._adb-tls-connect._tcp`; that form is also detected and recorded as `wireless_tcp`.
+
 The command writes:
 
 ```text
