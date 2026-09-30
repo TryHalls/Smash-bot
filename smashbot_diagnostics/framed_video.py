@@ -12,6 +12,7 @@ import math
 import json
 import struct
 import subprocess
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -283,7 +284,8 @@ class FramedVideoPacket:
     flags: int
     payload_size: int
     payload: bytes
-    received_monotonic_seconds: float
+    packet_start_observed_monotonic_seconds: float
+    packet_complete_monotonic_seconds: float
     is_session: bool
     is_config: bool
     is_key_frame: bool
@@ -292,6 +294,12 @@ class FramedVideoPacket:
     session_width: int | None = None
     session_height: int | None = None
 
+    @property
+    def received_monotonic_seconds(self) -> float:
+        """Backward-compatible alias for packet completion observation."""
+
+        return self.packet_complete_monotonic_seconds
+
     def metadata(self) -> dict[str, Any]:
         """Return bounded diagnostics without retaining the payload."""
 
@@ -299,7 +307,16 @@ class FramedVideoPacket:
             "sequence_index": self.sequence_index,
             "flags": self.flags,
             "payload_size": self.payload_size,
-            "received_monotonic_seconds": self.received_monotonic_seconds,
+            "packet_start_observed_monotonic_seconds": self.packet_start_observed_monotonic_seconds,
+            "packet_complete_monotonic_seconds": self.packet_complete_monotonic_seconds,
+            "packet_receive_observation_span_ms": (
+                self.packet_complete_monotonic_seconds
+                - self.packet_start_observed_monotonic_seconds
+            )
+            * 1000,
+            # Retain the Task 005 field as an explicit completion alias for
+            # existing reports and callers.
+            "received_monotonic_seconds": self.packet_complete_monotonic_seconds,
             "packet_type": "session" if self.is_session else "media",
             "is_session": self.is_session,
             "is_config": self.is_config,
@@ -356,22 +373,47 @@ class FramedVideoParser:
             raise ValueError("max_payload_size must be positive")
         self.max_payload_size = max_payload_size
         self._buffer = bytearray()
+        # Each segment records the userspace observation timestamp of the
+        # recv() chunk which supplied its bytes.  Keeping segments rather than
+        # one timestamp is necessary when a chunk completes one packet and
+        # starts the next packet.
+        self._observation_segments: deque[tuple[int, float]] = deque()
         self._next_sequence_index = 0
 
     @property
     def buffered_bytes(self) -> int:
         return len(self._buffer)
 
-    def feed(self, data: bytes, *, received_monotonic_seconds: float) -> list[FramedVideoPacket]:
+    def feed(
+        self,
+        data: bytes,
+        *,
+        received_monotonic_seconds: float,
+        chunk_observed_monotonic_seconds: float | None = None,
+    ) -> list[FramedVideoPacket]:
         if not isinstance(data, (bytes, bytearray, memoryview)):
             raise TypeError("framed-video input must be bytes-like")
-        self._buffer.extend(data)
+        if data:
+            observation = (
+                received_monotonic_seconds
+                if chunk_observed_monotonic_seconds is None
+                else chunk_observed_monotonic_seconds
+            )
+            self._buffer.extend(data)
+            self._observation_segments.append((len(data), observation))
         packets: list[FramedVideoPacket] = []
         while len(self._buffer) >= FRAME_HEADER_SIZE:
+            if not self._observation_segments:
+                raise FramedVideoParseError("framed-video observation history is inconsistent")
+            packet_start_observed = self._observation_segments[0][1]
             if self._buffer[0] & 0x80:
                 session_flags = struct.unpack(">I", self._buffer[:4])[0]
-                packet = self._parse_session(session_flags, received_monotonic_seconds)
-                del self._buffer[:FRAME_HEADER_SIZE]
+                packet = self._parse_session(
+                    session_flags,
+                    packet_start_observed,
+                    received_monotonic_seconds,
+                )
+                self._consume(FRAME_HEADER_SIZE)
                 packets.append(packet)
                 continue
 
@@ -388,14 +430,15 @@ class FramedVideoParser:
             if len(self._buffer) < complete_size:
                 break
             payload = bytes(self._buffer[FRAME_HEADER_SIZE:complete_size])
-            del self._buffer[:complete_size]
+            self._consume(complete_size)
             config = bool(flags & PACKET_FLAG_CONFIG)
             packet = FramedVideoPacket(
                 sequence_index=self._next_sequence_index,
                 flags=flags,
                 payload_size=payload_size,
                 payload=payload,
-                received_monotonic_seconds=received_monotonic_seconds,
+                packet_start_observed_monotonic_seconds=packet_start_observed,
+                packet_complete_monotonic_seconds=received_monotonic_seconds,
                 is_session=False,
                 is_config=config,
                 is_key_frame=bool(flags & PACKET_FLAG_KEY_FRAME),
@@ -407,6 +450,22 @@ class FramedVideoParser:
             raise FramedVideoParseError("framed-video parser buffer exceeded its bounded packet limit")
         return packets
 
+    def _consume(self, count: int) -> None:
+        """Consume bytes and their originating recv observation segments."""
+
+        del self._buffer[:count]
+        remaining = count
+        while remaining:
+            if not self._observation_segments:
+                raise FramedVideoParseError("framed-video observation history underflow")
+            segment_length, timestamp = self._observation_segments[0]
+            if segment_length <= remaining:
+                remaining -= segment_length
+                self._observation_segments.popleft()
+            else:
+                self._observation_segments[0] = (segment_length - remaining, timestamp)
+                remaining = 0
+
     def finish(self) -> None:
         """Reject an incomplete trailing header or payload at stream EOF."""
 
@@ -414,8 +473,15 @@ class FramedVideoParser:
             raise FramedVideoParseError(
                 f"truncated v4.1 packet: {len(self._buffer)} buffered bytes remain"
             )
+        if self._observation_segments:
+            raise FramedVideoParseError("framed-video observation history is inconsistent at EOF")
 
-    def _parse_session(self, flags: int, received_monotonic_seconds: float) -> FramedVideoPacket:
+    def _parse_session(
+        self,
+        flags: int,
+        packet_start_observed_monotonic_seconds: float,
+        packet_complete_monotonic_seconds: float,
+    ) -> FramedVideoPacket:
         # Streamer.writeSessionMeta() writes SESSION in the top bit and only
         # the client-resized bit in the low byte of a 32-bit first word; the
         # remaining bits are zero.
@@ -430,7 +496,8 @@ class FramedVideoParser:
             flags=flags,
             payload_size=0,
             payload=b"",
-            received_monotonic_seconds=received_monotonic_seconds,
+            packet_start_observed_monotonic_seconds=packet_start_observed_monotonic_seconds,
+            packet_complete_monotonic_seconds=packet_complete_monotonic_seconds,
             is_session=True,
             is_config=False,
             is_key_frame=False,
@@ -462,6 +529,40 @@ def decompose_visible_latency(
     }
 
 
+def decompose_prehost_packet_latency(
+    c0_action_down_write_start: float,
+    c1_action_down_write_complete: float,
+    v0_packet_start_observed: float,
+    v1_packet_complete: float,
+    v2_decode_complete: float,
+) -> dict[str, float]:
+    """Compute the Task 006 userspace host timing decomposition.
+
+    All five values are host ``time.monotonic()`` observations.  Scrcpy PTS
+    is intentionally not part of this arithmetic; it remains packet metadata
+    for ordering and diagnostics only.
+    """
+
+    values = (
+        c0_action_down_write_start,
+        c1_action_down_write_complete,
+        v0_packet_start_observed,
+        v1_packet_complete,
+        v2_decode_complete,
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("C0, C1, V0, V1 and V2 must be finite monotonic timestamps")
+    if not c0_action_down_write_start <= c1_action_down_write_complete <= v0_packet_start_observed <= v1_packet_complete <= v2_decode_complete:
+        raise ValueError("Task 006 requires C0 <= C1 <= V0 <= V1 <= V2")
+    return {
+        "control_write_blocking_ms": (c1_action_down_write_complete - c0_action_down_write_start) * 1000,
+        "pre_packet_start_observation_ms": (v0_packet_start_observed - c0_action_down_write_start) * 1000,
+        "packet_receive_observation_span_ms": (v1_packet_complete - v0_packet_start_observed) * 1000,
+        "packet_complete_to_decode_ms": (v2_decode_complete - v1_packet_complete) * 1000,
+        "total_visible_ms": (v2_decode_complete - c0_action_down_write_start) * 1000,
+    }
+
+
 def framed_video_contract() -> dict[str, Any]:
     """Describe the exact v4.1 metadata contract used by the diagnostic path."""
 
@@ -480,7 +581,7 @@ def framed_video_contract() -> dict[str, Any]:
             "bytes_8_11": "video height",
             "client_resized": "low bit of flags",
         },
-        "media_payload": "exact MediaCodec H.264 access unit bytes; config packets are forwarded to FFmpeg",
+        "media_payload": "exact MediaCodec H.264 access unit bytes; CONFIG is retained and prepended once to the next media AU",
         "max_payload_size_bytes": DEFAULT_MAX_PAYLOAD_SIZE,
         "raw_stream": False,
         "send_device_meta": False,

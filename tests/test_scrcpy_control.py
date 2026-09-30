@@ -101,6 +101,13 @@ class ScrcpyControlTests(unittest.TestCase):
         self.assertTrue(record["bounded_event_queue"])
         self.assertEqual(record["mapped_frame_parameters"], {"x1": 432, "y1": 960, "x2": 560, "y2": 960, "duration_ms": 25})
         self.assertEqual(record["host_down_write_start_monotonic_seconds"], record["host_dispatch_start_monotonic_seconds"])
+        self.assertIsNotNone(record["host_down_write_complete_monotonic_seconds"])
+        self.assertLessEqual(
+            record["host_down_write_start_monotonic_seconds"],
+            record["host_down_write_complete_monotonic_seconds"],
+        )
+        self.assertLessEqual(record["host_down_write_start_monotonic_seconds"], socket.write_times[0])
+        self.assertLessEqual(socket.write_times[0], record["host_down_write_complete_monotonic_seconds"])
         self.assertLessEqual(record["host_dispatch_start_monotonic_seconds"], socket.write_times[0])
 
         first = socket.writes[0]

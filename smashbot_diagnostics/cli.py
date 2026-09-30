@@ -1109,6 +1109,17 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
                 f"relevant-packet→decode median={decomposition.get('relevant_packet_to_decode_ms', {}).get('median_latency_ms')} ms; "
                 f"total median={decomposition.get('total_visible_ms', {}).get('median_latency_ms')} ms"
             )
+            prehost = decomposition.get("prehost_decomposition", {})
+            if prehost:
+                lines.append(
+                    "C0/C1/V0/V1/V2 pre-host decomposition: "
+                    f"valid={prehost.get('structurally_valid_trials')}; "
+                    f"control-write median={prehost.get('control_write_blocking_ms', {}).get('median_latency_ms')} ms; "
+                    f"C0→V0 median={prehost.get('pre_packet_start_observation_ms', {}).get('median_latency_ms')} ms; "
+                    f"V0→V1 median={prehost.get('packet_receive_observation_span_ms', {}).get('median_latency_ms')} ms; "
+                    f"V1→V2 median={prehost.get('packet_complete_to_decode_ms', {}).get('median_latency_ms')} ms; "
+                    f"total median={prehost.get('total_visible_ms', {}).get('median_latency_ms')} ms"
+                )
     if report.get("stage_a"):
         stage_a = report["stage_a"]
         lines.append(f"Stage A: {stage_a.get('status')}; criteria={stage_a.get('criteria')}")

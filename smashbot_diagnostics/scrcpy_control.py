@@ -191,6 +191,22 @@ class ScrcpyControlGestureController:
             self._write_errors.append(reason)
             raise ScrcpyControlError(f"scrcpy control socket write failed: {reason}") from exc
 
+    def _write_timed(self, payload: bytes) -> tuple[float, float]:
+        """Write one event and bracket sendall() with host monotonic samples."""
+
+        start = time.monotonic()
+        try:
+            self._socket.sendall(payload)
+            complete = time.monotonic()
+            self._events_written += 1
+            return start, complete
+        except (BrokenPipeError, ConnectionError, OSError) as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            self._disconnect_reason = reason
+            self._unexpected_disconnect = True
+            self._write_errors.append(reason)
+            raise ScrcpyControlError(f"scrcpy control socket write failed: {reason}") from exc
+
     @staticmethod
     def _sleep_until(deadline: float) -> None:
         while True:
@@ -272,16 +288,18 @@ class ScrcpyControlGestureController:
 
         move_count = max(0, duration_ms // self.move_interval_ms)
         start: float | None = None
+        down_write_complete: float | None = None
         completed: float | None = None
         control_write_error: str | None = None
         scheduling_error: str | None = None
         actions: list[str] = []
         expected_events = move_count + 2
         try:
-            # This monotonic sample is intentionally adjacent to the first
-            # sendall(): it is the latency origin required by Issue #7.
-            start = time.monotonic()
-            self._write(self._payload_for_point(ACTION_DOWN, mapped, mapped.x1, mapped.y1, 1.0))
+            # C0/C1 bracket only the ACTION_DOWN sendall().  The gesture
+            # serialization, MOVE cadence and scheduling remain unchanged.
+            start, down_write_complete = self._write_timed(
+                self._payload_for_point(ACTION_DOWN, mapped, mapped.x1, mapped.y1, 1.0)
+            )
             actions.append("DOWN")
             if on_started:
                 on_started(start)
@@ -318,6 +336,9 @@ class ScrcpyControlGestureController:
             "scheduling_error": scheduling_error,
             "host_dispatch_start_monotonic_seconds": start,
             "host_down_write_start_monotonic_seconds": start,
+            "host_down_write_complete_monotonic_seconds": down_write_complete,
+            "c0_action_down_write_start_monotonic_seconds": start,
+            "c1_action_down_write_complete_monotonic_seconds": down_write_complete,
             "host_completion_monotonic_seconds": completed,
             "command_duration_ms": (completed - start) * 1000 if start is not None and completed is not None else None,
             "requested_duration_ms": duration_ms,
