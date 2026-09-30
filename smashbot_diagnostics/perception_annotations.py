@@ -251,11 +251,18 @@ def validate_annotations_document(
     records = document.get("records")
     if not isinstance(records, list):
         raise AnnotationError("annotations document records must be a list")
+    document_width = document.get("width")
+    document_height = document.get("height")
+    if (document_width is not None and document_width != width) or (
+        document_height is not None and document_height != height
+    ):
+        raise AnnotationError("annotations dimensions do not match the validation dimensions")
     if document.get("record_count") is not None and document["record_count"] != len(records):
         raise AnnotationError("annotations record_count does not match records")
     seen: set[str] = set()
     seen_source_frames: set[tuple[str, int]] = set()
     last_pts: dict[tuple[str, str, str], int] = {}
+    burst_splits: dict[tuple[str, str, str], str] = {}
     for record in records:
         if not isinstance(record, dict):
             raise AnnotationError("annotation records must be objects")
@@ -271,6 +278,9 @@ def validate_annotations_document(
             raise AnnotationError(f"duplicate annotation source frame: {identity}")
         seen_source_frames.add(identity)
         burst = (record["source_run"], record["clip"], record["burst_id"])
+        previous_split = burst_splits.setdefault(burst, record["split"])
+        if previous_split != record["split"]:
+            raise AnnotationError(f"annotation burst appears in both splits: {burst}")
         previous_pts = last_pts.get(burst)
         if previous_pts is not None and record["pts_us"] <= previous_pts:
             raise AnnotationError(f"annotation PTS is not strictly increasing within burst: {burst}")

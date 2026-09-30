@@ -160,6 +160,16 @@ class PerceptionAnnotationTests(unittest.TestCase):
         with self.assertRaises(AnnotationError):
             validate_annotation_record(skeleton)
 
+    def test_annotation_document_rejects_burst_split_leakage(self):
+        active, negative = _synthetic_sources()
+        records = build_candidate_records(active, negative)
+        first = _annotation(records[0])
+        second = _annotation(records[1])
+        second["split"] = "holdout"
+        document = {"schema_version": 1, "width": 864, "height": 1920, "records": [first, second]}
+        with self.assertRaises(AnnotationError):
+            validate_annotations_document(document)
+
     def test_css_click_maps_to_full_resolution(self):
         self.assertEqual(css_to_image_coordinates(216, 480, 432, 960, 864, 1920), (432.0, 960.0))
         with self.assertRaises(AnnotationError):
