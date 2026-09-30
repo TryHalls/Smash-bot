@@ -1,6 +1,6 @@
 # SMASH Bot Android pipeline diagnostics
 
-This repository contains the diagnostic harness for Task 001. It characterizes the host, ADB connection, Android build, native screenshot capture, and host-observed swipe dispatch latency. It does not contain gameplay, computer vision, machine learning, reverse engineering, or a simulator.
+This repository contains the diagnostic harness for Task 001 and Task 002. It characterizes the host, ADB connection, Android build, native screenshot capture, continuous scrcpy video transport, and host-observed swipe dispatch latency. It does not contain gameplay, computer vision, machine learning, reverse engineering, or a simulator.
 
 The implementation uses Python's standard library only at runtime. Generated reports and screenshot samples are written below `artifacts/diagnostics/`, which is ignored by Git.
 
@@ -84,6 +84,35 @@ Measure repeated host-side ADB dispatch latency with the same explicit safety fl
 
 The input report logs timestamps, parameters, success/failure, selected transport, and latency for each command. It explicitly labels these as **host-observed ADB command latency**. True visible input-to-render latency is not measured by this task and no end-to-end number is inferred. The screenshot and input measurements are unchanged when the selected transport is wireless TCP.
 
+## Task 002: continuous low-latency video
+
+Task 002 uses the official scrcpy v4.1 stack and keeps the experiment order fixed:
+
+1. Inspect host, ADB, scrcpy, FFmpeg, and V4L2 capabilities without mutating the system.
+2. Run the baseline scrcpy profile for at least 60 seconds: H.264, video only, max size 1920, max FPS 60, no added video buffer, and `--print-fps`.
+3. Prefer a usable V4L2 sink with `--v4l2-buffer=0`; otherwise use scrcpy's documented standalone `raw_stream=true` H.264 server mode with a matching v4.1 server and FFmpeg decoder.
+4. Decode frames programmatically for at least 60 seconds without an ADB subprocess per frame and evaluate the exact PASS/FAIL gate.
+5. Run the single controlled 1280/60/4 Mbps fallback only when the initial gate fails.
+
+Check capabilities first:
+
+```bash
+python3 -m smashbot_diagnostics stream-capability \
+  --adb /path/to/adb --transport wireless_tcp --serial DEVICE_SERIAL
+```
+
+Before the timed command, put SMASH in an active, continuously moving match and keep it there for the full run. Then execute:
+
+```bash
+python3 -m smashbot_diagnostics stream-benchmark \
+  --adb /path/to/adb --transport wireless_tcp --serial DEVICE_SERIAL \
+  --duration-seconds 60 --path auto --active-gameplay-confirmed
+```
+
+The command writes `artifacts/streaming/<timestamp>/report.json` and `summary.txt`. It records the exact scrcpy command, version, selected path, encoder/codec evidence, resolution, FPS samples, frame timestamps, decode failures, disconnects, gap counts, and every gate criterion. The raw H.264 server is downloaded only into the gitignored run directory and verified against the official v4.1 SHA-256; it is never vendored into Git.
+
+If V4L2 is absent, the documented raw H.264 fallback is selected automatically. Enabling `v4l2loopback` is intentionally not automatic because it may require a persistent package installation or `sudo modprobe`; the capability report records that condition and preserves the fallback path. No long video recordings are generated or committed.
+
 ## Scope and artifacts
 
-The only device-side actions are `exec-out screencap -p` and, when explicitly requested, `input swipe`. No screenshots are committed. No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat bypass, or online automation is included.
+The only device-side actions are `exec-out screencap -p`, explicitly requested `input swipe`, and the official scrcpy video server/CLI used by Task 002. No screenshots or long recordings are committed. No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat bypass, online automation, scrcpy control integration, or custom scrcpy framed protocol is included.
