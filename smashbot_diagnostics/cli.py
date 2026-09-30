@@ -21,6 +21,7 @@ from .perception import (
     run_perception_capture,
     validate_capture_duration,
 )
+from .perception_annotations import build_ground_truth_subset, run_annotation_ui
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -223,6 +224,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="real H.264 sample used to verify has_b_frames=0 before capture",
     )
     perception.add_argument("--output-base", type=Path, default=PERCEPTION_OUTPUT_BASE)
+
+    subset = subparsers.add_parser(
+        "perception-subset",
+        help="build the frozen Task 009 annotation candidate subset from Task 008 captures",
+    )
+    subset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    subset.add_argument("--output-base", type=Path, default=Path("artifacts/task009/ground_truth"))
+    subset.add_argument("--ffmpeg", default="ffmpeg")
+    subset.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="write manifests only; do not regenerate PNG derivatives",
+    )
+
+    label = subparsers.add_parser(
+        "perception-label",
+        help="serve the dependency-free Task 009 annotation UI on localhost",
+    )
+    label.add_argument("--manifest", type=Path, required=True)
+    label.add_argument("--annotations", type=Path, required=True)
+    label.add_argument("--port", type=_nonnegative_int, default=0)
     return parser
 
 
@@ -1287,6 +1309,26 @@ def _perception_capture(args: argparse.Namespace) -> int:
     return 0 if report.get("status") == "PASS" else 2
 
 
+def _perception_subset(args: argparse.Namespace) -> int:
+    repo_root = Path.cwd()
+    subset = build_ground_truth_subset(
+        repo_root=repo_root,
+        task008_root=args.task008_root,
+        output_root=args.output_base,
+        ffmpeg=args.ffmpeg,
+        extract_images=not args.no_extract,
+    )
+    print(f"Subset manifest: {Path(args.output_base) / 'subset.json'}")
+    print(f"Annotations: {Path(args.output_base) / 'annotations.json'}")
+    print(f"Records: {subset['record_count']}")
+    return 0
+
+
+def _perception_label(args: argparse.Namespace) -> int:
+    run_annotation_ui(args.manifest, args.annotations, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1307,6 +1349,10 @@ def main(argv: list[str] | None = None) -> int:
             return _realtime_benchmark(args)
         if args.command == "perception-capture":
             return _perception_capture(args)
+        if args.command == "perception-subset":
+            return _perception_subset(args)
+        if args.command == "perception-label":
+            return _perception_label(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2
