@@ -60,8 +60,16 @@ class TrackState:
     vy: float = 0.0
     confidence: float = 0.0
     age: int = 0
-    misses: int = 0
+    consecutive_misses: int = 0
+    last_frame_index: int | None = None
+    last_pts_us: int | None = None
     last_observed_frame_index: int | None = None
     last_observed_pts_us: int | None = None
+    status: str = "tentative"
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def misses(self) -> int:
+        """Backward-compatible name for the bounded miss counter."""
+
+        return self.consecutive_misses

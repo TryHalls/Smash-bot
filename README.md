@@ -190,6 +190,43 @@ The stdlib annotation, frame-stream, and benchmark scaffolding remain usable;
 installing a local Python environment with wheel support is a separate human
 toolchain action. No global packages were changed.
 
+Task 009 invariants are: framed packet count equals decoded-frame count,
+frame index/PTS identity comes from the device-derived metadata, labels are
+human-only, unlabeled records are never negatives, and the frozen dev/holdout
+split is never mixed for tuning. The future tracker contract keeps
+`observation != prediction`, derives `dt` from device PTS, and bounds
+coasting. See [the Task 010 readiness boundary](docs/task010-readiness.md) for
+the next layer's timestamp, uncertainty, frame-age and prediction contract.
+
+The host-only tracker core in `perception_tracker.py` is an
+`UNCALIBRATED` constant-velocity alpha-beta model. It gates observations by
+Euclidean distance, decays confidence during bounded coasting, supports only
+short reacquisition, and fails closed on duplicate/backwards or excessive-gap
+device PTS. `perception_association.py` performs the same detector-independent
+geometric gate and explicit weighted ranking for future candidates; its
+weights are not tuned from gameplay. Synthetic tests cover misses,
+distractors, crossing candidates, irregular cadence and loss/reinitialization.
+
+Benchmark reports carry schema/tool/input hashes, split and label counts,
+stable subset identity, metric schema, and separate runtime metadata. A
+completed report can be compared without selecting a winner:
+
+```bash
+python3 -m smashbot_diagnostics perception-compare \
+  --baseline baseline-report.json \
+  --candidate candidate-report.json \
+  --output artifacts/task009/compare.json
+```
+
+The comparator rejects incompatible schema, split, annotation-input or subset
+identities and reports only deltas. The annotation UI shows progress and split,
+supports `←/→`, `V`, `N`, `A`, `O`, `M`, and `U` shortcuts, and has an optional
+`--read-only` review mode.
+
+`perception_timing.py` provides a bounded `monotonic_ns()` stage timer for
+future decode/registration/candidate/tracker measurements. It reports host
+intervals only; it never subtracts device PTS from host monotonic time.
+
 ## Task 003: real-time observe→act loop
 
 Task 003 reuses the accepted official scrcpy v4.1 raw H.264 path and adds a
