@@ -173,6 +173,27 @@ valid visual-response trials, and the latency/detection thresholds from Issue
 input-visible latency result is **INCONCLUSIVE**, not evidence that ADB is
 slow. The >=45 FPS and frame-gap gates apply only to the moving SMASH phase.
 
+### Final Task 003 decision
+
+The final accepted evidence is the 30-trial Pointer Location calibration run
+at `artifacts/realtime/20260930T102732Z/report.json` (local, gitignored):
+
+- The official raw H.264 video/frame source passed, including the bounded
+  latest-frame and freshness behavior.
+- Wireless ADB gesture reliability passed: 30/30 gestures succeeded.
+- Pointer Location calibration was structurally valid: 30/30 trials, 30/30
+  `crosshair_detected=true`, 30/30 pointer-up recoveries, and 30/30 stable
+  masked launcher-background checks.
+- The measured dispatch-start to first decoded crosshair frame had a median of
+  334.028 ms and p95 of 453.756 ms.
+- Therefore Wireless ADB visible-response latency is **FAIL** against the
+  Issue #5 limits of median <150 ms and p95 <250 ms.
+
+Task 003 does not implement scrcpy-control or add an alternative control
+transport. That architectural decision is deferred to Task 004 / Issue #7;
+PR #6 remains limited to the accepted video pipeline, ADB reliability
+evidence, and the documented latency failure.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
