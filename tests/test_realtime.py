@@ -2,6 +2,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+from smashbot_diagnostics.framed_video import H264PacketMerger
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
@@ -479,6 +480,29 @@ class RealtimeTests(unittest.TestCase):
             120.0,
         )
         self.assertEqual(source.association_diagnostics()["invariant_failures"], [])
+
+    def test_framed_config_is_merged_but_never_enters_packet_frame_fifo(self):
+        merger = H264PacketMerger()
+        config = type("Packet", (), {"is_session": False, "is_config": True, "payload": b"cfg"})()
+        media = type("Packet", (), {"is_session": False, "is_config": False, "payload": b"media"})()
+        self.assertEqual(merger.merge(config), b"cfg")
+        self.assertEqual(merger.merge(media), b"cfgmedia")
+
+        source = FramedH264FrameSource(
+            FakeAdb(),
+            "ffmpeg",
+            "/missing/server",
+            no_b_frames_verified=True,
+            h264_capability={"verified": True, "has_b_frames": 0},
+        )
+        self.assertTrue(source._record_media_packet_for_decoder({
+            "sequence_index": 7,
+            "pts_us": 7,
+            "received_monotonic_seconds": 7.0,
+        }))
+        association = source._associate_decoded_frame(0, 7.1)
+        self.assertEqual(association["packet_sequence_index"], 7)
+        self.assertEqual(source.association_diagnostics()["associated_frame_count"], 1)
 
     def test_framed_fifo_invariants_report_missing_packet_and_overflow(self):
         source = FramedH264FrameSource(

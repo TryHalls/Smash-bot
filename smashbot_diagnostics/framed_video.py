@@ -9,6 +9,7 @@ the decoder.
 from __future__ import annotations
 
 import math
+import json
 import struct
 import subprocess
 from dataclasses import dataclass
@@ -108,6 +109,172 @@ def verify_h264_no_b_frames(
     return result
 
 
+def validate_h264_decoder_profiles(
+    ffmpeg: str,
+    ffprobe: str,
+    sample_path: str | Path,
+    *,
+    timeout_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Validate decoder cardinality without connecting to Android.
+
+    The sample is demuxed to a real H.264 elementary stream, then decoded by
+    each frozen diagnostic command.  Packet cardinality comes from FFprobe's
+    H.264 access-unit packets; output cardinality comes from complete gray raw
+    frames emitted by FFmpeg.  This deliberately does not start scrcpy or ADB.
+    """
+
+    capability = verify_h264_no_b_frames(ffprobe, sample_path, timeout_seconds=timeout_seconds)
+    result: dict[str, Any] = {
+        "sample": capability,
+        "profiles": {},
+    }
+    if not capability.get("verified"):
+        for profile in ("baseline_current", "scrcpy_low_delay", "fps_passthrough"):
+            result["profiles"][profile] = {
+                "association_valid": False,
+                "error": "has_b_frames=0 capability verification failed",
+            }
+        return result
+
+    stream = capability["streams"][0]
+    width = int(stream["width"])
+    height = int(stream["height"])
+    packet_command = [
+        str(ffprobe),
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-count_packets",
+        "-show_entries",
+        "stream=nb_read_packets",
+        "-of",
+        "json",
+        str(sample_path),
+    ]
+    packet_probe = subprocess.run(
+        packet_command,
+        capture_output=True,
+        text=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if packet_probe.returncode != 0:
+        error = packet_probe.stderr.strip() or f"ffprobe exited with {packet_probe.returncode}"
+        for profile in ("baseline_current", "scrcpy_low_delay", "fps_passthrough"):
+            result["profiles"][profile] = {"association_valid": False, "error": error}
+        return result
+    packet_payload = json.loads(packet_probe.stdout)
+    streams = packet_payload.get("streams") or []
+    if len(streams) != 1 or streams[0].get("nb_read_packets") is None:
+        error = "ffprobe did not return exactly one packet count"
+        for profile in ("baseline_current", "scrcpy_low_delay", "fps_passthrough"):
+            result["profiles"][profile] = {"association_valid": False, "error": error}
+        return result
+    media_au_count = int(streams[0]["nb_read_packets"])
+
+    extract_command = [
+        str(ffmpeg),
+        "-v",
+        "error",
+        "-i",
+        str(sample_path),
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "copy",
+        "-bsf:v",
+        "h264_mp4toannexb",
+        "-f",
+        "h264",
+        "pipe:1",
+    ]
+    extracted = subprocess.run(
+        extract_command,
+        capture_output=True,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if extracted.returncode != 0:
+        error = extracted.stderr.decode("utf-8", errors="replace").strip()
+        for profile in ("baseline_current", "scrcpy_low_delay", "fps_passthrough"):
+            result["profiles"][profile] = {
+                "association_valid": False,
+                "media_aus_non_config_introduced": media_au_count,
+                "error": error or f"ffmpeg extraction exited with {extracted.returncode}",
+            }
+        return result
+
+    # Import lazily to keep framed_video.py usable by the streaming module,
+    # which owns the profile command builder.
+    from .streaming import DECODER_PROFILES, decoder_command
+
+    frame_size = width * height
+    for profile in DECODER_PROFILES:
+        command = decoder_command(
+            str(ffmpeg),
+            ["-f", "h264", "-i", "pipe:0"],
+            profile,
+        )
+        profile_result: dict[str, Any] = {
+            "decoder_command": command,
+            "media_aus_non_config_introduced": media_au_count,
+            "raw_frames_emitted": 0,
+            "frames_minus_aus": None,
+            "pending_fifo_at_eof": None,
+            "decoded_frames_without_packet": None,
+            "overflow": 0,
+            "invariant_failures": [],
+            "association_valid": False,
+            "returncode": None,
+        }
+        decoder: subprocess.Popen[bytes] | None = None
+        try:
+            decoder = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            stdout, stderr = decoder.communicate(extracted.stdout, timeout=timeout_seconds)
+            profile_result["returncode"] = decoder.returncode
+            profile_result["stderr"] = stderr.decode("utf-8", errors="replace").splitlines()
+            frame_count, remainder = divmod(len(stdout), frame_size)
+            profile_result["raw_frames_emitted"] = frame_count
+            profile_result["frames_minus_aus"] = frame_count - media_au_count
+            profile_result["pending_fifo_at_eof"] = max(media_au_count - frame_count, 0)
+            profile_result["decoded_frames_without_packet"] = max(frame_count - media_au_count, 0)
+            if remainder:
+                profile_result["invariant_failures"].append(
+                    f"raw output has {remainder} trailing bytes after complete frames"
+                )
+            if decoder.returncode != 0:
+                profile_result["invariant_failures"].append(
+                    f"decoder exited with {decoder.returncode}"
+                )
+            if frame_count != media_au_count:
+                profile_result["invariant_failures"].append(
+                    "decoded raw frame count differs from non-config media AU count"
+                )
+        except subprocess.TimeoutExpired:
+            if decoder is not None:
+                decoder.kill()
+                decoder.communicate()
+            profile_result["invariant_failures"].append("decoder timed out")
+        except OSError as exc:
+            profile_result["invariant_failures"].append(str(exc))
+        profile_result["association_valid"] = (
+            profile_result["media_aus_non_config_introduced"] == profile_result["raw_frames_emitted"]
+            and profile_result["pending_fifo_at_eof"] == 0
+            and profile_result["decoded_frames_without_packet"] == 0
+            and profile_result["overflow"] == 0
+            and not profile_result["invariant_failures"]
+        )
+        result["profiles"][profile] = profile_result
+    return result
+
+
 @dataclass(frozen=True)
 class FramedVideoPacket:
     """One complete v4.1 session or media packet."""
@@ -142,6 +309,38 @@ class FramedVideoPacket:
             "session_width": self.session_width,
             "session_height": self.session_height,
         }
+
+
+class H264PacketMerger:
+    """Implement scrcpy v4.1's ``sc_packet_merger`` semantics for H.264.
+
+    A config packet is forwarded alone and retained as the latest config.  The
+    next non-config media packet receives that config prepended, and the
+    retained config is then cleared.  Callers associate only the media packet;
+    the standalone config packet never represents a decoded frame.
+    """
+
+    def __init__(self) -> None:
+        self._config: bytes | None = None
+
+    @property
+    def pending_config_size(self) -> int:
+        return len(self._config or b"")
+
+    def merge(self, packet: FramedVideoPacket) -> bytes:
+        if packet.is_session:
+            raise ValueError("session packets are not H.264 decoder payloads")
+        if packet.is_config:
+            self._config = bytes(packet.payload)
+            return bytes(packet.payload)
+        if self._config is None:
+            return bytes(packet.payload)
+        payload = self._config + packet.payload
+        self._config = None
+        return payload
+
+    def reset(self) -> None:
+        self._config = None
 
 
 class FramedVideoParser:

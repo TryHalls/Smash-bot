@@ -11,6 +11,7 @@ from smashbot_diagnostics.framed_video import (
     PACKET_FLAG_SESSION,
     FramedVideoParseError,
     FramedVideoParser,
+    H264PacketMerger,
     decompose_visible_latency,
     framed_video_contract,
     verify_h264_no_b_frames,
@@ -22,6 +23,34 @@ def media_packet(flags: int, payload: bytes) -> bytes:
 
 
 class FramedVideoTests(unittest.TestCase):
+    def test_config_plus_media_produces_one_media_association_payload(self):
+        parser = FramedVideoParser()
+        packets = parser.feed(
+            media_packet(PACKET_FLAG_CONFIG, b"cfg")
+            + media_packet(123, b"media"),
+            received_monotonic_seconds=10.0,
+        )
+        merger = H264PacketMerger()
+
+        self.assertEqual(merger.merge(packets[0]), b"cfg")
+        self.assertEqual(merger.merge(packets[1]), b"cfgmedia")
+        self.assertEqual(merger.pending_config_size, 0)
+
+    def test_two_config_packets_keep_only_the_latest_config(self):
+        parser = FramedVideoParser()
+        packets = parser.feed(
+            media_packet(PACKET_FLAG_CONFIG, b"old")
+            + media_packet(PACKET_FLAG_CONFIG, b"new")
+            + media_packet(456, b"media"),
+            received_monotonic_seconds=11.0,
+        )
+        merger = H264PacketMerger()
+
+        self.assertEqual(merger.merge(packets[0]), b"old")
+        self.assertEqual(merger.merge(packets[1]), b"new")
+        self.assertEqual(merger.merge(packets[2]), b"newmedia")
+        self.assertEqual(merger.pending_config_size, 0)
+
     def test_v41_header_parses_config_and_media_flags_and_pts(self):
         parser = FramedVideoParser()
         config = media_packet(PACKET_FLAG_CONFIG, b"cfg")

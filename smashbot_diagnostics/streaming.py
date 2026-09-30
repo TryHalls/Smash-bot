@@ -650,7 +650,7 @@ def _median(values: list[float]) -> float | None:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-DECODER_PROFILES = ("baseline_current", "scrcpy_low_delay")
+DECODER_PROFILES = ("baseline_current", "scrcpy_low_delay", "fps_passthrough")
 
 
 def decoder_command(
@@ -663,6 +663,7 @@ def decoder_command(
     if decoder_profile not in DECODER_PROFILES:
         raise ValueError(f"unsupported decoder profile: {decoder_profile}")
     profile_args = ["-flags", "low_delay"] if decoder_profile == "scrcpy_low_delay" else []
+    output_args = ["-fps_mode", "passthrough"] if decoder_profile == "fps_passthrough" else []
     return [
         ffmpeg,
         "-hide_banner",
@@ -675,6 +676,7 @@ def decoder_command(
         *profile_args,
         *input_args,
         "-an",
+        *output_args,
         "-f",
         "rawvideo",
         "-pix_fmt",

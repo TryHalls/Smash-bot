@@ -27,6 +27,7 @@ from .adb import AdbClient, AdbError
 from .framed_video import (
     FramedVideoParseError,
     FramedVideoParser,
+    H264PacketMerger,
     decompose_visible_latency,
     framed_video_contract,
 )
@@ -651,6 +652,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             raise ValueError(f"unsupported decoder profile: {decoder_profile}")
         parser_kwargs = {} if max_payload_size is None else {"max_payload_size": max_payload_size}
         self._framed_parser = FramedVideoParser(**parser_kwargs)
+        self._packet_merger = H264PacketMerger()
         self._packet_metadata: deque[dict[str, Any]] = deque(maxlen=100_000)
         self._pending_media_packets: deque[dict[str, Any]] = deque()
         self._frame_associations: deque[dict[str, Any]] = deque(maxlen=100_000)
@@ -692,6 +694,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._control_enabled = control
         self._started_monotonic = time.monotonic()
         self._framed_parser = FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+        self._packet_merger.reset()
         self._packet_metadata.clear()
         with self._association_lock:
             self._pending_media_packets.clear()
@@ -1025,12 +1028,22 @@ class FramedH264FrameSource(RawH264FrameSource):
                         self._disconnect.mark("decoder_stdin_unavailable")
                         self._stop.set()
                         return
+                    decoder_payload = self._packet_merger.merge(packet)
+                    if packet.is_config:
+                        try:
+                            self._decoder.stdin.write(decoder_payload)
+                            self._decoder.stdin.flush()
+                        except (OSError, BrokenPipeError, ValueError) as exc:
+                            if not self._stop.is_set():
+                                self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
+                                self._stop.set()
+                        continue
                     if not self._record_media_packet_for_decoder(packet.metadata()):
                         self._disconnect.mark("packet_frame_association_overflow")
                         self._stop.set()
                         return
                     try:
-                        self._decoder.stdin.write(packet.payload)
+                        self._decoder.stdin.write(decoder_payload)
                         self._decoder.stdin.flush()
                     except (OSError, BrokenPipeError, ValueError) as exc:
                         with self._association_lock:

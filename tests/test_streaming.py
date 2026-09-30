@@ -39,6 +39,12 @@ class StreamingTests(unittest.TestCase):
             ],
         )
 
+        fps_passthrough = decoder_command("ffmpeg", input_args, "fps_passthrough")
+        expected_fps = list(baseline)
+        output_index = expected_fps.index("-f", expected_fps.index("-an") + 1)
+        expected_fps[output_index:output_index] = ["-fps_mode", "passthrough"]
+        self.assertEqual(fps_passthrough, expected_fps)
+
     def test_baseline_command_has_required_low_latency_profile(self):
         command = build_scrcpy_command("scrcpy", "DEVICE", BASELINE_PROFILE, 60)
         self.assertIn("--no-audio", command)
