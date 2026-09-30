@@ -24,6 +24,13 @@ from statistics import fmean, median
 from typing import Any, Callable
 
 from .adb import AdbClient, AdbError
+from .framed_video import (
+    FramedVideoParseError,
+    FramedVideoParser,
+    H264PacketMerger,
+    decompose_visible_latency,
+    framed_video_contract,
+)
 from .metrics import percentile, summarize_latencies
 from .parsing import parse_display_sizes
 from .scrcpy_control import verify_server_identity
@@ -32,6 +39,8 @@ from .streaming import (
     SCRCPY_VERSION,
     DisconnectTracker,
     _adb_command,
+    DECODER_PROFILES,
+    decoder_command,
     _free_tcp_port,
     _parse_dimensions,
     _read_exact_fd,
@@ -53,6 +62,7 @@ class DecodedFrame:
     height: int
     pixel_format: str
     pixels: bytes
+    packet_association: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -614,6 +624,505 @@ class RawH264FrameSource:
                 self._timestamps.append(timestamp)
 
 
+FRAMED_QUIESCENT_INTERVAL_SECONDS = 0.05
+FRAMED_QUIESCENT_TIMEOUT_SECONDS = 0.5
+FRAMED_MAX_PENDING_MEDIA_PACKETS = 512
+
+
+class FramedH264FrameSource(RawH264FrameSource):
+    """Task 005-only framed H.264 source with bounded packet timing metadata.
+
+    The accepted ``RawH264FrameSource`` is intentionally left untouched.  This
+    subclass uses the same ADB forward, decoder, control socket, and latest
+    frame buffer, but removes ``raw_stream=true`` and parses the official v4.1
+    12-byte packet headers before forwarding only H.264 payloads to FFmpeg.
+    """
+
+    def __init__(
+        self,
+        *args: Any,
+        max_payload_size: int | None = None,
+        no_b_frames_verified: bool = False,
+        h264_capability: dict[str, Any] | None = None,
+        decoder_profile: str = "baseline_current",
+        **kwargs: Any,
+    ):
+        super().__init__(*args, **kwargs)
+        if decoder_profile not in DECODER_PROFILES:
+            raise ValueError(f"unsupported decoder profile: {decoder_profile}")
+        parser_kwargs = {} if max_payload_size is None else {"max_payload_size": max_payload_size}
+        self._framed_parser = FramedVideoParser(**parser_kwargs)
+        self._packet_merger = H264PacketMerger()
+        self._packet_metadata: deque[dict[str, Any]] = deque(maxlen=100_000)
+        self._pending_media_packets: deque[dict[str, Any]] = deque()
+        self._frame_associations: deque[dict[str, Any]] = deque(maxlen=100_000)
+        self._association_lock = threading.Lock()
+        self._no_b_frames_verified = no_b_frames_verified
+        self._h264_capability = dict(h264_capability or {})
+        self._decoder_profile = decoder_profile
+        self._max_pending_media_packets = FRAMED_MAX_PENDING_MEDIA_PACKETS
+        self._max_pending_depth = 0
+        self._decoded_frames_without_packet = 0
+        self._association_overflow_count = 0
+        self._association_invariant_failures: list[str] = []
+        self._packet_lock = threading.Lock()
+        self._packet_total_count = 0
+        self._framing_error: str | None = None
+        self._last_media_packet_monotonic_seconds: float | None = None
+        self._last_decoded_monotonic_seconds: float | None = None
+
+    def start(self, *, control: bool = False) -> "FramedH264FrameSource":
+        if self._started and not self._stopped:
+            if control != self._control_enabled:
+                raise RealtimeError("framed H.264 source already started with a different control-socket contract")
+            return self
+        if not self.adb.executable or not self.adb.serial:
+            raise RealtimeError("ADB device is not selected; framed H.264 source has no alternative transport")
+        if not Path(self.server_path).is_file():
+            raise RealtimeError(f"verified scrcpy server does not exist: {self.server_path}")
+        if not self._no_b_frames_verified:
+            raise RealtimeError(
+                "framed H.264 packet/frame association requires a verified has_b_frames=0 capability sample"
+            )
+        if control:
+            try:
+                self._server_identity = verify_server_identity(self.server_path)
+            except Exception as exc:
+                raise RealtimeError(str(exc)) from exc
+        self._stop.clear()
+        self._stopped = False
+        self._control_enabled = control
+        self._started_monotonic = time.monotonic()
+        self._framed_parser = FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+        self._packet_merger.reset()
+        self._packet_metadata.clear()
+        with self._association_lock:
+            self._pending_media_packets.clear()
+            self._frame_associations.clear()
+            self._max_pending_depth = 0
+            self._decoded_frames_without_packet = 0
+            self._association_overflow_count = 0
+            self._association_invariant_failures.clear()
+        self._packet_total_count = 0
+        self._framing_error = None
+        self._last_media_packet_monotonic_seconds = None
+        self._last_decoded_monotonic_seconds = None
+        port = _free_tcp_port()
+        scid = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
+        socket_name = f"scrcpy_{scid:08x}"
+        remote_server = f"/data/local/tmp/smashbot-realtime-framed-scrcpy-server-v{SCRCPY_VERSION}"
+        self._forward_port = port
+        self._socket_name = socket_name
+        self._remote_server = remote_server
+        try:
+            push = _adb_command(self.adb, ["push", self.server_path, remote_server])
+            if not push["success"]:
+                raise RealtimeError(f"ADB push failed: {push['stderr'] or push['stdout']}")
+            forward = _adb_command(self.adb, ["forward", f"tcp:{port}", f"localabstract:{socket_name}"])
+            if not forward["success"]:
+                raise RealtimeError(f"ADB forward failed: {forward['stderr'] or forward['stdout']}")
+            # Do not pass raw_stream=true: v4.1 would force all four metadata
+            # switches false.  These explicit options create the diagnostic
+            # direct framed-video stream with no preamble.
+            self._server_command = [
+                self.adb.executable,
+                "-s",
+                self.adb.serial,
+                "shell",
+                f"CLASSPATH={remote_server}",
+                "app_process",
+                "/",
+                "com.genymobile.scrcpy.Server",
+                SCRCPY_VERSION,
+                f"scid={scid:08x}",
+                "tunnel_forward=true",
+                "video=true",
+                "audio=false",
+                f"control={'true' if control else 'false'}",
+                "cleanup=true",
+                "raw_stream=false",
+                "send_device_meta=false",
+                "send_dummy_byte=false",
+                "send_stream_meta=false",
+                "send_frame_meta=true",
+                f"max_size={self.profile.max_size}",
+                f"max_fps={self.profile.max_fps}",
+                f"video_codec={self.profile.codec}",
+            ]
+            if self.profile.bitrate_bps is not None:
+                self._server_command.append(f"video_bit_rate={self.profile.bitrate_bps}")
+            self._server_process = subprocess.Popen(
+                self._server_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self._start_server_log_threads()
+            self._wait_for_server_ready()
+            self._connection = self._connect_forwarded_socket(port)
+            if control:
+                self._control_connection = self._connect_forwarded_socket(port)
+            self._decoder = _start_decoder(
+                self.ffmpeg,
+                ["-f", "h264", "-i", "pipe:0"],
+                decoder_profile=self._decoder_profile,
+            )
+            self._start_decoder_stderr_thread()
+            self._relay_thread = threading.Thread(target=self._relay, name="framed-h264-relay", daemon=True)
+            self._relay_thread.start()
+            self._wait_for_decoder_dimensions()
+            self._producer_thread = threading.Thread(target=self._produce, name="framed-decoded-frame-producer", daemon=True)
+            self._producer_thread.start()
+            self._started = True
+            return self
+        except Exception as exc:
+            self.stop()
+            if isinstance(exc, RealtimeError):
+                raise
+            raise RealtimeError(str(exc)) from exc
+
+    def metadata(self) -> dict[str, Any]:
+        result = super().metadata()
+        result.update(
+            {
+                "path": "framed_h264",
+                "framed_video": framed_video_contract(),
+                "server_options": {
+                    "video": True,
+                    "audio": False,
+                    "control": self._control_enabled,
+                    "raw_stream": False,
+                    "send_device_meta": False,
+                    "send_dummy_byte": False,
+                    "send_stream_meta": False,
+                    "send_frame_meta": True,
+                },
+                "h264_capability": dict(self._h264_capability),
+                "decoder_profile": self._decoder_profile,
+                "decoder_command": decoder_command(
+                    self.ffmpeg,
+                    ["-f", "h264", "-i", "pipe:0"],
+                    self._decoder_profile,
+                ),
+            }
+        )
+        return result
+
+    def packet_metadata(self) -> list[dict[str, Any]]:
+        with self._packet_lock:
+            return [dict(item) for item in self._packet_metadata]
+
+    def first_media_packet_after(self, timestamp: float) -> dict[str, Any] | None:
+        with self._packet_lock:
+            for packet in self._packet_metadata:
+                if (
+                    not packet["is_session"]
+                    and not packet["is_config"]
+                    and packet["received_monotonic_seconds"] >= timestamp
+                ):
+                    return dict(packet)
+        return None
+
+    def association_diagnostics(self) -> dict[str, Any]:
+        with self._association_lock:
+            pending = len(self._pending_media_packets)
+            associations = [dict(item) for item in self._frame_associations]
+            invariant_failures = list(self._association_invariant_failures)
+            max_pending_depth = self._max_pending_depth
+            decoded_frames_without_packet = self._decoded_frames_without_packet
+            overflow_count = self._association_overflow_count
+        decoder_errors = sum(
+            1
+            for line in self._decoder_stderr
+            if any(word in line.lower() for word in ("error", "corrupt", "invalid", "failed"))
+        )
+        return {
+            "has_b_frames": 0 if self._no_b_frames_verified else None,
+            "has_b_frames_verified": self._no_b_frames_verified,
+            "h264_capability": dict(self._h264_capability),
+            "max_pending_media_packets": self._max_pending_media_packets,
+            "pending_media_packets": pending,
+            "max_pending_depth": max_pending_depth,
+            "associated_frame_count": len(associations),
+            "unmatched_media_packets": pending,
+            "decoded_frames_without_packet": decoded_frames_without_packet,
+            "overflow_count": overflow_count,
+            "decode_errors": decoder_errors,
+            "invariant_failures": invariant_failures,
+            "history_bounded": True,
+            "frame_associations": associations,
+        }
+
+    def pending_media_snapshot(self) -> dict[str, Any]:
+        """Return bounded FIFO state without retaining media payloads."""
+
+        with self._association_lock:
+            pending = list(self._pending_media_packets)
+
+        def packet_summary(packet: dict[str, Any] | None) -> dict[str, Any] | None:
+            if packet is None:
+                return None
+            return {
+                "sequence_index": packet["sequence_index"],
+                "pts_us": packet["pts_us"],
+                "host_packet_complete_monotonic_seconds": packet["received_monotonic_seconds"],
+            }
+
+        return {
+            "pending_au_count": len(pending),
+            "oldest_pending_packet": packet_summary(pending[0] if pending else None),
+            "newest_pending_packet": packet_summary(pending[-1] if pending else None),
+            "max_pending_depth": self._max_pending_depth,
+            "unmatched_frames": self._decoded_frames_without_packet,
+            "unmatched_packets": len(pending),
+            "overflow": self._association_overflow_count,
+        }
+
+    def wait_for_quiescent(
+        self,
+        *,
+        quiet_interval_seconds: float = FRAMED_QUIESCENT_INTERVAL_SECONDS,
+        timeout_seconds: float = FRAMED_QUIESCENT_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Require no new packet or decoded frame for a bounded quiet window."""
+
+        if quiet_interval_seconds <= 0 or timeout_seconds < quiet_interval_seconds:
+            raise ValueError("quiescent timeout must be at least the positive quiet interval")
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        with self._packet_lock:
+            packet_count_at_start = self._packet_total_count
+        packet_count_at_call = packet_count_at_start
+        initial_frame_count = self._frame_index
+        frame_count_at_call = initial_frame_count
+        with self._association_lock:
+            pending_media_packets_at_call = len(self._pending_media_packets)
+        last_change = started
+        final_packet_count = packet_count_at_start
+        final_frame_count = initial_frame_count
+        while True:
+            now = time.monotonic()
+            with self._packet_lock:
+                final_packet_count = self._packet_total_count
+            final_frame_count = self._frame_index
+            with self._association_lock:
+                pending_media_packets = len(self._pending_media_packets)
+            if final_packet_count != packet_count_at_start or final_frame_count != initial_frame_count:
+                packet_count_at_start = final_packet_count
+                initial_frame_count = final_frame_count
+                last_change = now
+            if now - last_change >= quiet_interval_seconds and pending_media_packets == 0:
+                return {
+                    "quiescent": True,
+                    "quiet_interval_seconds": quiet_interval_seconds,
+                    "timeout_seconds": timeout_seconds,
+                    "waited_seconds": now - started,
+                    "packet_count_at_start": packet_count_at_call,
+                    "packet_count_at_end": final_packet_count,
+                    "frame_count_at_start": frame_count_at_call,
+                    "frame_count_at_end": final_frame_count,
+                    "pending_media_packets_at_start": pending_media_packets_at_call,
+                    "pending_media_packets_at_end": pending_media_packets,
+                    "last_media_packet_monotonic_seconds": self._last_media_packet_monotonic_seconds,
+                    "last_decoded_monotonic_seconds": self._last_decoded_monotonic_seconds,
+                }
+            if now >= deadline:
+                return {
+                    "quiescent": False,
+                    "quiet_interval_seconds": quiet_interval_seconds,
+                    "timeout_seconds": timeout_seconds,
+                    "waited_seconds": now - started,
+                    "packet_count_at_start": packet_count_at_call,
+                    "packet_count_at_end": final_packet_count,
+                    "frame_count_at_start": frame_count_at_call,
+                    "frame_count_at_end": final_frame_count,
+                    "pending_media_packets_at_start": pending_media_packets_at_call,
+                    "pending_media_packets_at_end": pending_media_packets,
+                    "last_media_packet_monotonic_seconds": self._last_media_packet_monotonic_seconds,
+                    "last_decoded_monotonic_seconds": self._last_decoded_monotonic_seconds,
+                }
+            time.sleep(min(0.005, deadline - now))
+
+    def stats(self) -> dict[str, Any]:
+        result = super().stats()
+        packets = self.packet_metadata()
+        result["framed_video"] = {
+            "packet_count": self._packet_total_count,
+            "config_packet_count": sum(1 for packet in packets if packet["is_config"]),
+            "media_packet_count": sum(1 for packet in packets if not packet["is_config"] and not packet["is_session"]),
+            "key_frame_count": sum(1 for packet in packets if packet["is_key_frame"]),
+            "metadata_history_bounded": True,
+            "max_payload_size_bytes": self._framed_parser.max_payload_size,
+            "buffered_bytes_at_stop": self._framed_parser.buffered_bytes,
+            "framing_error": self._framing_error,
+            "last_media_packet_monotonic_seconds": self._last_media_packet_monotonic_seconds,
+            "last_decoded_monotonic_seconds": self._last_decoded_monotonic_seconds,
+            "packets": packets,
+        }
+        result["frame_association"] = self.association_diagnostics()
+        return result
+
+    def _record_packet(self, packet: Any) -> None:
+        metadata = packet.metadata()
+        with self._packet_lock:
+            self._packet_metadata.append(metadata)
+            self._packet_total_count += 1
+        if not packet.is_session and not packet.is_config:
+            self._last_media_packet_monotonic_seconds = packet.received_monotonic_seconds
+
+    def _record_media_packet_for_decoder(self, metadata: dict[str, Any]) -> bool:
+        """Enqueue exactly one media AU after its payload was written to FFmpeg."""
+
+        with self._association_lock:
+            if len(self._pending_media_packets) >= self._max_pending_media_packets:
+                self._association_overflow_count += 1
+                self._association_invariant_failures.append(
+                    "pending media packet FIFO overflow"
+                )
+                return False
+            self._pending_media_packets.append(dict(metadata))
+            self._max_pending_depth = max(self._max_pending_depth, len(self._pending_media_packets))
+        return True
+
+    def _associate_decoded_frame(self, frame_index: int, timestamp: float) -> dict[str, Any] | None:
+        with self._association_lock:
+            if not self._pending_media_packets:
+                self._decoded_frames_without_packet += 1
+                self._association_invariant_failures.append(
+                    f"decoded frame {frame_index} has no pending media packet"
+                )
+                return None
+            packet = self._pending_media_packets.popleft()
+            association = {
+                "packet_sequence_index": packet["sequence_index"],
+                "scrcpy_pts_us": packet["pts_us"],
+                "host_packet_complete_monotonic_seconds": packet["received_monotonic_seconds"],
+                "decoded_frame_index": frame_index,
+                "decode_complete_monotonic_seconds": timestamp,
+            }
+            self._frame_associations.append(association)
+            return association
+
+    def _dispatch_framed_packet(self, packet: Any) -> bool | None:
+        """Merge one v4.1 packet and write only media AUs to the decoder.
+
+        ``False`` means CONFIG was retained without a decoder write or FIFO
+        entry. ``True`` means one media AU was queued and written. ``None``
+        means the bounded association FIFO rejected the media AU.
+        """
+
+        decoder_payload = self._packet_merger.merge(packet)
+        if decoder_payload is None:
+            return False
+        if self._decoder is None or self._decoder.stdin is None:
+            raise RealtimeError("decoder_stdin_unavailable")
+        if not self._record_media_packet_for_decoder(packet.metadata()):
+            return None
+        self._decoder.stdin.write(decoder_payload)
+        self._decoder.stdin.flush()
+        return True
+
+    def _relay(self) -> None:
+        assert self._connection is not None
+        assert self._decoder is not None
+        try:
+            while not self._stop.is_set():
+                try:
+                    chunk = self._connection.recv(1024 * 1024)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    try:
+                        self._framed_parser.finish()
+                    except FramedVideoParseError as exc:
+                        self._framing_error = str(exc)
+                    self._disconnect.mark("eof")
+                    self._stop.set()
+                    return
+                packets = self._framed_parser.feed(chunk, received_monotonic_seconds=time.monotonic())
+                for packet in packets:
+                    self._record_packet(packet)
+                    if packet.is_session:
+                        continue
+                    if self._decoder.stdin is None:
+                        self._disconnect.mark("decoder_stdin_unavailable")
+                        self._stop.set()
+                        return
+                    try:
+                        dispatched = self._dispatch_framed_packet(packet)
+                    except (OSError, BrokenPipeError, ValueError, RealtimeError) as exc:
+                        with self._association_lock:
+                            if not self._stop.is_set():
+                                self._association_invariant_failures.append(
+                                    f"media packet write failed: {type(exc).__name__}"
+                                )
+                        if not self._stop.is_set():
+                            self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
+                        self._stop.set()
+                        return
+                    if dispatched is False:
+                        continue
+                    if dispatched is None:
+                        self._disconnect.mark("packet_frame_association_overflow")
+                        self._stop.set()
+                        return
+        except FramedVideoParseError as exc:
+            self._framing_error = str(exc)
+            if not self._stop.is_set():
+                self._disconnect.mark("framing_error")
+                self._stop.set()
+        except (OSError, BrokenPipeError, ValueError) as exc:
+            if not self._stop.is_set():
+                self._disconnect.mark(f"error:{type(exc).__name__}")
+                self._stop.set()
+        finally:
+            if self._decoder.stdin is not None:
+                try:
+                    self._decoder.stdin.close()
+                except (OSError, ValueError):
+                    pass
+
+    def _produce(self) -> None:
+        assert self._decoder is not None
+        assert self._decoder.stdout is not None
+        assert self._width is not None and self._height is not None
+        frame_size = self._width * self._height
+        buffer = bytearray()
+        while not self._stop.is_set():
+            frame, complete = _read_exact_fd(
+                self._decoder.stdout.fileno(),
+                frame_size,
+                time.monotonic() + 0.25,
+                buffer,
+            )
+            if frame is None:
+                if self._decoder.poll() is not None and not self._stop.is_set():
+                    self._disconnect.mark("decoder_exit")
+                    self._stop.set()
+                continue
+            if not complete:
+                continue
+            timestamp = time.monotonic()
+            self._last_decoded_monotonic_seconds = timestamp
+            packet_association = self._associate_decoded_frame(self._frame_index, timestamp)
+            if packet_association is None:
+                self._disconnect.mark("decoded_frame_without_packet")
+                self._stop.set()
+                continue
+            decoded = DecodedFrame(
+                frame_index=self._frame_index,
+                host_receive_decode_monotonic_seconds=timestamp,
+                width=self._width,
+                height=self._height,
+                pixel_format="gray",
+                pixels=frame,
+                packet_association=packet_association,
+            )
+            self._frame_index += 1
+            self.buffer.put(decoded)
+            with self._timestamps_lock:
+                self._timestamps.append(timestamp)
+
+
 @dataclass(frozen=True)
 class Swipe:
     x1: int
@@ -630,6 +1139,13 @@ class Swipe:
             "y2": self.y2,
             "duration_ms": self.duration_ms,
         }
+
+
+FRAMED_CALIBRATION_TARGETS = (
+    Swipe(360, 1000, 360, 1000, 450),
+    Swipe(720, 1000, 720, 1000, 450),
+    Swipe(540, 1500, 540, 1500, 450),
+)
 
 
 def calibration_gesture_consistency(
@@ -1325,12 +1841,28 @@ def run_calibration(
     baseline_timeout_seconds: float = 2.0,
     visualization_mode: str = "show_touches",
     control_transport: str = "adb",
+    video_path: str = "raw_h264",
+    framed_h264_capability: dict[str, Any] | None = None,
+    decoder_profile: str = "baseline_current",
+    calibration_targets: tuple[Swipe, ...] | None = None,
+    quiescent_interval_seconds: float = FRAMED_QUIESCENT_INTERVAL_SECONDS,
+    quiescent_timeout_seconds: float = FRAMED_QUIESCENT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     if control_transport not in {"adb", "scrcpy_v4_1"}:
         raise ValueError(f"unsupported control transport: {control_transport}")
+    if video_path not in {"raw_h264", "framed_h264"}:
+        raise ValueError(f"unsupported video path: {video_path}")
+    if video_path == "framed_h264" and control_transport != "scrcpy_v4_1":
+        raise ValueError("framed_h264 diagnostic path requires control_transport=scrcpy_v4_1")
+    if video_path == "framed_h264" and not (framed_h264_capability or {}).get("verified"):
+        raise ValueError(
+            "framed_h264 diagnostic path requires an ffprobe-verified has_b_frames=0 capability sample"
+        )
+    if decoder_profile not in DECODER_PROFILES:
+        raise ValueError(f"unsupported decoder profile: {decoder_profile}")
     settings = TouchVisualizationSettings(adb, visualization_mode=visualization_mode)
     controller: Any | None = None
-    source: RawH264FrameSource | None = None
+    source: Any | None = None
     trials_report: list[dict[str, Any]] = []
     setup: dict[str, Any] = {"status": "not_started"}
     source_started: float | None = None
@@ -1338,10 +1870,29 @@ def run_calibration(
     coordinate_transform: DisplayCoordinateTransform | None = None
     display_report: dict[str, Any] | None = None
     calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 450)
+    target_sequence = (
+        tuple(calibration_targets or FRAMED_CALIBRATION_TARGETS)
+        if video_path == "framed_h264"
+        else (calibration_input_swipe,)
+    )
+    if video_path == "framed_h264" and len(target_sequence) < 3:
+        raise ValueError("framed_h264 causal calibration requires at least three targets")
+    if any(target.duration_ms != 450 or target.x1 != target.x2 or target.y1 != target.y2 for target in target_sequence):
+        raise ValueError("framed_h264 causal calibration targets must be 450 ms stationary presses")
     status = "INCONCLUSIVE"
     try:
         setup = settings.enable()
-        source = RawH264FrameSource(adb, ffmpeg, server_path, buffer_capacity=1)
+        source_class = FramedH264FrameSource if video_path == "framed_h264" else RawH264FrameSource
+        source_kwargs: dict[str, Any] = {"buffer_capacity": 1}
+        if video_path == "framed_h264":
+            source_kwargs.update(
+                {
+                    "no_b_frames_verified": True,
+                    "h264_capability": framed_h264_capability,
+                    "decoder_profile": decoder_profile,
+                }
+            )
+        source = source_class(adb, ffmpeg, server_path, **source_kwargs)
         if control_transport == "scrcpy_v4_1":
             source.start(control=True)
         else:
@@ -1349,6 +1900,9 @@ def run_calibration(
             source.start()
         source_started = time.monotonic()
         setup["status"] = "ready"
+        setup["video_path"] = video_path
+        if video_path == "framed_h264":
+            setup["framed_video"] = framed_video_contract()
         first_frame = source.latest_frame(timeout_seconds=5.0)
         if first_frame is None:
             raise RealtimeError("calibration source produced no decoded baseline frame")
@@ -1358,9 +1912,13 @@ def run_calibration(
             first_frame.height,
         )
         setup["display_coordinates"] = display_report
-        mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
+        mapped_target_sequence = tuple(coordinate_transform.map_swipe(target) for target in target_sequence)
+        mapped_calibration_swipe = mapped_target_sequence[0]
         setup["input_swipe"] = calibration_input_swipe.as_dict()
         setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
+        setup["calibration_target_sequence"] = [target.as_dict() for target in target_sequence]
+        setup["mapped_calibration_target_sequence"] = [target.as_dict() for target in mapped_target_sequence]
+        setup["decoder_profile"] = decoder_profile
         if control_transport == "scrcpy_v4_1":
             from .scrcpy_control import ScrcpyControlGestureController
 
@@ -1374,10 +1932,12 @@ def run_calibration(
         else:
             controller = AdbGestureController(adb)
             setup["control_transport"] = {"transport": "adb"}
+        warmup_input_swipe = target_sequence[-1] if video_path == "framed_h264" else calibration_input_swipe
+        warmup_mapped_swipe = mapped_target_sequence[-1] if video_path == "framed_h264" else mapped_calibration_swipe
         detector = (
-            PointerLocationDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
+            PointerLocationDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
             if visualization_mode == "pointer_location"
-            else TouchResponseDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
+            else TouchResponseDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
         )
 
         # VFR-aware setup: one decoded baseline frame, one unmeasured warm-up
@@ -1386,7 +1946,7 @@ def run_calibration(
         warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
             controller,
             source,
-            calibration_input_swipe,
+            warmup_input_swipe,
             initial_frame_index=first_frame.frame_index,
             response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
             label="warmup",
@@ -1500,8 +2060,33 @@ def run_calibration(
         baseline_frame = post_warmup_frame
         for trial_index in range(1, trials + 1):
             time.sleep(spacing_seconds)
+            target_index = (trial_index - 1) % len(target_sequence)
+            previous_target_index = (target_index - 1) % len(target_sequence)
+            current_input_swipe = target_sequence[target_index]
+            previous_input_swipe = (
+                warmup_input_swipe if trial_index == 1 else target_sequence[previous_target_index]
+            )
+            current_mapped_swipe = mapped_target_sequence[target_index]
+            previous_mapped_swipe = (
+                warmup_mapped_swipe if trial_index == 1 else mapped_target_sequence[previous_target_index]
+            )
+            current_detector = (
+                PointerLocationDetector(first_frame.width, first_frame.height, current_mapped_swipe)
+                if visualization_mode == "pointer_location"
+                else TouchResponseDetector(first_frame.width, first_frame.height, current_mapped_swipe)
+            )
+            previous_detector = (
+                PointerLocationDetector(first_frame.width, first_frame.height, previous_mapped_swipe)
+                if visualization_mode == "pointer_location"
+                else TouchResponseDetector(first_frame.width, first_frame.height, previous_mapped_swipe)
+            )
             trial: dict[str, Any] = {
                 "trial": trial_index,
+                "target_index": target_index,
+                "current_target": current_input_swipe.as_dict(),
+                "previous_target": previous_input_swipe.as_dict(),
+                "mapped_current_target": current_mapped_swipe.as_dict(),
+                "mapped_previous_target": previous_mapped_swipe.as_dict(),
                 "valid": False,
                 "structurally_valid": False,
                 "detection_succeeded": False,
@@ -1511,10 +2096,18 @@ def run_calibration(
             }
             baseline = dict(shared_baseline)
             baseline["pixels"] = baseline_frame.pixels
+            quiescent_baseline: dict[str, Any] | None = None
+            if video_path == "framed_h264":
+                trial["fifo_at_dispatch"] = source.pending_media_snapshot()
+                quiescent_baseline = source.wait_for_quiescent(
+                    quiet_interval_seconds=quiescent_interval_seconds,
+                    timeout_seconds=quiescent_timeout_seconds,
+                )
+                trial["quiescent_baseline"] = quiescent_baseline
             gesture, trial_frames, started, capture = _dispatch_capture_window(
                 controller,
                 source,
-                calibration_input_swipe,
+                current_input_swipe,
                 initial_frame_index=baseline_frame.frame_index,
                 response_timeout_seconds=response_timeout_seconds,
                 label=f"trial-{trial_index}",
@@ -1522,19 +2115,25 @@ def run_calibration(
             response_frame: DecodedFrame | None = None
             response_score: dict[str, Any] | None = None
             frame_diagnostics: list[dict[str, Any]] = []
+            stale_previous_target_frame_indices: list[int] = []
             for frame in trial_frames:
-                score = detector.score(baseline, frame.pixels)
+                current_score = current_detector.score(baseline, frame.pixels)
+                previous_score = previous_detector.score(baseline, frame.pixels)
+                previous_detected = bool(previous_score.get("crosshair_detected"))
+                if previous_detected:
+                    stale_previous_target_frame_indices.append(frame.frame_index)
                 frame_diagnostics.append(
                     {
                         "frame_index": frame.frame_index,
                         "timestamp": frame.host_receive_decode_monotonic_seconds,
-                        "score": score,
+                        "current_target_score": current_score,
+                        "previous_target_score": previous_score,
+                        "stale_previous_target": previous_detected,
                     }
                 )
-                if _calibration_marker_on(score, visualization_mode):
+                if response_frame is None and _calibration_marker_on(current_score, visualization_mode):
                     response_frame = frame
-                    response_score = score
-                    break
+                    response_score = current_score
             completion = gesture.get("host_completion_monotonic_seconds")
             post_completion_frames = [
                 frame
@@ -1545,7 +2144,7 @@ def run_calibration(
             marker_off_frame: DecodedFrame | None = None
             marker_off_score: dict[str, Any] | None = None
             for candidate in post_completion_frames:
-                candidate_score = detector.score(baseline, candidate.pixels)
+                candidate_score = current_detector.score(baseline, candidate.pixels)
                 if _calibration_pointer_up(candidate_score, visualization_mode):
                     marker_off_frame = candidate
                     marker_off_score = candidate_score
@@ -1554,7 +2153,9 @@ def run_calibration(
                 _roi_difference_summary(
                     baseline_frame.pixels,
                     marker_off_frame.pixels,
-                    comparison_indices,
+                    current_detector.background_indices
+                    if visualization_mode == "pointer_location"
+                    else current_detector.indices,
                 )
                 if marker_off_frame is not None
                 else None
@@ -1571,10 +2172,10 @@ def run_calibration(
                 and _static_baseline_matches(marker_off_difference)
             )
             consistency = calibration_gesture_consistency(
-                calibration_input_swipe,
+                current_input_swipe,
                 gesture.get("parameters"),
-                mapped_calibration_swipe,
-                detector.swipe,
+                current_mapped_swipe,
+                current_detector.swipe,
             )
             trial.update(
                 {
@@ -1583,10 +2184,10 @@ def run_calibration(
                     "command_completion_monotonic_seconds": completion,
                     "baseline_frame_index": baseline_frame.frame_index,
                     "baseline_frame_indices_for_temporal_noise": setup["shared_no_touch_baseline"]["frame_indices"],
-                    "input_swipe": calibration_input_swipe.as_dict(),
-                    "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
+                    "input_swipe": current_input_swipe.as_dict(),
+                    "mapped_frame_swipe": current_mapped_swipe.as_dict(),
                     "gesture_consistency": consistency,
-                    "threshold_rule": detector.threshold_rule,
+                    "threshold_rule": current_detector.threshold_rule,
                     "temporal_noise_frame_count": setup["shared_no_touch_baseline"].get("temporal_noise_frame_count"),
                     "temporal_noise_sample_count": setup["shared_no_touch_baseline"].get("temporal_noise_sample_count"),
                     "temporal_noise_median_abs_delta": setup["shared_no_touch_baseline"].get("temporal_noise_median_abs_delta"),
@@ -1609,12 +2210,80 @@ def run_calibration(
                     "background_stable": background_stable,
                     "marker_off_recovered": marker_off_recovered,
                     "frame_diagnostics": frame_diagnostics,
+                    "stale_previous_target": bool(stale_previous_target_frame_indices),
+                    "stale_previous_target_frame_indices": stale_previous_target_frame_indices,
+                    "stale_previous_target_detection_count": len(stale_previous_target_frame_indices),
                 }
             )
-            if not consistency["consistent"]:
+            decomposition: dict[str, Any] | None = None
+            first_post_t0_packet_diagnostic: dict[str, Any] | None = None
+            relevant_packet_timing: dict[str, Any] | None = None
+            association_diagnostics: dict[str, Any] | None = None
+            fifo_at_response: dict[str, Any] | None = None
+            if video_path == "framed_h264" and started is not None:
+                first_post_t0_packet_diagnostic = source.first_media_packet_after(started)
+                fifo_at_response = source.pending_media_snapshot()
+                relevant_packet_timing = (
+                    dict(response_frame.packet_association)
+                    if response_frame is not None and response_frame.packet_association is not None
+                    else None
+                )
+                association_diagnostics = source.association_diagnostics()
+                if relevant_packet_timing is not None and response_frame is not None:
+                    relevant_packet_timestamp = relevant_packet_timing["host_packet_complete_monotonic_seconds"]
+                    if relevant_packet_timestamp < started:
+                        trial["invalid_reason"] = (
+                            "current-target associated packet T1 precedes current trial T0"
+                        )
+                    else:
+                        try:
+                            decomposition = decompose_visible_latency(
+                                started,
+                                relevant_packet_timestamp,
+                                response_frame.host_receive_decode_monotonic_seconds,
+                            )
+                        except ValueError as exc:
+                            trial["invalid_reason"] = str(exc)
+            trial.update(
+                {
+                    "t0_action_down_write_monotonic_seconds": started,
+                    "t1_relevant_packet_complete_monotonic_seconds": (
+                        relevant_packet_timing["host_packet_complete_monotonic_seconds"]
+                        if relevant_packet_timing
+                        else None
+                    ),
+                    "t2_crosshair_decode_complete_monotonic_seconds": (
+                        response_frame.host_receive_decode_monotonic_seconds if response_frame else None
+                    ),
+                    "relevant_packet_association": relevant_packet_timing,
+                    "first_post_t0_media_packet_diagnostic": first_post_t0_packet_diagnostic,
+                    "fifo_at_response": fifo_at_response,
+                    "frame_association_diagnostics": association_diagnostics,
+                    "decomposition": decomposition,
+                }
+            )
+            if trial.get("invalid_reason"):
+                pass
+            elif video_path == "framed_h264" and not (quiescent_baseline or {}).get("quiescent"):
+                trial["invalid_reason"] = "quiescent baseline was not reached before dispatch"
+            elif not consistency["consistent"]:
                 trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
             elif not gesture.get("success") or started is None:
                 trial["invalid_reason"] = gesture.get("failure") or "gesture dispatch failed"
+            elif video_path == "framed_h264" and response_frame is None:
+                trial["invalid_reason"] = "current target crosshair was not detected"
+            elif (
+                video_path == "framed_h264"
+                and response_frame is not None
+                and relevant_packet_timing is None
+            ):
+                trial["invalid_reason"] = "crosshair frame had no associated media packet"
+            elif (
+                video_path == "framed_h264"
+                and association_diagnostics
+                and association_diagnostics.get("invariant_failures")
+            ):
+                trial["invalid_reason"] = "packet/frame association invariant failed"
             elif not marker_off_recovered:
                 trial["invalid_reason"] = "marker-off baseline was not recovered after command completion"
             else:
@@ -1630,6 +2299,11 @@ def run_calibration(
                 baseline_frame = marker_off_frame
                 trial["state_trace"].append("marker_on_detected" if response_frame else "marker_on_not_detected")
                 trial["state_trace"].append("marker_off_baseline_next")
+            if video_path == "framed_h264" and marker_off_recovered and marker_off_frame is not None:
+                # The next trial uses the recovered pointer-up frame even when
+                # the current trial was invalid for a pre-dispatch quiescence
+                # or decomposition reason.
+                baseline_frame = marker_off_frame
             trials_report.append(trial)
         status = "completed"
     except (AdbError, RealtimeError) as exc:
@@ -1654,6 +2328,16 @@ def run_calibration(
         restoration = settings.restore()
     valid = [trial for trial in trials_report if trial.get("structurally_valid")]
     detected = [trial for trial in valid if trial.get("detection_succeeded")]
+    current_target_detected = [
+        trial
+        for trial in trials_report
+        if (
+            (trial.get("detection_score") or {}).get("crosshair_detected")
+            if visualization_mode == "pointer_location"
+            else (trial.get("detection_score") or {}).get("detected")
+        )
+    ]
+    stale_previous_target_trials = [trial for trial in trials_report if trial.get("stale_previous_target")]
     trial_gestures = [trial.get("gesture", {}) for trial in trials_report]
     successful_trial_gestures = [gesture for gesture in trial_gestures if gesture.get("success")]
     latency_samples_ms = [float(trial["dispatch_start_to_first_visible_response_ms"]) for trial in detected]
@@ -1668,6 +2352,27 @@ def run_calibration(
         if latency_evaluable
         else _inconclusive_latency_summary()
     )
+    decomposition_trials = [
+        trial for trial in valid if trial.get("decomposition")
+    ]
+    decomposition_statistics: dict[str, Any] = {
+        "video_path": video_path,
+        "quiescent_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
+        "quiescent_timeout_seconds": quiescent_timeout_seconds if video_path == "framed_h264" else None,
+        "structurally_valid_decomposition_trials": len(decomposition_trials),
+        "raw_samples": {
+            "upstream_to_relevant_packet_ms": [
+                trial["decomposition"]["upstream_to_relevant_packet_ms"] for trial in decomposition_trials
+            ],
+            "relevant_packet_to_decode_ms": [
+                trial["decomposition"]["relevant_packet_to_decode_ms"] for trial in decomposition_trials
+            ],
+            "total_visible_ms": [trial["decomposition"]["total_visible_ms"] for trial in decomposition_trials],
+        },
+    }
+    for metric in ("upstream_to_relevant_packet_ms", "relevant_packet_to_decode_ms", "total_visible_ms"):
+        values = decomposition_statistics["raw_samples"][metric]
+        decomposition_statistics[metric] = summarize_latencies([value / 1000 for value in values]) if values else _inconclusive_latency_summary()
     return {
         "status": status,
         "configuration": {
@@ -1679,6 +2384,10 @@ def run_calibration(
             "calibration_swipe": calibration_input_swipe.as_dict(),
             "visualization_mode": visualization_mode,
             "control_transport": control_transport,
+            "video_path": video_path,
+            "decoder_profile": decoder_profile,
+            "calibration_target_sequence": [target.as_dict() for target in target_sequence],
+            "framed_h264_capability": framed_h264_capability if video_path == "framed_h264" else None,
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
             "calibration_state_machine": [
@@ -1688,6 +2397,14 @@ def run_calibration(
                 "marker_off_baseline_next",
             ],
             "pre_dispatch_new_frames_required": 0,
+            "quiescent_baseline": {
+                "required": video_path == "framed_h264",
+                "quiet_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
+                "timeout_seconds": quiescent_timeout_seconds if video_path == "framed_h264" else None,
+                "rule": "no new complete media packet or decoded frame during the bounded quiet interval"
+                if video_path == "framed_h264"
+                else None,
+            },
             "marker_on_rule": (
                 "crosshair_detected=true only"
                 if visualization_mode == "pointer_location"
@@ -1717,8 +2434,18 @@ def run_calibration(
         "statistics": {
             **latency_summary,
             "valid_trials": len(valid),
+            "causal_structurally_valid_trials": len(valid) if video_path == "framed_h264" else None,
             "detected_trials": len(detected),
             "detection_success_rate": detection_success_rate,
+            "current_target_detected_trials": len(current_target_detected),
+            "current_target_detection_rate": len(current_target_detected) / len(trials_report)
+            if trials_report
+            else 0.0,
+            "stale_previous_target_trials": len(stale_previous_target_trials),
+            "stale_previous_target_detections": sum(
+                int(trial.get("stale_previous_target_detection_count", 0) or 0)
+                for trial in trials_report
+            ),
             "structurally_valid_trials": len(valid),
             "trial_gestures_attempted": len(trial_gestures),
             "trial_gestures_dispatched": len(successful_trial_gestures),
@@ -1741,6 +2468,9 @@ def run_calibration(
             if latency_evaluable
             else "requires >=30 valid trials and >=95% automatic detection",
             "raw_detected_latency_samples_ms": latency_samples_ms,
+            "video_decomposition": decomposition_statistics,
+            "decoder_profile": decoder_profile,
+            "calibration_target_sequence": [target.as_dict() for target in target_sequence],
         },
         "coordinate_mapping": display_report,
         "source_diagnostics": source_diagnostics,

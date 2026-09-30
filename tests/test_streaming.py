@@ -10,12 +10,41 @@ from smashbot_diagnostics.streaming import (
     _stream_disconnect_count,
     _v4l2_capability,
     build_scrcpy_command,
+    decoder_command,
     evaluate_gate,
     profile_dict,
 )
 
 
 class StreamingTests(unittest.TestCase):
+    def test_decoder_profiles_change_only_the_low_delay_flag(self):
+        input_args = ["-f", "h264", "-i", "pipe:0"]
+        baseline = decoder_command("ffmpeg", input_args, "baseline_current")
+        low_delay = decoder_command("ffmpeg", input_args, "scrcpy_low_delay")
+
+        self.assertEqual(
+            baseline,
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "info", "-probesize", "1M",
+                "-analyzeduration", "100000", "-f", "h264", "-i", "pipe:0",
+                "-an", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+            ],
+        )
+        self.assertEqual(
+            low_delay,
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "info", "-probesize", "1M",
+                "-analyzeduration", "100000", "-flags", "low_delay", "-f", "h264",
+                "-i", "pipe:0", "-an", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+            ],
+        )
+
+        fps_passthrough = decoder_command("ffmpeg", input_args, "fps_passthrough")
+        expected_fps = list(baseline)
+        output_index = expected_fps.index("-f", expected_fps.index("-an") + 1)
+        expected_fps[output_index:output_index] = ["-fps_mode", "passthrough"]
+        self.assertEqual(fps_passthrough, expected_fps)
+
     def test_baseline_command_has_required_low_latency_profile(self):
         command = build_scrcpy_command("scrcpy", "DEVICE", BASELINE_PROFILE, 60)
         self.assertIn("--no-audio", command)

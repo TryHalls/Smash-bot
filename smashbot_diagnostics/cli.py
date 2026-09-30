@@ -12,8 +12,10 @@ from typing import Any, Callable
 from . import __version__
 from .adb import AdbClient, AdbError, AdbUnavailable
 from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, swipe_parameters, utc_now
+from .framed_video import verify_h264_no_b_frames
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
+    DECODER_PROFILES,
     Swipe,
     evaluate_realtime_gate,
     run_calibration,
@@ -141,6 +143,23 @@ def build_parser() -> argparse.ArgumentParser:
         default="show_touches",
         help="Android calibration overlay; pointer_location is the explicit diagnostic spike",
     )
+    realtime.add_argument(
+        "--video-path",
+        choices=("raw_h264", "framed_h264"),
+        default="raw_h264",
+        help="diagnostic video path; framed_h264 enables the Task 005 v4.1 packet-timing path",
+    )
+    realtime.add_argument(
+        "--h264-capability-sample",
+        type=Path,
+        help="short real-device H.264 sample for the required ffprobe has_b_frames=0 check",
+    )
+    realtime.add_argument(
+        "--decoder-profile",
+        choices=DECODER_PROFILES,
+        default="baseline_current",
+        help="diagnostic FFmpeg decoder profile; changes only the pinned low-delay flag",
+    )
     realtime.add_argument("--x1", type=_nonnegative_int, default=160)
     realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
     realtime.add_argument("--x2", type=_nonnegative_int, default=700)
@@ -190,6 +209,7 @@ def _add_swipe_options(parser: argparse.ArgumentParser) -> None:
 def _add_stream_tool_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scrcpy", default="scrcpy", help="official scrcpy v4.1 executable or path")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable or path")
+    parser.add_argument("--ffprobe", default=None, help="ffprobe executable or path for framed-video capability checks")
 
 
 def _host_report() -> dict[str, Any]:
@@ -723,6 +743,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
     output_base = args.output_base
     if args.control_transport == "scrcpy_v4_1" and output_base == Path("artifacts/realtime"):
         output_base = Path("artifacts/task004")
+    if args.video_path == "framed_h264" and output_base == Path("artifacts/realtime"):
+        output_base = Path("artifacts/task005")
     run_dir = new_run_directory(output_base)
     capability = capability_report(adb, args.scrcpy, args.ffmpeg)
     selected_serial = capability.get("adb", {}).get("selected_serial")
@@ -748,6 +770,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_timeout_seconds": args.calibration_timeout_seconds,
             "calibration_visualization": args.calibration_visualization,
             "control_transport": args.control_transport,
+            "video_path": args.video_path,
+            "decoder_profile": args.decoder_profile,
             "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
             "calibration_swipe": Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
@@ -805,6 +829,51 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         print(f"Summary: {run_dir / 'summary.txt'}")
         return 2
 
+    framed_h264_capability: dict[str, Any] | None = None
+    if args.video_path == "framed_h264":
+        ffprobe_path = args.ffprobe or str(Path(ffmpeg_path).with_name("ffprobe"))
+        if not args.h264_capability_sample:
+            report.update(
+                {
+                    "status": "INCONCLUSIVE",
+                    "failure_evidence": {
+                        "reason": "framed_h264 requires a short real-device ffprobe capability sample",
+                        "control_transport": args.control_transport,
+                        "fallback_attempted": False,
+                    },
+                    "calibration": {"status": "not_run"},
+                    "concurrent": {"status": "not_run"},
+                    "freshness": {"status": "not_run"},
+                    "gate": {"status": "INCONCLUSIVE", "criteria": {}},
+                }
+            )
+            _write_realtime_report(run_dir, report)
+            print(f"Report: {run_dir / 'report.json'}")
+            print(f"Summary: {run_dir / 'summary.txt'}")
+            return 2
+        framed_h264_capability = verify_h264_no_b_frames(ffprobe_path, args.h264_capability_sample)
+        report["configuration"]["h264_capability"] = framed_h264_capability
+        if not framed_h264_capability.get("verified"):
+            report.update(
+                {
+                    "status": "INCONCLUSIVE",
+                    "failure_evidence": {
+                        "reason": "could not verify has_b_frames=0; framed packet/frame FIFO not started",
+                        "h264_capability": framed_h264_capability,
+                        "control_transport": args.control_transport,
+                        "fallback_attempted": False,
+                    },
+                    "calibration": {"status": "not_run"},
+                    "concurrent": {"status": "not_run"},
+                    "freshness": {"status": "not_run"},
+                    "gate": {"status": "INCONCLUSIVE", "criteria": {}},
+                }
+            )
+            _write_realtime_report(run_dir, report)
+            print(f"Report: {run_dir / 'report.json'}")
+            print(f"Summary: {run_dir / 'summary.txt'}")
+            return 2
+
     stress_swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
     calibration_swipe = Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450)
     # Static calibration is intentionally completed before the human changes the
@@ -820,6 +889,9 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         calibration_swipe=calibration_swipe,
         visualization_mode=args.calibration_visualization,
         control_transport=args.control_transport,
+        video_path=args.video_path,
+        framed_h264_capability=framed_h264_capability,
+        decoder_profile=args.decoder_profile,
     )
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
@@ -976,17 +1048,20 @@ def _write_realtime_report(run_dir: Path, report: dict[str, Any]) -> None:
 
 
 def _realtime_summary(report: dict[str, Any]) -> list[str]:
+    calibration_report = report.get("calibration", {})
+    report_video_path = report.get("configuration", {}).get("video_path") or calibration_report.get("configuration", {}).get("video_path", "raw_h264")
     control_transport = (
         report.get("configuration", {}).get("control_transport")
         or report.get("calibration", {}).get("configuration", {}).get("control_transport")
         or "adb"
     )
     lines = [
-        "SMASH Bot Task 003/004 real-time observe→act benchmark",
+        "SMASH Bot Task 005 framed-video latency decomposition" if report_video_path == "framed_h264" else "SMASH Bot Task 003/004 real-time observe→act benchmark",
         f"Status: {report.get('status', 'unknown')}",
         f"Device: {_value(report.get('capability', {}).get('adb'), 'selected_serial')}",
         f"Transport: {_value(report.get('capability', {}).get('adb'), 'transport')}",
         f"Control transport: {control_transport}; fallback_attempted={report.get('fallback_attempted', False)}",
+        f"Video path: {report_video_path}",
         f"Moving source confirmed: {_value(report.get('moving_source_confirmation'), 'confirmed')}",
         f"Queue capacity: {_value(report.get('source_contract'), 'queue_capacity')}",
         f"Concurrent: {_value(report.get('concurrent'), 'status')}",
@@ -1009,7 +1084,6 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"attempted={gestures.get('attempted')}; failures={gestures.get('failure_count')}; "
             f"median dispatch={gestures.get('median_latency_ms')} ms; p95={gestures.get('p95_latency_ms')} ms"
         )
-    calibration_report = report.get("calibration", {})
     calibration = calibration_report.get("statistics", {})
     if calibration:
         lines.append(
@@ -1018,6 +1092,23 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"rate={calibration.get('detection_success_rate')}; evaluation={calibration.get('latency_evaluation')}; "
             f"median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
         )
+        if calibration.get("video_decomposition", {}).get("video_path") == "framed_h264":
+            lines.append(
+                "Causal targets: "
+                f"current={calibration.get('current_target_detected_trials')}/{calibration.get('trial_gestures_attempted')}; "
+                f"stale-previous={calibration.get('stale_previous_target_trials')}; "
+                f"causal-valid={calibration.get('causal_structurally_valid_trials')}; "
+                f"decoder={calibration.get('decoder_profile')}"
+            )
+        decomposition = calibration.get("video_decomposition", {})
+        if decomposition.get("video_path") == "framed_h264":
+            lines.append(
+                "T0/T1/T2 decomposition: "
+                f"valid={decomposition.get('structurally_valid_decomposition_trials')}; "
+                f"upstream→relevant-packet median={decomposition.get('upstream_to_relevant_packet_ms', {}).get('median_latency_ms')} ms; "
+                f"relevant-packet→decode median={decomposition.get('relevant_packet_to_decode_ms', {}).get('median_latency_ms')} ms; "
+                f"total median={decomposition.get('total_visible_ms', {}).get('median_latency_ms')} ms"
+            )
     if report.get("stage_a"):
         stage_a = report["stage_a"]
         lines.append(f"Stage A: {stage_a.get('status')}; criteria={stage_a.get('criteria')}")
