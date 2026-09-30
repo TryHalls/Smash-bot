@@ -399,6 +399,12 @@ def _stream_capability_summary(report: dict[str, Any]) -> list[str]:
     ] + (["Limitations:"] + [f"- {item['field']}: {item['error']}" for item in report.get("failures", [])] if report.get("failures") else [])
 
 
+def _v4l2_sink(capability: dict[str, Any], requested_sink: str | None) -> str | None:
+    if requested_sink:
+        return requested_sink
+    return (capability.get("v4l2loopback_devices") or [None])[0]
+
+
 def _stream_benchmark(args: argparse.Namespace) -> int:
     if not args.active_gameplay_confirmed:
         raise ValueError("stream-benchmark requires --active-gameplay-confirmed after SMASH is placed in an active moving match")
@@ -450,7 +456,7 @@ def _stream_benchmark(args: argparse.Namespace) -> int:
     initial_frame: dict[str, Any]
     server_info: dict[str, Any] | None = None
     if path == "v4l2":
-        sink = args.v4l2_sink or (v4l2.get("video_devices") or [None])[0]
+        sink = _v4l2_sink(v4l2, args.v4l2_sink)
         if not sink or not ffmpeg_path:
             initial_frame = {"status": "unavailable", "path": "v4l2", "reason": "V4L2 sink or FFmpeg unavailable"}
         else:
@@ -481,7 +487,7 @@ def _stream_benchmark(args: argparse.Namespace) -> int:
     fallback: dict[str, Any] = {"status": "not_run", "reason": "initial gate did not fail"}
     if initial_gate.get("status") == "FAIL":
         if path == "v4l2":
-            sink = args.v4l2_sink or (v4l2.get("video_devices") or [None])[0]
+            sink = _v4l2_sink(v4l2, args.v4l2_sink)
             if sink and ffmpeg_path:
                 fallback_frame = run_v4l2_frame_benchmark(adb, scrcpy_path, ffmpeg_path, sink, FALLBACK_PROFILE, args.duration_seconds)
             else:

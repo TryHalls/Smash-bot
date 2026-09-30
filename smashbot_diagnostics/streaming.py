@@ -52,6 +52,29 @@ BASELINE_PROFILE = VideoProfile("baseline_1920_60", max_size=1920, max_fps=60)
 FALLBACK_PROFILE = VideoProfile("controlled_fallback_1280_60_4Mbps", max_size=1280, max_fps=60, bitrate_bps=4_000_000)
 
 
+class DisconnectTracker:
+    """Record the first stream EOF/error with a monotonic timestamp."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.timestamp: float | None = None
+        self.reason: str | None = None
+        self._lock = threading.Lock()
+
+    def mark(self, reason: str, *, timestamp: float | None = None) -> None:
+        with self._lock:
+            if self.timestamp is None:
+                self.timestamp = time.monotonic() if timestamp is None else timestamp
+                self.reason = reason
+            self.event.set()
+
+
+def _stream_disconnect_count(tracker: DisconnectTracker | None, benchmark_deadline: float) -> int:
+    """Count only EOF/errors observed before intentional timed teardown."""
+
+    return int(tracker is not None and tracker.timestamp is not None and tracker.timestamp < benchmark_deadline)
+
+
 def profile_dict(profile: VideoProfile) -> dict[str, Any]:
     return {
         "name": profile.name,
@@ -110,8 +133,60 @@ def _first_line(value: str) -> str | None:
     return next((line.strip() for line in value.splitlines() if line.strip()), None)
 
 
-def _v4l2_capability() -> dict[str, Any]:
-    devices = sorted(str(path) for path in Path("/dev").glob("video*") if path.is_char_device() or path.exists())
+def _v4l2_device_evidence(device: Path, sysfs_root: Path = Path("/sys/class/video4linux")) -> dict[str, Any]:
+    """Return driver evidence for one video device without trusting its name."""
+
+    device_name = device.name
+    class_entry = sysfs_root / device_name
+    evidence: list[str] = []
+    name = None
+    for candidate in (class_entry / "name", class_entry / "device" / "name"):
+        try:
+            if candidate.is_file():
+                name = candidate.read_text(encoding="utf-8", errors="replace").strip() or None
+                if name:
+                    evidence.append(f"{candidate}={name}")
+                    break
+        except OSError:
+            continue
+
+    driver = class_entry / "device" / "driver"
+    driver_path = None
+    try:
+        if driver.exists() or driver.is_symlink():
+            driver_path = str(driver.resolve())
+            evidence.append(f"driver={driver_path}")
+    except OSError:
+        driver_path = None
+
+    for candidate in (class_entry / "uevent", class_entry / "device" / "uevent"):
+        try:
+            if candidate.is_file():
+                text = candidate.read_text(encoding="utf-8", errors="replace").strip()
+                if text:
+                    evidence.extend(f"{candidate}:{line}" for line in text.splitlines() if line.strip())
+        except OSError:
+            continue
+
+    evidence_text = " ".join([device_name, name or "", driver_path or "", *evidence]).lower()
+    return {
+        "path": str(device),
+        "sysfs_path": str(class_entry),
+        "name": name,
+        "driver": driver_path,
+        "evidence": evidence,
+        "v4l2loopback_backed": "v4l2loopback" in evidence_text,
+    }
+
+
+def _v4l2_capability(
+    *,
+    device_root: Path = Path("/dev"),
+    sysfs_root: Path = Path("/sys/class/video4linux"),
+) -> dict[str, Any]:
+    devices = sorted(path for path in device_root.glob("video*") if path.is_char_device() or path.exists())
+    device_details = [_v4l2_device_evidence(path, sysfs_root) for path in devices]
+    loopback_devices = [item["path"] for item in device_details if item["v4l2loopback_backed"]]
     loaded = False
     modules_path = Path("/proc/modules")
     if modules_path.exists():
@@ -126,14 +201,20 @@ def _v4l2_capability() -> dict[str, Any]:
         module_files = [str(path) for path in module_root.rglob("v4l2loopback.ko*")]
     return {
         "host_linux": platform.system() == "Linux",
-        "video_devices": devices,
+        "video_devices": [str(path) for path in devices],
+        "video_device_details": device_details,
+        "v4l2loopback_devices": loopback_devices,
         "v4l2_device_exists": bool(devices),
         "v4l2loopback_loaded": loaded,
         "modprobe_path": modprobe,
         "v4l2loopback_module_probe": module_probe,
         "v4l2loopback_module_files": module_files,
-        "usable": bool(devices),
-        "reason": "existing /dev/video device" if devices else "no /dev/video device available",
+        "usable": bool(loopback_devices),
+        "reason": (
+            "existing v4l2loopback-backed /dev/video device"
+            if loopback_devices
+            else "no v4l2loopback-backed /dev/video device available"
+        ),
     }
 
 
@@ -454,7 +535,7 @@ def _decode_frames(
     decoder: subprocess.Popen[bytes],
     duration_seconds: float,
     *,
-    disconnect_event: threading.Event | None = None,
+    disconnect_tracker: DisconnectTracker | None = None,
 ) -> dict[str, Any]:
     stderr_lines: list[str] = []
     stderr_timestamps: list[float] = []
@@ -552,7 +633,8 @@ def _decode_frames(
         "gaps_over_500ms": sum(1 for value in intervals_ms if value > 500),
         "decode_failures": decode_failures,
         "incomplete_frame_at_controlled_stop": incomplete and not decoder_ended_early,
-        "stream_disconnects": 1 if disconnect_event and disconnect_event.is_set() and elapsed < duration_seconds * 0.95 else 0,
+        "stream_disconnects": _stream_disconnect_count(disconnect_tracker, deadline),
+        "disconnect_reason": disconnect_tracker.reason if disconnect_tracker else None,
         "per_frame_adb_subprocesses": False,
         "stderr": stderr_lines,
     }
@@ -673,7 +755,7 @@ def run_raw_h264_frame_benchmark(
     ]
     for thread in server_log_threads:
         thread.start()
-    relay_disconnect = threading.Event()
+    relay_disconnect = DisconnectTracker()
     try:
         connection: socket.socket | None = None
         deadline = time.monotonic() + 15
@@ -711,14 +793,14 @@ def run_raw_h264_frame_benchmark(
                 while True:
                     chunk = connection.recv(1024 * 1024)
                     if not chunk:
-                        relay_disconnect.set()
+                        relay_disconnect.mark("eof")
                         break
                     if decoder.stdin is None:
                         break
                     decoder.stdin.write(chunk)
                     decoder.stdin.flush()
-            except (OSError, BrokenPipeError):
-                relay_disconnect.set()
+            except (OSError, BrokenPipeError) as exc:
+                relay_disconnect.mark(f"error:{type(exc).__name__}")
             finally:
                 try:
                     connection.close()
@@ -732,7 +814,7 @@ def run_raw_h264_frame_benchmark(
 
         relay_thread = threading.Thread(target=relay, daemon=True)
         relay_thread.start()
-        result = _decode_frames(decoder, duration_seconds, disconnect_event=relay_disconnect)
+        result = _decode_frames(decoder, duration_seconds, disconnect_tracker=relay_disconnect)
         try:
             connection.close()
         except OSError:
