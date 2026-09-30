@@ -1,5 +1,6 @@
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from smashbot_diagnostics.framed_video import H264PacketMerger
@@ -485,7 +486,7 @@ class RealtimeTests(unittest.TestCase):
         merger = H264PacketMerger()
         config = type("Packet", (), {"is_session": False, "is_config": True, "payload": b"cfg"})()
         media = type("Packet", (), {"is_session": False, "is_config": False, "payload": b"media"})()
-        self.assertEqual(merger.merge(config), b"cfg")
+        self.assertIsNone(merger.merge(config))
         self.assertEqual(merger.merge(media), b"cfgmedia")
 
         source = FramedH264FrameSource(
@@ -503,6 +504,71 @@ class RealtimeTests(unittest.TestCase):
         association = source._associate_decoded_frame(0, 7.1)
         self.assertEqual(association["packet_sequence_index"], 7)
         self.assertEqual(source.association_diagnostics()["associated_frame_count"], 1)
+
+    def test_live_config_packet_is_not_written_or_queued(self):
+        from smashbot_diagnostics.framed_video import FramedVideoParser, PACKET_FLAG_CONFIG
+        import struct
+
+        class RecordingStdin:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, payload):
+                self.writes.append(bytes(payload))
+
+            def flush(self):
+                return None
+
+        def wire(flags, payload):
+            return struct.pack(">QI", flags, len(payload)) + payload
+
+        packets = FramedVideoParser().feed(
+            wire(PACKET_FLAG_CONFIG, b"cfg") + wire(9, b"media"),
+            received_monotonic_seconds=2.0,
+        )
+        writer = RecordingStdin()
+        source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+        source._decoder = SimpleNamespace(stdin=writer)
+
+        self.assertFalse(source._dispatch_framed_packet(packets[0]))
+        self.assertEqual(writer.writes, [])
+        self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 0)
+        self.assertTrue(source._dispatch_framed_packet(packets[1]))
+        self.assertEqual(writer.writes, [b"cfgmedia"])
+        self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 1)
+
+    def test_live_successive_configs_write_only_latest_config_with_media(self):
+        from smashbot_diagnostics.framed_video import FramedVideoParser, PACKET_FLAG_CONFIG
+        import struct
+
+        class RecordingStdin:
+            def __init__(self):
+                self.writes = []
+
+            def write(self, payload):
+                self.writes.append(bytes(payload))
+
+            def flush(self):
+                return None
+
+        def wire(flags, payload):
+            return struct.pack(">QI", flags, len(payload)) + payload
+
+        packets = FramedVideoParser().feed(
+            wire(PACKET_FLAG_CONFIG, b"cfg1")
+            + wire(PACKET_FLAG_CONFIG, b"cfg2")
+            + wire(10, b"media"),
+            received_monotonic_seconds=3.0,
+        )
+        writer = RecordingStdin()
+        source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+        source._decoder = SimpleNamespace(stdin=writer)
+
+        self.assertFalse(source._dispatch_framed_packet(packets[0]))
+        self.assertFalse(source._dispatch_framed_packet(packets[1]))
+        self.assertTrue(source._dispatch_framed_packet(packets[2]))
+        self.assertEqual(writer.writes, [b"cfg2media"])
+        self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 1)
 
     def test_framed_fifo_invariants_report_missing_packet_and_overflow(self):
         source = FramedH264FrameSource(

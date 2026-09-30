@@ -32,7 +32,7 @@ class FramedVideoTests(unittest.TestCase):
         )
         merger = H264PacketMerger()
 
-        self.assertEqual(merger.merge(packets[0]), b"cfg")
+        self.assertIsNone(merger.merge(packets[0]))
         self.assertEqual(merger.merge(packets[1]), b"cfgmedia")
         self.assertEqual(merger.pending_config_size, 0)
 
@@ -46,8 +46,8 @@ class FramedVideoTests(unittest.TestCase):
         )
         merger = H264PacketMerger()
 
-        self.assertEqual(merger.merge(packets[0]), b"old")
-        self.assertEqual(merger.merge(packets[1]), b"new")
+        self.assertIsNone(merger.merge(packets[0]))
+        self.assertIsNone(merger.merge(packets[1]))
         self.assertEqual(merger.merge(packets[2]), b"newmedia")
         self.assertEqual(merger.pending_config_size, 0)
 

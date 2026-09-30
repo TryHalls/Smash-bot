@@ -314,10 +314,10 @@ class FramedVideoPacket:
 class H264PacketMerger:
     """Implement scrcpy v4.1's ``sc_packet_merger`` semantics for H.264.
 
-    A config packet is forwarded alone and retained as the latest config.  The
-    next non-config media packet receives that config prepended, and the
-    retained config is then cleared.  Callers associate only the media packet;
-    the standalone config packet never represents a decoded frame.
+    A config packet is retained as the latest config and produces no decoder
+    payload. The next non-config media packet receives that config prepended,
+    and the retained config is then cleared. Callers associate only the media
+    packet; the config packet never represents a decoder write or decoded frame.
     """
 
     def __init__(self) -> None:
@@ -327,12 +327,12 @@ class H264PacketMerger:
     def pending_config_size(self) -> int:
         return len(self._config or b"")
 
-    def merge(self, packet: FramedVideoPacket) -> bytes:
+    def merge(self, packet: FramedVideoPacket) -> bytes | None:
         if packet.is_session:
             raise ValueError("session packets are not H.264 decoder payloads")
         if packet.is_config:
             self._config = bytes(packet.payload)
-            return bytes(packet.payload)
+            return None
         if self._config is None:
             return bytes(packet.payload)
         payload = self._config + packet.payload

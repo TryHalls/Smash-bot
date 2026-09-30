@@ -1002,6 +1002,25 @@ class FramedH264FrameSource(RawH264FrameSource):
             self._frame_associations.append(association)
             return association
 
+    def _dispatch_framed_packet(self, packet: Any) -> bool | None:
+        """Merge one v4.1 packet and write only media AUs to the decoder.
+
+        ``False`` means CONFIG was retained without a decoder write or FIFO
+        entry. ``True`` means one media AU was queued and written. ``None``
+        means the bounded association FIFO rejected the media AU.
+        """
+
+        decoder_payload = self._packet_merger.merge(packet)
+        if decoder_payload is None:
+            return False
+        if self._decoder is None or self._decoder.stdin is None:
+            raise RealtimeError("decoder_stdin_unavailable")
+        if not self._record_media_packet_for_decoder(packet.metadata()):
+            return None
+        self._decoder.stdin.write(decoder_payload)
+        self._decoder.stdin.flush()
+        return True
+
     def _relay(self) -> None:
         assert self._connection is not None
         assert self._decoder is not None
@@ -1028,24 +1047,9 @@ class FramedH264FrameSource(RawH264FrameSource):
                         self._disconnect.mark("decoder_stdin_unavailable")
                         self._stop.set()
                         return
-                    decoder_payload = self._packet_merger.merge(packet)
-                    if packet.is_config:
-                        try:
-                            self._decoder.stdin.write(decoder_payload)
-                            self._decoder.stdin.flush()
-                        except (OSError, BrokenPipeError, ValueError) as exc:
-                            if not self._stop.is_set():
-                                self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
-                                self._stop.set()
-                        continue
-                    if not self._record_media_packet_for_decoder(packet.metadata()):
-                        self._disconnect.mark("packet_frame_association_overflow")
-                        self._stop.set()
-                        return
                     try:
-                        self._decoder.stdin.write(decoder_payload)
-                        self._decoder.stdin.flush()
-                    except (OSError, BrokenPipeError, ValueError) as exc:
+                        dispatched = self._dispatch_framed_packet(packet)
+                    except (OSError, BrokenPipeError, ValueError, RealtimeError) as exc:
                         with self._association_lock:
                             if not self._stop.is_set():
                                 self._association_invariant_failures.append(
@@ -1053,6 +1057,12 @@ class FramedH264FrameSource(RawH264FrameSource):
                                 )
                         if not self._stop.is_set():
                             self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
+                        self._stop.set()
+                        return
+                    if dispatched is False:
+                        continue
+                    if dispatched is None:
+                        self._disconnect.mark("packet_frame_association_overflow")
                         self._stop.set()
                         return
         except FramedVideoParseError as exc:
