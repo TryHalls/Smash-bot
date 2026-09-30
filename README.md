@@ -377,31 +377,108 @@ associated packet remained authoritative. No decoder, threshold, parser,
 control, transport, codec, resolution/FPS setting, or classifier was changed
 for this documentation update. No further physical tests were run.
 
-## Task 007: device-encoded latency host/build gate
+## Task 007: device-encoded latency decomposition
 
-Task 007 is based exactly on `6789b96cc3955fe0e1ae2f0e8e31b77ee05bdce1`.
-The diagnostic server patch is pinned to scrcpy v4.1 commit
-`2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0` (annotated tag `v4.1`) and is
-kept separately in `task007/task007-server.patch`; the upstream checkout and
-generated server are gitignored. The accepted raw-H.264 path, official
-Task 005/006 parser, codec, resolution/FPS, control transport, and decoder
-remain unchanged.
+Task 007 measures the device-side interval between scrcpy-control receipt and
+encoded H.264 output. It is based exactly on
+`6789b96cc3955fe0e1ae2f0e8e31b77ee05bdce1` and keeps the accepted raw-H.264
+production path, framed H.264 parser, `scrcpy_low_delay`, Pointer Location,
+Wireless ADB, A/B/C targets, 450 ms press, detector, thresholds, ROI,
+resolution, and FPS unchanged.
 
-The isolated Task 007 source carries D0/D1/D2 in a fixed 56-byte big-endian
-`T7TM` block after the official 12-byte framed-video header. Its official
-`payload_size` excludes the sidecar. The host parser validates and strips the
-sidecar before the existing CONFIG merger/packet-to-frame FIFO, preserving
-byte-identical H.264 payloads and exact action/coordinate/PTS associations.
+### Reproducible diagnostic server
 
-Host tests pass, but the Android build gate is currently blocked by missing
-local `java`/`javac` and Android SDK (`ANDROID_HOME`/`ANDROID_SDK_ROOT` are
-unset). The exact prerequisite report and reproducible build command are in
-[`task007/README.md`](task007/README.md). No tools were installed or
-substituted, and no phone, SMASH run, or PR is part of this phase. The
-diagnostic APK identity is fail-closed: it requires build metadata proving the
-exact upstream commit, current patch SHA, clean/apply-only checkout state,
-and the selected APK's recorded SHA-256. No server SHA is hardcoded before a
-successful build.
+The diagnostic server is derived from official scrcpy `v4.1`, upstream commit
+`2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0`. The repository contains only the
+isolated patch at [`task007/task007-server.patch`](task007/task007-server.patch);
+the upstream checkout and generated server remain gitignored. Build metadata
+records a clean checkout, patch apply-check, exact upstream build command, and
+the resulting artifact identity. The relevant provenance is:
+
+- Patch SHA-256:
+  `5a53140544e7200688469fb86e0bad168d6bd96810c76c52d20fe84d8fe6e3c0`.
+- Build command: `./gradlew -p server assembleRelease`.
+- Diagnostic server SHA-256:
+  `45999e50af2365a08391c4393366d8669a9c21db5debf2b70265103615dfe7b5`.
+- Full reproducibility and identity rules: [`task007/README.md`](task007/README.md).
+
+The server adds a fixed 56-byte big-endian `T7TM` sidecar after the official
+12-byte framed-video header. The official `payload_size` excludes the sidecar.
+The host parser validates and strips it before the existing CONFIG merger and
+packet-to-frame FIFO, preserving byte-identical H.264 and exact packet/frame
+associations.
+
+### D0/D1/D2 and clock semantics
+
+Only `ACTION_DOWN` increments `action_sequence`; MOVE and UP do not. The
+server records action coordinates from the incoming control message and uses
+`SystemClock.elapsedRealtimeNanos()` for device timestamps:
+
+- `D0`: immediately before handling/injection.
+- `D1`: immediately after `injectTouch()` returns; injection remains
+  `INJECT_MODE_ASYNC`.
+- `D2`: immediately after MediaCodec produces/dequeues the non-config output
+  and immediately before writing it to the video socket.
+
+`C0`, `C1`, `V0`, `V1`, and `V2` are host `time.monotonic()` observations.
+Device monotonic timestamps are never subtracted from host clocks; scrcpy PTS
+is retained only as packet metadata/order information. A response is accepted
+only when the exact associated packet has the expected action sequence,
+mapped x/y, `inject_success`, matching PTS, valid D0/D1/D2 order, and
+`C0 <= C1 <= V0 <= V1 <= V2`.
+
+### Physical evidence and final decision
+
+The first physical pilot at
+`artifacts/task007/20260930T153811Z/report.json` remained `INCONCLUSIVE`
+because the strict five-frame pre-touch requirement was incompatible with the
+capacity-one latest-frame source: only frames `[0, 7]` were available and no
+ACTION_DOWN was sent. Host hardening then kept `baseline_frame_count` as the
+desired count, accepted a minimum of two distinct stable frames, preserved the
+last collected frame as authoritative, and kept the existing marker-off and
+static-background rules unchanged.
+
+The final pilot is preserved without modifying its raw report at
+`artifacts/task007/20260930T162759Z/report.json` (gitignored):
+
+- Pre-touch baseline: 5 requested, 2 collected (`[0, 7]`), target not reached,
+  minimum 2, stability `PASS`.
+- Warm-up causal response and recovery both passed; the causal warm-up frame
+  used sequence 1, mapped `(432,1200)`, and PTS `537421146392`.
+- 10/10 gestures dispatched, 10/10 current-target detections, and 10/10
+  causal structurally valid trials.
+- Trial action sequences were exactly `2..11`; x/y/PTS association failures:
+  0. Stale previous-target diagnostics occurred in 3 trials and were not
+  treated as current-target failures.
+- Marker-off recovery and stable masked background were both 10/10.
+- The pipeline associated 468 decoded frames with 470 media AUs, leaving 2
+  pending at clean shutdown; maximum packet FIFO depth was 9. There were 0
+  FIFO invariant failures, overflows, frames without packets, decode errors,
+  framing errors, write/scheduling errors, or video/control disconnects.
+- `pointer_location` and `show_touches` were restored exactly to their
+  original values (`null` and `0`).
+
+The generic 30-trial classifier remains unchanged: the final 10-trial report
+is formally `stage_b.status = INCONCLUSIVE`, not an artificial PASS.
+Descriptive final device-side metrics were:
+
+| Metric | Median | P95 | Min | Max |
+| --- | ---: | ---: | ---: | ---: |
+| `D1-D0` inject call | 3.930 ms | 9.527 ms | 2.019 ms | 9.527 ms |
+| `D2-D1` post-injection → encoded output | 68.635 ms | 93.296 ms | 62.857 ms | 93.296 ms |
+| `D2-D0` control receipt → encoded output | 74.826 ms | 95.314 ms | 66.848 ms | 95.314 ms |
+| Combined residual | 36.416 ms | 183.755 ms | 12.460 ms | 183.755 ms |
+
+There were no negative residuals. The host-side final-run medians were
+`C0→V0 = 114.513 ms`, `V1→V2 = 72.594 ms`, and `C0→V2 = 199.714 ms`.
+
+The combined residual is not one-way Wi-Fi latency: it cannot separately
+identify host→device control time from device→host video time. The data show
+that `injectTouch()` is not the dominant component; within the device, the
+larger component is post-injection → render/capture/encode. The descriptive
+trial-by-trial median of `(D2-D0)/(V0-C0)` was approximately 66.3%, not a
+universal constant. No third transport is justified by this evidence, so the
+infrastructure latency investigation closes here.
 
 ## Scope and artifacts
 

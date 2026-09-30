@@ -44,12 +44,12 @@ SHA-256 equal to the selected file. There is deliberately no hardcoded APK
 SHA before the first successful diagnostic build; missing or malformed
 metadata, arbitrary APKs, and any mismatch fail closed.
 
-The host used for this implementation currently has Git (`2.39.5`) and the
-upstream wrapper checkout, but no `java`, `javac`, global `gradle`, Android
-SDK, `sdkmanager`, or `adb` on `PATH`; `ANDROID_HOME`, `ANDROID_SDK_ROOT`,
-and `ANDROID_SDK` are unset. Therefore the Android build prerequisite gate is
-blocked until a JDK and the required SDK are made available. No tools were
-installed or substituted.
+The local build gate was completed with the project-local JDK 17.0.20.1 and
+Android SDK platform `android-36` / build-tools `36.0.0`; no global Java or
+SDK was changed. The resulting diagnostic server SHA-256 is
+`45999e50af2365a08391c4393366d8669a9c21db5debf2b70265103615dfe7b5`.
+The complete recorded provenance is in the ignored
+`artifacts/task007/build/build-metadata.txt`.
 
 ## Diagnostic wire extension
 
@@ -63,4 +63,8 @@ device-clock ordering.
 
 The official Task 005/006 parser and raw-H.264 production path remain
 unchanged. The diagnostic source is selected explicitly as
-`Task007FramedH264FrameSource`; no phone run is part of this host/build gate.
+`Task007FramedH264FrameSource`. Physical evidence is preserved in the ignored
+`artifacts/task007/20260930T162759Z/report.json`; its formal `stage_b` result
+is `INCONCLUSIVE` because the generic classifier requires 30 trials, while
+the completed pilot itself had 10/10 causally valid trials and no pipeline
+errors.
