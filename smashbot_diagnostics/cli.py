@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stream.add_argument("--output-base", type=Path, default=Path("artifacts/streaming"))
 
-    realtime = subparsers.add_parser("realtime-benchmark", help="run the Task 003 observe-act measurements")
+    realtime = subparsers.add_parser("realtime-benchmark", help="run the Task 003/004 observe-act measurements")
     _add_connection_options(realtime)
     _add_stream_tool_options(realtime)
     realtime.add_argument("--scrcpy-server", type=Path, help="verified official scrcpy-server-v4.1 path")
@@ -129,6 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument("--calibration-trials", type=_positive_int, default=30)
     realtime.add_argument("--calibration-spacing-seconds", type=_positive_float, default=1.0)
     realtime.add_argument("--calibration-timeout-seconds", type=_positive_float, default=1.0)
+    realtime.add_argument(
+        "--control-transport",
+        choices=("adb", "scrcpy_v4_1"),
+        default="adb",
+        help="explicit input transport; scrcpy_v4_1 enables the pinned persistent control socket",
+    )
     realtime.add_argument(
         "--calibration-visualization",
         choices=("show_touches", "pointer_location"),
@@ -595,7 +601,10 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
     if not args.static_screen_confirmed:
         raise ValueError("realtime-benchmark requires --static-screen-confirmed on a safe static Android screen")
     adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
-    run_dir = new_run_directory(args.output_base)
+    output_base = args.output_base
+    if args.control_transport == "scrcpy_v4_1" and output_base == Path("artifacts/realtime"):
+        output_base = Path("artifacts/task004")
+    run_dir = new_run_directory(output_base)
     capability = capability_report(adb, args.scrcpy, args.ffmpeg)
     selected_serial = capability.get("adb", {}).get("selected_serial")
     scrcpy_path = capability.get("scrcpy", {}).get("path")
@@ -605,7 +614,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         "tool_version": __version__,
         "generated_at_utc": utc_now(),
         "command": "realtime-benchmark",
-        "transport_policy": "ADB is the only input transport; no fallback control transport is attempted",
+        "transport_policy": "input control transport is explicit; no fallback control transport is attempted",
         "human_prerequisite": "safe static portrait Android launcher for calibration, then offline/bot SMASH match with continuous movement",
         "capability": capability,
         "configuration": {
@@ -617,6 +626,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_spacing_seconds": args.calibration_spacing_seconds,
             "calibration_timeout_seconds": args.calibration_timeout_seconds,
             "calibration_visualization": args.calibration_visualization,
+            "control_transport": args.control_transport,
             "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
             "calibration_swipe": Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
@@ -686,6 +696,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         swipe=stress_swipe,
         calibration_swipe=calibration_swipe,
         visualization_mode=args.calibration_visualization,
+        control_transport=args.control_transport,
     )
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
@@ -788,6 +799,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         gesture_count=max(30, args.gesture_count),
         gesture_interval_seconds=args.gesture_interval_seconds,
         swipe=stress_swipe,
+        control_transport=args.control_transport,
     )
     report["concurrent"] = concurrent
     report["freshness"] = run_fresh_frame_benchmark(

@@ -194,6 +194,55 @@ transport. That architectural decision is deferred to Task 004 / Issue #7;
 PR #6 remains limited to the accepted video pipeline, ADB reliability
 evidence, and the documented latency failure.
 
+## Task 004: scrcpy v4.1 control-latency spike
+
+Task 004 evaluates only the official scrcpy v4.1 control socket while keeping
+the accepted raw H.264 frame source, decoder, portrait mapping, latest-frame
+semantics, and Pointer Location detector unchanged. The control run is
+explicitly selected; it never falls back to another input transport.
+
+For `video=true`, `audio=false`, `control=true`, the v4.1 server accepts two
+forwarded sockets in this order: `video`, then `control`. The control socket is
+persistent for the run. Touch messages use the exact v4.1 32-byte
+`INJECT_TOUCH_EVENT` layout: type `2`, action byte (`DOWN=0`, `UP=1`,
+`MOVE=2`), generic-finger pointer id `UINT64_C(-2)`, signed big-endian
+coordinates, unsigned big-endian video width/height, Q16 pressure, and zero
+action-button/buttons. Coordinates are mapped into the decoded video space and
+the message carries that exact decoded frame size; a size mismatch is rejected
+by the v4.1 server. The pinned server SHA-256 is verified before control is
+enabled.
+
+The transport-neutral swipe API sends a synchronous, bounded sequence of
+`ACTION_DOWN`, linear `ACTION_MOVE` events every 10 ms, and `ACTION_UP` at the
+requested duration. The monotonic timestamp immediately before the DOWN write
+is the latency origin. Socket-write and scheduling failures are reported
+separately from visible-response latency. Cleanup closes the control socket,
+video socket, decoder, server, and ADB forward deterministically.
+
+The host suite includes v4.1 golden-byte, socket-contract, coordinate/size,
+event-order, duration, bounded-scheduling, disconnect, cleanup, and pinned
+server-identity tests. The first physical experiment is Stage A only: five
+static Pointer Location trials on the launcher. It is intentionally not run
+until the phone is left on that safe static screen:
+
+```bash
+python3 -m smashbot_diagnostics realtime-benchmark \
+  --adb /path/to/adb \
+  --scrcpy /path/to/scrcpy \
+  --ffmpeg /path/to/ffmpeg \
+  --scrcpy-server /path/to/scrcpy-server \
+  --transport wireless_tcp --serial DEVICE_SERIAL \
+  --control-transport scrcpy_v4_1 \
+  --calibration-visualization pointer_location \
+  --calibration-trials 5 --calibration-only \
+  --static-screen-confirmed --output-base artifacts/task004
+```
+
+This command writes gitignored JSON and summary artifacts under
+`artifacts/task004/<timestamp>/`. Stage B's 30 trials and any moving SMASH
+validation remain gated on a successful Stage A review; neither is part of
+the host implementation step.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
@@ -207,5 +256,5 @@ next` for each trial. It does not require multiple fresh no-touch frames before
 dispatch. The persistent calibration press is 450 ms. Task 002 screenshot
 capture remains unchanged and no screenshots or long recordings are committed.
 No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
-bypass, online automation, scrcpy control integration, or custom scrcpy framed
-protocol is included.
+bypass, online automation, or generic scrcpy protocol library is included.
+Task 004's isolated v4.1 touch subset is the only control-socket addition.
