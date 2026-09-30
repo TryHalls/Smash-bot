@@ -26,6 +26,7 @@ from typing import Any, Callable
 from .adb import AdbClient, AdbError
 from .framed_video import (
     FramedVideoParseError,
+    FramedVideoPacket,
     FramedVideoParser,
     H264PacketMerger,
     decompose_prehost_packet_latency,
@@ -543,7 +544,12 @@ class RawH264FrameSource:
             if self._decoder is None or self._decoder.stderr is None:
                 return
             for raw_line in self._decoder.stderr:
-                self._decoder_stderr.append(raw_line.decode("utf-8", errors="replace").rstrip("\n"))
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+                self._decoder_stderr.append(line)
+                if hasattr(self, "_decoder_error_count") and any(
+                    word in line.lower() for word in ("error", "corrupt", "invalid", "failed")
+                ):
+                    self._decoder_error_count += 1
 
         self._decoder_stderr_thread = threading.Thread(target=read, name="decoder-stderr", daemon=True)
         self._decoder_stderr_thread.start()
@@ -628,6 +634,7 @@ class RawH264FrameSource:
 FRAMED_QUIESCENT_INTERVAL_SECONDS = 0.05
 FRAMED_QUIESCENT_TIMEOUT_SECONDS = 0.5
 FRAMED_MAX_PENDING_MEDIA_PACKETS = 512
+FRAMED_MAX_INVARIANT_FAILURE_HISTORY = 1000
 
 
 class FramedH264FrameSource(RawH264FrameSource):
@@ -646,6 +653,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         no_b_frames_verified: bool = False,
         h264_capability: dict[str, Any] | None = None,
         decoder_profile: str = "baseline_current",
+        packet_observer: Callable[[FramedVideoPacket], bool | None] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
@@ -661,11 +669,17 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._no_b_frames_verified = no_b_frames_verified
         self._h264_capability = dict(h264_capability or {})
         self._decoder_profile = decoder_profile
+        self._packet_observer = packet_observer
+        self._relay_completed = False
         self._max_pending_media_packets = FRAMED_MAX_PENDING_MEDIA_PACKETS
         self._max_pending_depth = 0
         self._decoded_frames_without_packet = 0
         self._association_overflow_count = 0
         self._association_invariant_failures: list[str] = []
+        self._association_invariant_failure_count = 0
+        self._association_invariant_history_truncated = False
+        self._associated_frame_count = 0
+        self._decoder_error_count = 0
         self._packet_lock = threading.Lock()
         self._packet_total_count = 0
         self._framing_error: str | None = None
@@ -712,10 +726,15 @@ class FramedH264FrameSource(RawH264FrameSource):
             self._decoded_frames_without_packet = 0
             self._association_overflow_count = 0
             self._association_invariant_failures.clear()
+            self._association_invariant_failure_count = 0
+            self._association_invariant_history_truncated = False
+            self._associated_frame_count = 0
         self._packet_total_count = 0
+        self._decoder_error_count = 0
         self._framing_error = None
         self._last_media_packet_monotonic_seconds = None
         self._last_decoded_monotonic_seconds = None
+        self._relay_completed = False
         port = _free_tcp_port()
         scid = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
         socket_name = f"scrcpy_{scid:08x}"
@@ -862,8 +881,40 @@ class FramedH264FrameSource(RawH264FrameSource):
             "overflow_count": overflow_count,
             "decode_errors": decoder_errors,
             "invariant_failures": invariant_failures,
+            "invariant_failure_count": self._association_invariant_failure_count,
+            "invariant_failure_history_bounded": True,
+            "invariant_failure_history_truncated": self._association_invariant_history_truncated,
             "history_bounded": True,
             "frame_associations": associations,
+        }
+
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return O(1) live health counters without copying bounded histories."""
+
+        with self._association_lock:
+            pending = len(self._pending_media_packets)
+            associated = self._associated_frame_count
+            max_pending_depth = self._max_pending_depth
+            overflow_count = self._association_overflow_count
+            decoded_without_packet = self._decoded_frames_without_packet
+            invariant_count = self._association_invariant_failure_count
+        with self._packet_lock:
+            packet_count = self._packet_total_count
+        return {
+            "packet_count": packet_count,
+            "disconnect_reason": self._disconnect.reason,
+            "relay_completed": self._relay_completed,
+            "framing_error": self._framing_error,
+            "pending_media_packets": pending,
+            "associated_frame_count": associated,
+            "max_pending_depth": max_pending_depth,
+            "overflow_count": overflow_count,
+            "decoded_frames_without_packet": decoded_without_packet,
+            "invariant_failure_count": invariant_count,
+            "decoder_error_count": self._decoder_error_count,
+            "stop_requested": self._stop.is_set(),
+            "started": self._started,
+            "stopped": self._stopped,
         }
 
     def pending_media_snapshot(self) -> dict[str, Any]:
@@ -980,6 +1031,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             "framing_error": self._framing_error,
             "last_media_packet_monotonic_seconds": self._last_media_packet_monotonic_seconds,
             "last_decoded_monotonic_seconds": self._last_decoded_monotonic_seconds,
+            "relay_completed": self._relay_completed,
             "packets": packets,
         }
         result["frame_association"] = self.association_diagnostics()
@@ -999,9 +1051,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         with self._association_lock:
             if len(self._pending_media_packets) >= self._max_pending_media_packets:
                 self._association_overflow_count += 1
-                self._association_invariant_failures.append(
-                    "pending media packet FIFO overflow"
-                )
+                self._record_invariant_failure("pending media packet FIFO overflow")
                 return False
             self._pending_media_packets.append(dict(metadata))
             self._max_pending_depth = max(self._max_pending_depth, len(self._pending_media_packets))
@@ -1011,9 +1061,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         with self._association_lock:
             if not self._pending_media_packets:
                 self._decoded_frames_without_packet += 1
-                self._association_invariant_failures.append(
-                    f"decoded frame {frame_index} has no pending media packet"
-                )
+                self._record_invariant_failure(f"decoded frame {frame_index} has no pending media packet")
                 return None
             packet = self._pending_media_packets.popleft()
             packet_start = packet.get(
@@ -1025,7 +1073,7 @@ class FramedH264FrameSource(RawH264FrameSource):
                 packet.get("received_monotonic_seconds"),
             )
             if packet_start is None or packet_complete is None:
-                self._association_invariant_failures.append(
+                self._record_invariant_failure(
                     f"packet {packet.get('sequence_index')} is missing host receive timestamps"
                 )
                 return None
@@ -1060,7 +1108,15 @@ class FramedH264FrameSource(RawH264FrameSource):
                 if key in packet:
                     association[key] = packet[key]
             self._frame_associations.append(association)
+            self._associated_frame_count += 1
             return association
+
+    def _record_invariant_failure(self, message: str) -> None:
+        if len(self._association_invariant_failures) < FRAMED_MAX_INVARIANT_FAILURE_HISTORY:
+            self._association_invariant_failures.append(message)
+        else:
+            self._association_invariant_history_truncated = True
+        self._association_invariant_failure_count += 1
 
     def _dispatch_framed_packet(self, packet: Any) -> bool | None:
         """Merge one v4.1 packet and write only media AUs to the decoder.
@@ -1110,7 +1166,19 @@ class FramedH264FrameSource(RawH264FrameSource):
                 )
                 for packet in packets:
                     self._record_packet(packet)
+                    observer_continue = True
+                    if self._packet_observer is not None:
+                        try:
+                            observer_result = self._packet_observer(packet)
+                        except Exception as exc:
+                            self._framing_error = f"packet observer failed: {type(exc).__name__}: {exc}"
+                            self._disconnect.mark("packet_observer_error")
+                            self._stop.set()
+                            return
+                        observer_continue = observer_result is not False
                     if packet.is_session:
+                        if not observer_continue:
+                            raise FramedVideoParseError("packet observer stopped on unexpected session packet")
                         continue
                     if self._decoder.stdin is None:
                         self._disconnect.mark("decoder_stdin_unavailable")
@@ -1121,7 +1189,7 @@ class FramedH264FrameSource(RawH264FrameSource):
                     except (OSError, BrokenPipeError, ValueError, RealtimeError) as exc:
                         with self._association_lock:
                             if not self._stop.is_set():
-                                self._association_invariant_failures.append(
+                                self._record_invariant_failure(
                                     f"media packet write failed: {type(exc).__name__}"
                                 )
                         if not self._stop.is_set():
@@ -1134,6 +1202,11 @@ class FramedH264FrameSource(RawH264FrameSource):
                         self._disconnect.mark("packet_frame_association_overflow")
                         self._stop.set()
                         return
+                    if not observer_continue:
+                        self._relay_completed = True
+                        break
+                if self._relay_completed:
+                    break
         except FramedVideoParseError as exc:
             self._framing_error = str(exc)
             if not self._stop.is_set():
@@ -1165,8 +1238,11 @@ class FramedH264FrameSource(RawH264FrameSource):
             )
             if frame is None:
                 if self._decoder.poll() is not None and not self._stop.is_set():
-                    self._disconnect.mark("decoder_exit")
-                    self._stop.set()
+                    if self._relay_completed:
+                        self._stop.set()
+                    else:
+                        self._disconnect.mark("decoder_exit")
+                        self._stop.set()
                 continue
             if not complete:
                 continue

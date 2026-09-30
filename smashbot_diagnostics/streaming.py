@@ -381,19 +381,17 @@ def _parse_scrcpy_output(lines: Iterable[str]) -> dict[str, Any]:
     }
 
 
-def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duration_seconds: float) -> dict[str, Any]:
-    """Run the official scrcpy CLI profile and collect its own observables."""
+def prepare_scrcpy_child_environment(server_path: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """Prepare the isolated environment used by a scrcpy child process.
 
-    command = build_scrcpy_command(scrcpy, serial, profile, duration_seconds)
+    When an X11 display is available, prefer SDL's X11 backend and remove the
+    exported Wayland display.  This is the policy used by the accepted
+    ``run_scrcpy_baseline`` path.  The returned override map is diagnostic
+    metadata; the parent process environment is never modified.
+    """
+
     process_env = os.environ.copy()
     environment_overrides: dict[str, str] = {}
-    # The benchmark must keep video playback enabled so scrcpy's own FPS
-    # counter is meaningful. Prefer the host's X11 display when both XWayland
-    # and Wayland are exported: on this host the scrcpy 4.1 Wayland renderer
-    # can terminate with SIGSEGV during a long headless benchmark, while the
-    # same official binary is stable through X11. CI/container hosts commonly
-    # have no display, so use SDL's dummy driver there rather than turning
-    # playback off (which makes --print-fps a no-op).
     if process_env.get("DISPLAY"):
         process_env["SDL_VIDEODRIVER"] = "x11"
         process_env.pop("WAYLAND_DISPLAY", None)
@@ -401,8 +399,27 @@ def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duratio
         environment_overrides["WAYLAND_DISPLAY"] = "unset"
     elif not process_env.get("WAYLAND_DISPLAY"):
         process_env["SDL_VIDEODRIVER"] = "dummy"
-        command.extend(["--render-driver", "software"])
         environment_overrides["SDL_VIDEODRIVER"] = "dummy"
+    if server_path is not None:
+        process_env["SCRCPY_SERVER_PATH"] = server_path
+        environment_overrides["SCRCPY_SERVER_PATH"] = server_path
+    return process_env, environment_overrides
+
+
+def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duration_seconds: float) -> dict[str, Any]:
+    """Run the official scrcpy CLI profile and collect its own observables."""
+
+    command = build_scrcpy_command(scrcpy, serial, profile, duration_seconds)
+    # The benchmark must keep video playback enabled so scrcpy's own FPS
+    # counter is meaningful. Prefer the host's X11 display when both XWayland
+    # and Wayland are exported: on this host the scrcpy 4.1 Wayland renderer
+    # can terminate with SIGSEGV during a long headless benchmark, while the
+    # same official binary is stable through X11. CI/container hosts commonly
+    # have no display, so use SDL's dummy driver there rather than turning
+    # playback off (which makes --print-fps a no-op).
+    process_env, environment_overrides = prepare_scrcpy_child_environment()
+    if environment_overrides.get("SDL_VIDEODRIVER") == "dummy":
+        command.extend(["--render-driver", "software"])
     started_at = time.monotonic()
     wall_started = _utc_now()
     try:
