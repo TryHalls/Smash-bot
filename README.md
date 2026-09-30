@@ -189,6 +189,8 @@ bootstrap and no `uv`, `virtualenv`, `pip`, or `pip3` executable was available.
 The stdlib annotation, frame-stream, and benchmark scaffolding remain usable;
 installing a local Python environment with wheel support is a separate human
 toolchain action. No global packages were changed.
+The exact proposed unblock command and deferred synthetic smoke test are in
+[the Python/OpenCV plan](docs/task009-python-opencv-plan.md).
 
 Task 009 invariants are: framed packet count equals decoded-frame count,
 frame index/PTS identity comes from the device-derived metadata, labels are
