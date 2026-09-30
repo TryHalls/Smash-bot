@@ -5,6 +5,7 @@ from unittest.mock import patch
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
+    FramedH264FrameSource,
     LatestFrameBuffer,
     PointerLocationDetector,
     RawH264FrameSource,
@@ -393,6 +394,28 @@ class RealtimeTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertTrue(first["cleanup_success"])
+
+    def test_framed_source_is_isolated_and_has_bounded_cleanup(self):
+        raw = RawH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+        framed = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+
+        self.assertEqual(raw.metadata()["path"], "raw_h264")
+        self.assertEqual(framed.metadata()["path"], "framed_h264")
+        self.assertFalse(framed.metadata()["framed_video"]["raw_stream"])
+        self.assertTrue(framed.metadata()["framed_video"]["send_frame_meta"])
+        self.assertEqual(framed.metadata()["framed_video"]["header_size_bytes"], 12)
+        self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
+        self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
+
+    def test_framed_quiescent_baseline_is_bounded_and_explicit(self):
+        source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+
+        result = source.wait_for_quiescent(quiet_interval_seconds=0.005, timeout_seconds=0.02)
+
+        self.assertTrue(result["quiescent"])
+        self.assertEqual(result["packet_count_at_start"], result["packet_count_at_end"])
+        self.assertEqual(result["frame_count_at_start"], result["frame_count_at_end"])
+        self.assertLessEqual(result["waited_seconds"], 0.02 + 0.02)
 
     def test_acceptance_gate_fails_when_gesture_transport_fails(self):
         report = {
