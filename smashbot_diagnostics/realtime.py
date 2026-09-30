@@ -853,6 +853,7 @@ class PointerLocationDetector:
             for y in range(self.top_bar_height)
             for x in range(width)
         )
+        self.background_indices = self._background_indices()
         self.threshold_rule = (
             "pointer_location detector: independent temporal no-touch p99 + 3*MAD "
             "thresholds for the mapped crosshair and top coordinate band; detect "
@@ -871,6 +872,21 @@ class PointerLocationDetector:
                     if 0 <= x < self.width and 0 <= y < self.height:
                         indices.add(y * self.width + x)
         return tuple(indices)
+
+    def _background_indices(self) -> tuple[int, ...]:
+        """Sample launcher background outside the Pointer Location overlay area."""
+
+        center_x, center_y = self.center
+        excluded_left = max(0, center_x - 180)
+        excluded_right = min(self.width, center_x + 181)
+        excluded_top = max(self.top_bar_height, center_y - 240)
+        excluded_bottom = min(self.height, center_y + 241)
+        return tuple(
+            y * self.width + x
+            for y in range(self.top_bar_height, self.height)
+            for x in range(self.width)
+            if not (excluded_left <= x < excluded_right and excluded_top <= y < excluded_bottom)
+        )
 
     @staticmethod
     def _noise_model(no_touch_frames: list[bytes], indices: tuple[int, ...]) -> dict[str, float | int]:
@@ -966,6 +982,20 @@ class PointerLocationDetector:
                 min(1.0, top_bar["changed_fraction"] / 0.002),
             ),
         }
+
+
+def _calibration_marker_on(score: dict[str, Any], visualization_mode: str) -> bool:
+    """Use only the mode-specific marker evidence for state transitions."""
+
+    if visualization_mode == "pointer_location":
+        return bool(score.get("crosshair_detected"))
+    return bool(score.get("detected"))
+
+
+def _calibration_pointer_up(score: dict[str, Any], visualization_mode: str) -> bool:
+    if visualization_mode == "pointer_location":
+        return not bool(score.get("crosshair_detected"))
+    return not bool(score.get("detected"))
 
 
 def _consume_until(source: RawH264FrameSource, deadline: float, period_seconds: float) -> None:
@@ -1282,10 +1312,15 @@ def run_calibration(
         if (post_warmup_frame.width, post_warmup_frame.height) != (first_frame.width, first_frame.height):
             raise RealtimeError("decoded frame dimensions changed during warm-up")
 
+        comparison_indices = (
+            detector.background_indices
+            if visualization_mode == "pointer_location"
+            else detector.indices
+        )
         post_warmup_difference = _roi_difference_summary(
             first_frame.pixels,
             post_warmup_frame.pixels,
-            detector.indices,
+            comparison_indices,
         )
         setup["warmup"] = {
             "gesture": warmup_gesture,
@@ -1300,14 +1335,31 @@ def run_calibration(
                 "marker_off_baseline_next",
             ],
             "capture": warmup_capture,
+            "background_mask": {
+                "type": "pointer_location_exclusion_mask",
+                "excluded_top_bar_height": detector.top_bar_height,
+                "excluded_center": list(detector.center),
+                "excluded_half_width": 180,
+                "excluded_half_height": 240,
+            }
+            if visualization_mode == "pointer_location"
+            else None,
         }
-        shared_baseline = detector.baseline([first_frame.pixels, post_warmup_frame.pixels])
+        baseline_source_frames = (
+            warmup_post_completion[-2:]
+            if visualization_mode == "pointer_location" and len(warmup_post_completion) >= 2
+            else [first_frame, post_warmup_frame]
+        )
+        shared_baseline = detector.baseline([frame.pixels for frame in baseline_source_frames])
         setup["shared_no_touch_baseline"] = {
             key: value for key, value in shared_baseline.items() if key != "pixels"
         }
         setup["shared_no_touch_baseline"].update(
             {
-                "frame_indices": [first_frame.frame_index, post_warmup_frame.frame_index],
+                "frame_indices": [frame.frame_index for frame in baseline_source_frames],
+                "baseline_state": "pointer_up_with_persistent_trace"
+                if visualization_mode == "pointer_location"
+                else "initial_and_post_warmup_no_touch",
                 "pre_dispatch_new_frames_required": 0,
                 "legacy_baseline_frame_count_argument": baseline_frame_count,
                 "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
@@ -1322,19 +1374,25 @@ def run_calibration(
             for frame in warmup_frames
         ]
         warmup_scores = [item["score"] for item in warmup_frame_diagnostics]
-        warmup_marker_on = any(score["detected"] for score in warmup_scores)
+        warmup_marker_on = any(
+            _calibration_marker_on(score, visualization_mode) for score in warmup_scores
+        )
         warmup_off_score = detector.score(shared_baseline, post_warmup_frame.pixels)
         warmup_static_match = _static_baseline_matches(post_warmup_difference)
         setup["warmup"].update(
             {
                 "marker_on_detected": warmup_marker_on,
                 "marker_on_frame_indices": [
-                    frame.frame_index for frame, score in zip(warmup_frames, warmup_scores) if score["detected"]
+                    frame.frame_index
+                    for frame, score in zip(warmup_frames, warmup_scores)
+                    if _calibration_marker_on(score, visualization_mode)
                 ],
-                "marker_off_recovered": warmup_static_match and not warmup_off_score["detected"],
+                "marker_off_recovered": warmup_static_match
+                and _calibration_pointer_up(warmup_off_score, visualization_mode),
                 "post_warmup_no_touch_difference": post_warmup_difference,
                 "post_warmup_marker_score": warmup_off_score,
                 "launcher_state_unchanged": warmup_static_match,
+                "background_stable": warmup_static_match,
                 "frame_diagnostics": warmup_frame_diagnostics,
             }
         )
@@ -1344,7 +1402,7 @@ def run_calibration(
             raise RealtimeError(
                 "post-warm-up no-touch frame materially differs from initial launcher baseline"
             )
-        if warmup_off_score["detected"]:
+        if not _calibration_pointer_up(warmup_off_score, visualization_mode):
             raise RealtimeError("warm-up did not recover a marker-off baseline")
 
         baseline_frame = post_warmup_frame
@@ -1381,7 +1439,7 @@ def run_calibration(
                         "score": score,
                     }
                 )
-                if score["detected"]:
+                if _calibration_marker_on(score, visualization_mode):
                     response_frame = frame
                     response_score = score
                     break
@@ -1392,20 +1450,32 @@ def run_calibration(
                 if completion is not None
                 and frame.host_receive_decode_monotonic_seconds >= completion
             ]
-            marker_off_frame = post_completion_frames[-1] if post_completion_frames else None
-            marker_off_score = (
-                detector.score(baseline, marker_off_frame.pixels) if marker_off_frame is not None else None
-            )
+            marker_off_frame: DecodedFrame | None = None
+            marker_off_score: dict[str, Any] | None = None
+            for candidate in post_completion_frames:
+                candidate_score = detector.score(baseline, candidate.pixels)
+                if _calibration_pointer_up(candidate_score, visualization_mode):
+                    marker_off_frame = candidate
+                    marker_off_score = candidate_score
+                    break
             marker_off_difference = (
-                _roi_difference_summary(baseline_frame.pixels, marker_off_frame.pixels, detector.indices)
+                _roi_difference_summary(
+                    baseline_frame.pixels,
+                    marker_off_frame.pixels,
+                    comparison_indices,
+                )
                 if marker_off_frame is not None
                 else None
             )
             marker_off_recovered = bool(
                 marker_off_frame is not None
                 and marker_off_score is not None
-                and not marker_off_score["detected"]
+                and _calibration_pointer_up(marker_off_score, visualization_mode)
                 and marker_off_difference is not None
+                and _static_baseline_matches(marker_off_difference)
+            )
+            background_stable = bool(
+                marker_off_difference is not None
                 and _static_baseline_matches(marker_off_difference)
             )
             consistency = calibration_gesture_consistency(
@@ -1444,6 +1514,7 @@ def run_calibration(
                     "marker_off_frame_index": marker_off_frame.frame_index if marker_off_frame else None,
                     "marker_off_score": marker_off_score,
                     "marker_off_difference": marker_off_difference,
+                    "background_stable": background_stable,
                     "marker_off_recovered": marker_off_recovered,
                     "frame_diagnostics": frame_diagnostics,
                 }
@@ -1513,6 +1584,16 @@ def run_calibration(
                 "marker_off_baseline_next",
             ],
             "pre_dispatch_new_frames_required": 0,
+            "marker_on_rule": (
+                "crosshair_detected=true only"
+                if visualization_mode == "pointer_location"
+                else "detected=true"
+            ),
+            "pointer_up_rule": (
+                "post-completion frame with crosshair_detected=false; persistent trace accepted"
+                if visualization_mode == "pointer_location"
+                else "post-completion frame with detected=false"
+            ),
             "detector": {
                 "roi": (
                     "Pointer Location crosshair centered on mapped persistent calibration press point "
@@ -1539,6 +1620,7 @@ def run_calibration(
             "trial_gestures_dispatched": len(successful_trial_gestures),
             "trial_gesture_dispatch_rate": len(successful_trial_gestures) / len(trial_gestures) if trial_gestures else 0.0,
             "marker_off_recovered_trials": sum(1 for trial in trials_report if trial.get("marker_off_recovered")),
+            "background_stable_trials": sum(1 for trial in trials_report if trial.get("background_stable")),
             "latency_evaluable": latency_evaluable,
             "latency_evaluation": "evaluable" if latency_evaluable else "INCONCLUSIVE",
             "latency_inconclusive_reason": None

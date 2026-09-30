@@ -161,7 +161,11 @@ snapshots both `system/pointer_location` and `system/show_touches`, verifies
 `pointer_location=1` with `show_touches=0`, and restores both exact original
 values, including `null`. Its detector uses the mapped Pointer Location
 crosshair `(432,960)` and the top coordinate band rather than the circular
-`show_touches` detector. A PASS requires the complete Task 003 gate, including at
+`show_touches` detector. In this mode, a post-touch pointer-up frame may retain
+the Pointer Location trail: `crosshair_detected=false` is sufficient for the
+next baseline, while marker-on and latency use only `crosshair_detected=true`.
+A masked launcher-background check excludes the top coordinate band and a
+generous region around the calibration point. A PASS requires the complete Task 003 gate, including at
 least 30 successful ADB gestures, moving-source FPS/interval/disconnect
 limits, dropped stale frames with p95 consumed-frame age below 100 ms, 30
 valid visual-response trials, and the latency/detection thresholds from Issue

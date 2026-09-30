@@ -110,6 +110,57 @@ class CalibrationSourceStub:
         return {"produced_frame_count": 9}
 
 
+class PointerCalibrationSourceStub:
+    """pristine -> crosshair -> pointer-up trace -> next crosshair."""
+
+    def __init__(self, *args, **kwargs):
+        self.adb = args[0]
+        self.initial = [(0, 0)]
+        self.warmup_frames = [(1, 255), (2, 40), (3, 40)]
+        self.trial_frames = {
+            2: [(4, 255), (5, 40), (6, 40)],
+            3: [(7, 255), (8, 40), (9, 40)],
+        }
+
+    def start(self):
+        return self
+
+    def latest_frame(self, timeout_seconds=None):
+        if not self.adb.swipes and self.initial:
+            frames = self.initial
+        elif len(self.adb.swipes) == 1:
+            frames = self.warmup_frames
+        else:
+            frames = self.trial_frames[len(self.adb.swipes)]
+        if not frames:
+            if timeout_seconds:
+                time.sleep(min(timeout_seconds, 0.002))
+            return None
+        time.sleep(0.003)
+        index, value = frames.pop(0)
+        return frame(index, time.monotonic(), value=value, width=4, height=8)
+
+    def stop(self):
+        return {"cleanup_success": True, "cleanup_errors": []}
+
+    def stats(self):
+        return {
+            "metadata": {"queue_capacity": 1, "pixel_history_retained": False},
+            "produced_frames": 10,
+            "source_timestamp_count": 10,
+            "disconnect_at_monotonic_seconds": None,
+            "disconnect_reason": None,
+            "decoder_stderr": [],
+            "server_stderr": [],
+            "server_stdout": [],
+            "cleanup_success": True,
+            "cleanup_errors": [],
+        }
+
+    def stream_statistics(self, start, end):
+        return {"produced_frame_count": 10}
+
+
 def frame(index, timestamp, value=0, width=8, height=8):
     return DecodedFrame(index, timestamp, width, height, "gray", bytes([value]) * (width * height))
 
@@ -237,6 +288,42 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(trial["mapped_frame_swipe"], {"x1": 1, "y1": 4, "x2": 1, "y2": 4, "duration_ms": 450})
         self.assertEqual(report["statistics"]["valid_trials"], 1)
         self.assertEqual(report["statistics"]["detected_trials"], 1)
+
+    def test_pointer_location_vfr_state_machine_accepts_persistent_trace(self):
+        from smashbot_diagnostics.realtime import run_calibration
+
+        adb = RecordingAdb()
+        calibration_swipe = Swipe(1, 4, 1, 4, 450)
+
+        with patch("smashbot_diagnostics.realtime.RawH264FrameSource", PointerCalibrationSourceStub):
+            report = run_calibration(
+                adb,
+                "ffmpeg",
+                "/server",
+                trials=2,
+                spacing_seconds=0,
+                response_timeout_seconds=0.1,
+                swipe=Swipe(0, 4, 3, 4, 120),
+                calibration_swipe=calibration_swipe,
+                baseline_frame_count=5,
+                baseline_timeout_seconds=0.01,
+                visualization_mode="pointer_location",
+            )
+
+        self.assertEqual(adb.swipes, [calibration_swipe.as_dict()] * 3)
+        self.assertEqual(report["statistics"]["trial_gestures_dispatched"], 2)
+        self.assertEqual(report["statistics"]["valid_trials"], 2)
+        self.assertEqual(report["statistics"]["detected_trials"], 2)
+        self.assertEqual(report["statistics"]["marker_off_recovered_trials"], 2)
+        self.assertEqual(
+            report["setup"]["shared_no_touch_baseline"]["baseline_state"],
+            "pointer_up_with_persistent_trace",
+        )
+        for trial in report["trials"]:
+            self.assertTrue(trial["detection_score"]["crosshair_detected"])
+            self.assertFalse(trial["marker_off_score"]["crosshair_detected"])
+            self.assertTrue(trial["marker_off_recovered"])
+            self.assertIn("marker_off_baseline_next", trial["state_trace"])
 
     def test_gesture_statistics_records_failures_without_hiding_them(self):
         records = [
