@@ -1,6 +1,9 @@
 import json
 import sys
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -9,9 +12,12 @@ from smashbot_diagnostics.perception_annotations import (
     ACTIVE_BURST_IDS,
     AnnotationError,
     AnnotationHTTPServer,
+    NEGATIVE_FRAME_INDICES,
     atomic_write_json,
     build_candidate_records,
+    build_ground_truth_subset,
     css_to_image_coordinates,
+    load_json_with_recovery,
     require_opencv,
     validate_annotation_record,
     validate_annotations_document,
@@ -154,10 +160,12 @@ class PerceptionAnnotationTests(unittest.TestCase):
             validate_annotation_record(skeleton)
 
     def test_css_click_maps_to_full_resolution(self):
-        self.assertEqual(css_to_image_coordinates(432, 960, 432, 960, 864, 1920), (864.0, 1920.0))
         self.assertEqual(css_to_image_coordinates(216, 480, 432, 960, 864, 1920), (432.0, 960.0))
         with self.assertRaises(AnnotationError):
             css_to_image_coordinates(1, 1, 0, 960, 864, 1920)
+        for point in ((-1, 1), (432, -1), (432, 960), (432, 961)):
+            with self.assertRaises(AnnotationError):
+                css_to_image_coordinates(*point, 432, 960, 864, 1920)
 
     def test_atomic_persistence_and_recovery(self):
         with TemporaryDirectory() as directory:
@@ -167,10 +175,98 @@ class PerceptionAnnotationTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), value)
             path.unlink()
             path.with_name("annotations.json.tmp").write_text(json.dumps(value), encoding="utf-8")
-            from smashbot_diagnostics.perception_annotations import load_json_with_recovery
-
             self.assertEqual(load_json_with_recovery(path), value)
             self.assertTrue(path.exists())
+
+    def test_atomic_stale_temp_and_lock_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "annotations.json"
+            atomic_write_json(path, {"version": 1})
+            path.with_name("annotations.json.tmp").write_text("{}", encoding="utf-8")
+            with self.assertRaises(AnnotationError):
+                load_json_with_recovery(path)
+            path.with_name("annotations.json.tmp").unlink()
+            path.with_name("annotations.json.lock").write_text("lock", encoding="utf-8")
+            with self.assertRaises(AnnotationError):
+                atomic_write_json(path, {"version": 2})
+
+    def test_unlabeled_schema_requires_null_centers_and_boolean_flags(self):
+        active, negative = _synthetic_sources()
+        record = build_candidate_records(active, negative)[0]
+        skeleton = _annotation(record, active=None, visible=None)
+        skeleton["shuttle"]["ambiguous"] = "unknown"
+        with self.assertRaises(AnnotationError):
+            validate_annotation_record(skeleton, allow_unlabeled=True)
+        skeleton = _annotation(record, active=None, visible=None)
+        skeleton["shuttle"]["center_x"] = 2
+        with self.assertRaises(AnnotationError):
+            validate_annotation_record(skeleton, allow_unlabeled=True)
+
+    def test_corrupt_recovery_file_fails_closed(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "annotations.json"
+            path.with_name("annotations.json.tmp").write_text("{broken", encoding="utf-8")
+            with self.assertRaises(AnnotationError):
+                load_json_with_recovery(path)
+
+    def test_subset_regeneration_preserves_existing_annotations(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            task008 = root / "artifacts" / "task008"
+            for number, burst_id in enumerate(ACTIVE_BURST_IDS):
+                run = task008 / f"run-{burst_id}"
+                burst = task008 / "temporal-review" / burst_id
+                burst.mkdir(parents=True)
+                indices = list(range(number * 30, number * 30 + 21))
+                (run).mkdir(parents=True)
+                (run / "capture.h264").write_bytes(b"fixture")
+                (run / "manifest.json").write_text(json.dumps({"validation": {"width": 864, "height": 1920}}), encoding="utf-8")
+                (run / "packets.json").write_text(json.dumps({"media_packets": [{"media_frame_index": i, "scrcpy_pts_us": i + 1000} for i in indices]}), encoding="utf-8")
+                (burst / "burst.json").write_text(json.dumps({"burst": burst_id, "clip": burst_id[0], "original_run": str(run), "frame_indices": indices}), encoding="utf-8")
+            negative = task008 / "20260930T192911Z"
+            negative.mkdir(parents=True)
+            (negative / "capture.h264").write_bytes(b"fixture")
+            (negative / "packets.json").write_text(json.dumps({"media_packets": [{"media_frame_index": i, "scrcpy_pts_us": i + 2000} for i in (69, 140, 208, 289, 369, 444, 525, 602, 649, 719)]}), encoding="utf-8")
+            (negative / "manifest.json").write_text(json.dumps({"validation": {"width": 864, "height": 1920}}), encoding="utf-8")
+            output = root / "artifacts" / "task009" / "ground_truth"
+            build_ground_truth_subset(repo_root=root, task008_root=task008, output_root=output, ffmpeg="unused", extract_images=False)
+            annotations_path = output / "annotations.json"
+            annotations = json.loads(annotations_path.read_text())
+            annotations["records"][0]["active_rally"] = True
+            annotations["records"][0]["shuttle"]["visible"] = False
+            atomic_write_json(annotations_path, annotations)
+            build_ground_truth_subset(repo_root=root, task008_root=task008, output_root=output, ffmpeg="unused", extract_images=False)
+            preserved = json.loads(annotations_path.read_text())
+            self.assertTrue(preserved["records"][0]["active_rally"])
+            self.assertFalse(preserved["records"][0]["shuttle"]["visible"])
+
+    def test_subset_regeneration_rejects_identity_mismatch(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            task008 = root / "task008"
+            for number, burst_id in enumerate(ACTIVE_BURST_IDS):
+                run = task008 / f"run-{burst_id}"
+                burst = task008 / "temporal-review" / burst_id
+                burst.mkdir(parents=True)
+                run.mkdir(parents=True)
+                indices = list(range(number * 30, number * 30 + 21))
+                (run / "capture.h264").write_bytes(b"x")
+                (run / "manifest.json").write_text(json.dumps({"validation": {"width": 864, "height": 1920}}), encoding="utf-8")
+                (run / "packets.json").write_text(json.dumps({"media_packets": [{"media_frame_index": i, "scrcpy_pts_us": i} for i in indices]}), encoding="utf-8")
+                (burst / "burst.json").write_text(json.dumps({"burst": burst_id, "clip": burst_id[0], "original_run": str(run), "frame_indices": indices}), encoding="utf-8")
+            negative = task008 / "20260930T192911Z"
+            negative.mkdir(parents=True)
+            (negative / "capture.h264").write_bytes(b"x")
+            (negative / "manifest.json").write_text(json.dumps({"validation": {"width": 864, "height": 1920}}), encoding="utf-8")
+            (negative / "packets.json").write_text(json.dumps({"media_packets": [{"media_frame_index": i, "scrcpy_pts_us": i} for i in NEGATIVE_FRAME_INDICES]}), encoding="utf-8")
+            output = root / "ground_truth"
+            build_ground_truth_subset(repo_root=root, task008_root=task008, output_root=output, ffmpeg="unused", extract_images=False)
+            annotations_path = output / "annotations.json"
+            annotations = json.loads(annotations_path.read_text())
+            annotations["records"][0]["record_id"] = "wrong"
+            atomic_write_json(annotations_path, annotations)
+            with self.assertRaises(AnnotationError):
+                build_ground_truth_subset(repo_root=root, task008_root=task008, output_root=output, ffmpeg="unused", extract_images=False)
 
     def test_localhost_server_binding_and_image_path(self):
         with TemporaryDirectory() as directory:
@@ -210,6 +306,40 @@ class PerceptionAnnotationTests(unittest.TestCase):
             try:
                 self.assertEqual(server.server_address[0], "127.0.0.1")
                 self.assertEqual(server.image_for("record").read_bytes(), b"png")
+                with self.assertRaises(KeyError):
+                    server.image_for("../record")
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                base = f"http://127.0.0.1:{server.server_address[1]}"
+                request = urllib.request.Request(base + "/save", data=b"{bad", method="POST")
+                with self.assertRaises(urllib.error.HTTPError) as context:
+                    urllib.request.urlopen(request, timeout=2)
+                self.assertEqual(context.exception.code, 400)
+                server.shutdown()
+                thread.join(timeout=2)
+            finally:
+                server.server_close()
+
+    def test_ui_can_mark_invisible_without_leaving_stale_center(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "images" / "record.png"
+            image.parent.mkdir()
+            image.write_bytes(b"png")
+            subset = {"schema_version": 1, "width": 864, "height": 1920, "records": [{"record_id": "record", "image_path": "images/record.png"}]}
+            annotations = {"schema_version": 1, "records": [_annotation({
+                "record_id": "record", "split": "dev", "clip": "A", "source_run": "run",
+                "burst_id": "A_01", "frame_index": 0, "pts_us": 1,
+            })]}
+            atomic_write_json(root / "subset.json", subset)
+            atomic_write_json(root / "annotations.json", annotations)
+            server = AnnotationHTTPServer(root / "subset.json", root / "annotations.json")
+            try:
+                state = server.apply({"shuttle.visible": False})
+                self.assertFalse(state["record"]["shuttle"]["visible"])
+                self.assertIsNone(state["record"]["shuttle"]["center_x"])
+                self.assertIsNone(state["record"]["shuttle"]["center_y"])
+                self.assertEqual(json.loads((root / "annotations.json").read_text())["records"][0]["tags"], [])
             finally:
                 server.server_close()
 

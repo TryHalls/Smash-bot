@@ -113,6 +113,83 @@ The command writes `artifacts/streaming/<timestamp>/report.json` and `summary.tx
 
 If V4L2 is absent, the documented raw H.264 fallback is selected automatically. Enabling `v4l2loopback` is intentionally not automatic because it may require a persistent package installation or `sudo modprobe`; the capability report records that condition and preserves the fallback path. No long video recordings are generated or committed.
 
+## Task 009: offline shuttle-perception dataset (host-only)
+
+Task 009 is intentionally an annotation and evaluation foundation, not a
+detector or tracker. It uses only the existing Task 008 captures and never
+accesses the phone. The frozen candidate subset is exactly 136 records:
+126 frames from all six 21-frame temporal bursts (`A_01`, `A_02`, `B_01`,
+`B_02`, `C_01`, `C_02`) plus the ten preselected frames from the older C run
+`20260930T192911Z`. The deterministic split is complete bursts: `A_01`,
+`B_01`, `C_01` and negative candidates 1, 3, 5, 7, 9 are `dev`; `A_02`,
+`B_02`, `C_02` and negative candidates 2, 4, 6, 8, 10 are `holdout`.
+No burst is split across partitions and no labels are inferred.
+
+The candidate manifest and editable annotation document live under the
+gitignored path `artifacts/task009/ground_truth/`:
+
+```text
+subset.json
+annotations.json
+images/                 # regenerable PNG derivatives, not source video
+```
+
+Each record keeps the original full-resolution coordinate convention
+(`x` right, `y` down, origin at the top-left) and authoritative media-frame
+identity/PTS from `packets.json`. A visible, non-ambiguous shuttle requires a
+center inside the frame; invisible labels require null coordinates; full
+occlusion is `visible=false, occluded=true`. The center is the shuttle
+head/body, never the cyan trail. Existing annotation files are protected from
+silent subset regeneration; a mismatched record identity fails closed.
+
+### Local annotation UI
+
+The UI is stdlib-only, serves one frame at a time, converts CSS/display clicks
+through the image's natural dimensions, and binds only to loopback. It saves
+each change through a temporary file, `fsync`, and atomic replacement. A
+stale temporary file or concurrent write lock requires review rather than
+overwriting data:
+
+```bash
+python3 -m smashbot_diagnostics perception-label \
+  --manifest artifacts/task009/ground_truth/subset.json \
+  --annotations artifacts/task009/ground_truth/annotations.json
+```
+
+Open the printed `http://127.0.0.1:<port>/` URL. The CLI and annotation
+workflow do not import OpenCV or NumPy.
+
+### Exact offline frames and benchmark scaffold
+
+`smashbot_diagnostics/perception_frames.py` provides bounded-memory FFmpeg
+pipe streaming for sequential, selected, and inclusive frame ranges. It
+uses `packets.json` for frame index/PTS identity, rejects short/extra output
+and decoder failures, and terminates the child process on early cleanup.
+`perception_models.py` contains stable data contracts for future registration,
+candidate, observation, prediction, and track stages; it contains no
+perception algorithm.
+
+`perception_metrics.py` defines baseline-only contracts for recall at 5/10/20
+pixels, matched localization p50/p95, negative-frame false-positive rate and
+FP/frame, longest consecutive miss burst, track fragmentation, reacquisition
+frames/PTS, registration success/residual, algorithm/e2e latency, and
+effective FPS. `perception-benchmark` returns `NOT_READY` when labels or
+explicit predictions are missing and never fills in unlabeled negatives:
+
+```bash
+python3 -m smashbot_diagnostics perception-benchmark \
+  --annotations artifacts/task009/ground_truth/annotations.json \
+  --split dev
+```
+
+No PASS/FAIL thresholds are fixed yet; the first benchmark purpose is a real
+baseline after human annotation. The optional vision dependency was not
+installed on this host because the system Python has no `ensurepip`/pip
+bootstrap and no `uv`, `virtualenv`, `pip`, or `pip3` executable was available.
+The stdlib annotation, frame-stream, and benchmark scaffolding remain usable;
+installing a local Python environment with wheel support is a separate human
+toolchain action. No global packages were changed.
+
 ## Task 003: real-time observe→act loop
 
 Task 003 reuses the accepted official scrcpy v4.1 raw H.264 path and adds a

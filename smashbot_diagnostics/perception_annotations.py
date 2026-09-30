@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -54,20 +55,40 @@ def atomic_write_json(path: Path, value: Any) -> None:
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
-    with temporary.open("w", encoding="utf-8") as handle:
-        handle.write(_json_dump(value))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, path)
+    lock_path = path.with_name(path.name + ".lock")
     try:
-        directory_fd = os.open(path.parent, os.O_RDONLY)
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise AnnotationError(f"concurrent or stale annotation write lock exists: {lock_path}") from exc
+    try:
+        os.close(lock_fd)
     except OSError:
-        return
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+        raise
+    temporary = path.with_name(path.name + ".tmp")
     try:
-        os.fsync(directory_fd)
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(_json_dump(value))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
-        os.close(directory_fd)
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            pass
 
 
 def load_json_with_recovery(path: Path) -> Any:
@@ -75,8 +96,16 @@ def load_json_with_recovery(path: Path) -> Any:
 
     path = Path(path)
     temporary = path.with_name(path.name + ".tmp")
+    if path.exists() and temporary.exists():
+        raise AnnotationError(f"stale annotation temporary file requires review: {temporary}")
     if not path.exists() and temporary.exists():
+        try:
+            with temporary.open("r", encoding="utf-8") as handle:
+                recovered = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AnnotationError(f"annotation recovery temporary file is invalid: {temporary}") from exc
         os.replace(temporary, path)
+        return recovered
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
@@ -95,6 +124,8 @@ def css_to_image_coordinates(
         raise AnnotationError("display dimensions must be positive")
     if natural_width <= 0 or natural_height <= 0:
         raise AnnotationError("natural image dimensions must be positive")
+    if not (0 <= float(click_x) < float(display_width) and 0 <= float(click_y) < float(display_height)):
+        raise AnnotationError("click is outside the displayed image")
     x = float(click_x) * natural_width / float(display_width)
     y = float(click_y) * natural_height / float(display_height)
     return x, y
@@ -121,6 +152,7 @@ def validate_annotation_record(
         "pts_us",
         "active_rally",
         "shuttle",
+        "tags",
     }
     missing = sorted(required - record.keys())
     if missing:
@@ -146,13 +178,22 @@ def validate_annotation_record(
         if key not in shuttle:
             raise AnnotationError(f"shuttle missing field: {key}")
 
+    tags = record["tags"]
+    if not isinstance(tags, list) or any(not isinstance(tag, str) or len(tag) > 128 for tag in tags):
+        raise AnnotationError("tags must be a list of short strings")
     active_rally = record["active_rally"]
     visible = shuttle["visible"]
-    if allow_unlabeled and (active_rally is None or visible is None):
+    if active_rally is None or visible is None:
+        if not allow_unlabeled:
+            raise AnnotationError("active_rally and shuttle.visible must be labeled")
         if active_rally is not None and not isinstance(active_rally, bool):
             raise AnnotationError("active_rally must be boolean or null while unlabeled")
         if visible is not None and not isinstance(visible, bool):
             raise AnnotationError("shuttle.visible must be boolean or null while unlabeled")
+        if not isinstance(shuttle["ambiguous"], bool) or not isinstance(shuttle["occluded"], bool):
+            raise AnnotationError("ambiguous and occluded must be boolean")
+        if shuttle["center_x"] is not None or shuttle["center_y"] is not None:
+            raise AnnotationError("unlabeled records must have null center coordinates")
         return
     if not isinstance(active_rally, bool):
         raise AnnotationError("active_rally must be boolean")
@@ -413,6 +454,7 @@ def build_ground_truth_subset(
     output_root: Path,
     ffmpeg: str,
     extract_images: bool = True,
+    replace_annotations: bool = False,
 ) -> dict[str, Any]:
     """Create the frozen 136-record subset and optional PNG derivatives."""
 
@@ -431,7 +473,8 @@ def build_ground_truth_subset(
         active_sources.append(_load_burst(burst_path, repo_root))
     negative_run = task008_root / "20260930T192911Z"
     negative_source = _load_negative_source(negative_run, repo_root)
-    width, height = _load_dimensions(task008_root / "20260930T191744Z")
+    first_source_run = repo_root / Path(active_sources[0]["source_h264"]).parent
+    width, height = _load_dimensions(first_source_run)
     records = build_candidate_records(active_sources, negative_source, width=width, height=height)
 
     output_root.mkdir(parents=True, exist_ok=True)
@@ -502,8 +545,20 @@ def build_ground_truth_subset(
             for record in records
         ],
     }
-    validate_annotations_document(annotations, width=width, height=height, allow_unlabeled=True)
-    atomic_write_json(output_root / "annotations.json", annotations)
+    annotations_path = output_root / "annotations.json"
+    if annotations_path.exists() or annotations_path.with_name(annotations_path.name + ".tmp").exists():
+        existing = load_json_with_recovery(annotations_path)
+        validate_annotations_document(existing, width=width, height=height, allow_unlabeled=True)
+        existing_ids = [record.get("record_id") for record in existing.get("records", [])]
+        candidate_ids = [record["record_id"] for record in annotations["records"]]
+        if existing_ids != candidate_ids:
+            raise AnnotationError("existing annotations do not match the frozen subset; refusing replacement")
+        if replace_annotations:
+            atomic_write_json(annotations_path, annotations)
+        # Existing annotations, including partial or complete labels, are authoritative.
+    else:
+        validate_annotations_document(annotations, width=width, height=height, allow_unlabeled=True)
+        atomic_write_json(annotations_path, annotations)
     return subset
 
 
@@ -517,6 +572,7 @@ def _html() -> str:
 <button onclick="setActive(true)">Active rally yes</button><button onclick="setActive(false)">Active rally no</button>
 <button onclick="setVisible(true)">Visible</button><button onclick="setVisible(false)">Invisible</button>
 <button onclick="setFlag('ambiguous')">Toggle ambiguous</button><button onclick="setFlag('occluded')">Toggle occluded</button>
+<input id="tags" placeholder="tags comma-separated"><button onclick="setTags()">Save tags</button>
 </div><p>Click the shuttle head/body, never the cyan trail. Labels save after every change.</p>
 <script>
 let state=null;
@@ -527,6 +583,7 @@ function move(delta){return save({move:delta});}
 function setActive(value){return save({active_rally:value});}
 function setVisible(value){return save({'shuttle.visible':value});}
 function setFlag(name){return save({[name]:!state.record.shuttle[name]});}
+function setTags(){return save({tags:document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean)});}
 document.getElementById('frame').addEventListener('click',e=>{let r=e.currentTarget.getBoundingClientRect();let x=(e.clientX-r.left)*e.currentTarget.naturalWidth/r.width;let y=(e.clientY-r.top)*e.currentTarget.naturalHeight/r.height;save({'shuttle.visible':true,'shuttle.center_x':x,'shuttle.center_y':y});});
 load();
 </script>"""
@@ -578,9 +635,11 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 64 * 1024:
+                raise AnnotationError("annotation request body is too large")
             patch = json.loads(self.rfile.read(length).decode("utf-8"))
             self._send_json(self.server.apply(patch))
-        except (AnnotationError, json.JSONDecodeError, ValueError) as exc:
+        except (AnnotationError, json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
             self._send_json({"error": str(exc)}, status=400)
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -625,10 +684,33 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
     def apply(self, patch: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(patch, dict):
             raise AnnotationError("annotation patch must be an object")
+        allowed = {"move", "active_rally", "ambiguous", "occluded", "shuttle.visible", "shuttle.center_x", "shuttle.center_y", "tags"}
+        unknown = set(patch) - allowed
+        if unknown:
+            raise AnnotationError(f"unknown annotation patch fields: {', '.join(sorted(unknown))}")
+        if "move" in patch and (isinstance(patch["move"], bool) or int(patch["move"]) not in {-1, 1}):
+            raise AnnotationError("move must be -1 or 1")
+        for key in ("active_rally", "ambiguous", "occluded"):
+            if key in patch and not isinstance(patch[key], bool):
+                raise AnnotationError(f"{key} must be boolean")
+        for key in ("shuttle.visible", "shuttle.center_x", "shuttle.center_y"):
+            if key in patch and patch[key] is not None and not _is_number(patch[key]) and key != "shuttle.visible":
+                raise AnnotationError(f"{key} must be numeric or null")
+        if "shuttle.visible" in patch and not isinstance(patch["shuttle.visible"], bool):
+            raise AnnotationError("shuttle.visible must be boolean")
+        if patch.get("shuttle.visible") is False and any(
+            patch.get(key) is not None for key in ("shuttle.center_x", "shuttle.center_y")
+        ):
+            raise AnnotationError("invisible shuttle cannot include center coordinates")
+        if "tags" in patch and (not isinstance(patch["tags"], list) or len(patch["tags"]) > 32):
+            raise AnnotationError("tags must be a list of at most 32 strings")
+        if "tags" in patch and any(not isinstance(tag, str) or len(tag) > 128 for tag in patch["tags"]):
+            raise AnnotationError("tags must contain short strings")
         if "move" in patch:
             move = int(patch["move"])
             self._cursor = max(0, min(len(self.records) - 1, self._cursor + move))
-        record = self._annotation_by_id[self.records[self._cursor]["record_id"]]
+        record_id = self.records[self._cursor]["record_id"]
+        record = deepcopy(self._annotation_by_id[record_id])
         if "active_rally" in patch:
             record["active_rally"] = patch["active_rally"]
         for key in ("ambiguous", "occluded"):
@@ -638,13 +720,23 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             dotted = f"shuttle.{key}"
             if dotted in patch:
                 record["shuttle"][key] = patch[dotted]
+        if record["shuttle"]["visible"] is False:
+            record["shuttle"]["center_x"] = None
+            record["shuttle"]["center_y"] = None
         if "tags" in patch:
             if not isinstance(patch["tags"], list) or not all(isinstance(tag, str) for tag in patch["tags"]):
                 raise AnnotationError("tags must be a list of strings")
             record["tags"] = patch["tags"]
-        validate_annotations_document(self.annotations, width=self.width, height=self.height, allow_unlabeled=True)
-        self.annotations["status"] = "in_progress"
-        atomic_write_json(self.annotations_path, self.annotations)
+        candidate_document = deepcopy(self.annotations)
+        candidate_document["records"] = [
+            record if item["record_id"] == record_id else item
+            for item in candidate_document["records"]
+        ]
+        validate_annotations_document(candidate_document, width=self.width, height=self.height, allow_unlabeled=True)
+        candidate_document["status"] = "in_progress"
+        atomic_write_json(self.annotations_path, candidate_document)
+        self.annotations = candidate_document
+        self._annotation_by_id = {item["record_id"]: item for item in self.annotations["records"]}
         return self.state()
 
 

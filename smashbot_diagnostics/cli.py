@@ -22,6 +22,7 @@ from .perception import (
     validate_capture_duration,
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
+from .perception_benchmark import benchmark_report, write_benchmark_report
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -237,6 +238,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write manifests only; do not regenerate PNG derivatives",
     )
+    subset.add_argument(
+        "--replace-annotations",
+        action="store_true",
+        help="explicitly replace an existing annotations.json with an unlabeled skeleton",
+    )
 
     label = subparsers.add_parser(
         "perception-label",
@@ -245,6 +251,15 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("--manifest", type=Path, required=True)
     label.add_argument("--annotations", type=Path, required=True)
     label.add_argument("--port", type=_nonnegative_int, default=0)
+
+    benchmark = subparsers.add_parser(
+        "perception-benchmark",
+        help="validate annotations and optional explicit predictions without running a detector",
+    )
+    benchmark.add_argument("--annotations", type=Path, required=True)
+    benchmark.add_argument("--predictions", type=Path)
+    benchmark.add_argument("--split", choices=("all", "dev", "holdout"), default="all")
+    benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/benchmark"))
     return parser
 
 
@@ -1317,6 +1332,7 @@ def _perception_subset(args: argparse.Namespace) -> int:
         output_root=args.output_base,
         ffmpeg=args.ffmpeg,
         extract_images=not args.no_extract,
+        replace_annotations=args.replace_annotations,
     )
     print(f"Subset manifest: {Path(args.output_base) / 'subset.json'}")
     print(f"Annotations: {Path(args.output_base) / 'annotations.json'}")
@@ -1327,6 +1343,19 @@ def _perception_subset(args: argparse.Namespace) -> int:
 def _perception_label(args: argparse.Namespace) -> int:
     run_annotation_ui(args.manifest, args.annotations, port=args.port)
     return 0
+
+
+def _perception_benchmark(args: argparse.Namespace) -> int:
+    report = benchmark_report(
+        args.annotations,
+        args.predictions,
+        split=None if args.split == "all" else args.split,
+    )
+    report_path, summary_path = write_benchmark_report(report, args.output_base)
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    print(f"Status: {report['status']}")
+    return 0 if report["status"] == "COMPLETED" else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1353,6 +1382,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_subset(args)
         if args.command == "perception-label":
             return _perception_label(args)
+        if args.command == "perception-benchmark":
+            return _perception_benchmark(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2
