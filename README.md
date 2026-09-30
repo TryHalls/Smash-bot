@@ -284,6 +284,53 @@ implementation and its host tests remain available as diagnostic
 infrastructure, and further transport investigation is deferred to Task 005 /
 Issue #8.
 
+## Task 005: video-path latency decomposition
+
+Task 005 keeps the following frozen: scrcpy v4.1 and its verified server
+identity, persistent `scrcpy-control`, framed H.264 at max size 1920 and max
+FPS 60, Wireless ADB, Pointer Location, the causal A/B/C target sequence, the
+450 ms gesture, the detector/ROI/thresholds, and the accepted raw-H.264
+production path. It does not run SMASH or add another control transport.
+
+The host-only cardinality validation on the real device H.264 sample passed
+for all diagnostic decoder profiles: 135 non-config media AUs produced 135 raw
+frames, with `has_b_frames=0`, zero pending FIFO entries at EOF, zero decoded
+frames without a packet, zero overflow, and zero invariant failures. The
+`fps_passthrough` profile showed no advantage and is not included in the
+physical A/B.
+
+The final causal physical reports are preserved without rewriting their formal
+classification:
+
+- `artifacts/task005_ab_causal_baseline/20260930T125526Z/report.json`:
+  `baseline_current`, `stage_b.status = INCONCLUSIVE`.
+- `artifacts/task005_ab_causal_low_delay/20260930T125639Z/report.json`:
+  `scrcpy_low_delay`, `stage_b.status = INCONCLUSIVE`.
+
+Both runs recorded 5/5 control writes, 5/5 current-target detections, 5/5
+pointer-up recoveries, 5/5 stable masked-background checks, exact restoration
+of `pointer_location=null` and `show_touches=0`, and no video/control
+disconnects or write/scheduling/decode/framing errors. They remain
+`INCONCLUSIVE` because the historical quiescent-baseline gate was not reached
+in any trial; no classifier, detector, threshold, or raw result was changed.
+
+The separate architectural conclusion is:
+
+- `packet_to_decode` median improved from 135.867 ms to 57.422 ms, a
+  78.445 ms (approximately 57.7%) reduction.
+- FIFO depth at dispatch fell from 7 to 2, maximum FIFO depth from 12 to 7,
+  and pending cleanup from 6 to 1.
+- Total visible median improved from 248.631 ms to 220.105 ms.
+- Under `scrcpy_low_delay`, the median T0-to-packet interval was 149.256 ms
+  and the median packet-to-decode interval was 57.422 ms.
+
+This shows that host decoding was a material part of the latency, but is no
+longer dominant; the next bottleneck is before the relevant packet reaches
+the host. The historical quiescent-baseline gate is therefore superseded
+architecturally by causal A/B/C target identity for the next experiment. This
+does not rewrite either physical run or change its formal `INCONCLUSIVE`
+status.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
