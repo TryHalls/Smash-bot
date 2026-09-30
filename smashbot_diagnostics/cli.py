@@ -597,6 +597,125 @@ def _stream_summary(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _calibration_decode_error_count(source_diagnostics: dict[str, Any]) -> int:
+    explicit = source_diagnostics.get("decode_failures")
+    if isinstance(explicit, (int, float)):
+        return int(explicit)
+    error_words = ("error", "corrupt", "invalid", "failed")
+    return sum(
+        1
+        for line in source_diagnostics.get("decoder_stderr", [])
+        if any(word in str(line).lower() for word in error_words)
+    )
+
+
+def classify_calibration_stages(calibration: dict[str, Any]) -> dict[str, Any]:
+    """Classify the reporting-only Stage A and Stage B calibration gates.
+
+    Stage A is applicable only to the five-trial pilot.  Stage B is independent
+    and is therefore the sole classification used for a 30-trial run.
+    """
+
+    configuration = calibration.get("configuration", {})
+    statistics = calibration.get("statistics", {})
+    source = calibration.get("source_diagnostics", {})
+    control = calibration.get("control_diagnostics", {})
+    settings_restored = calibration.get("settings_restoration", {}).get("success") is True
+    trial_attempted = int(statistics.get("trial_gestures_attempted", configuration.get("trials_requested", 0)) or 0)
+    trial_written = int(
+        statistics.get("control_writes", {}).get("trial_successful", statistics.get("trial_gestures_dispatched", 0))
+        or 0
+    )
+    valid_trials = int(statistics.get("structurally_valid_trials", statistics.get("valid_trials", 0)) or 0)
+    detected_trials = int(statistics.get("detected_trials", 0) or 0)
+    detection_rate = float(statistics.get("detection_success_rate", 0.0) or 0.0)
+    marker_off_recovered = int(statistics.get("marker_off_recovered_trials", 0) or 0)
+    background_stable = int(statistics.get("background_stable_trials", 0) or 0)
+    no_video_disconnect = source.get("disconnect_at_monotonic_seconds") is None
+    no_control_disconnect = int(control.get("unexpected_disconnects", 0) or 0) == 0
+    write_errors = len(control.get("write_errors", [])) + sum(
+        1 for trial in calibration.get("trials", []) if trial.get("gesture", {}).get("control_write_error")
+    )
+    scheduling_errors = len(control.get("scheduling_errors", [])) + sum(
+        1 for trial in calibration.get("trials", []) if trial.get("gesture", {}).get("scheduling_error")
+    )
+    decode_errors = _calibration_decode_error_count(source)
+    exact_five_trial_pilot = int(configuration.get("trials_requested", trial_attempted) or 0) == 5
+    stage_a_criteria = {
+        "five_control_writes": trial_attempted == 5 and trial_written == 5,
+        "five_structurally_valid_trials": valid_trials == 5,
+        "at_least_four_crosshair_detections": detected_trials >= 4,
+        "five_pointer_up_recoveries": marker_off_recovered == 5,
+        "masked_background_stable": background_stable == 5,
+        "settings_restored_exactly": settings_restored,
+        "no_video_disconnect": no_video_disconnect,
+        "no_control_disconnect": no_control_disconnect,
+        "zero_write_errors": write_errors == 0,
+        "zero_scheduling_errors": scheduling_errors == 0,
+        "zero_decode_errors": decode_errors == 0,
+    }
+    stage_a = {
+        "status": "NOT_APPLICABLE"
+        if not exact_five_trial_pilot
+        else "PASS" if all(stage_a_criteria.values()) else "FAIL",
+        "criteria": stage_a_criteria if exact_five_trial_pilot else {},
+        "interpretation": (
+            "Stage A classification is limited to the five-trial static pilot"
+            if exact_five_trial_pilot
+            else "Stage A is not classified for this run; use the independent Stage B result"
+        ),
+    }
+
+    structural_validity = valid_trials >= 30
+    detection_validity = detection_rate >= 0.95
+    median_latency = statistics.get("median_latency_ms")
+    p95_latency = statistics.get("p95_latency_ms")
+    latency_available = median_latency is not None and p95_latency is not None
+    stage_b_criteria = {
+        "at_least_30_structurally_valid_trials": structural_validity,
+        "at_least_95_percent_crosshair_detection": detection_validity,
+        "median_under_150ms": latency_available and float(median_latency) < 150,
+        "p95_under_250ms": latency_available and float(p95_latency) < 250,
+        "settings_restored_exactly": settings_restored,
+        "no_video_disconnect": no_video_disconnect,
+        "no_control_disconnect": no_control_disconnect,
+        "zero_write_errors": write_errors == 0,
+        "zero_scheduling_errors": scheduling_errors == 0,
+        "zero_decode_errors": decode_errors == 0,
+    }
+    validity_sufficient = structural_validity and detection_validity and latency_available
+    if not validity_sufficient:
+        stage_b_status = "INCONCLUSIVE"
+    elif all(stage_b_criteria.values()):
+        stage_b_status = "PASS"
+    else:
+        stage_b_status = "FAIL"
+    stage_b = {
+        "status": stage_b_status,
+        "criteria": stage_b_criteria,
+        "measurement_valid": validity_sufficient,
+        "metrics": {
+            "trials_attempted": trial_attempted,
+            "structurally_valid_trials": valid_trials,
+            "detected_trials": detected_trials,
+            "detection_success_rate": detection_rate,
+            "median_latency_ms": median_latency,
+            "p95_latency_ms": p95_latency,
+            "min_latency_ms": statistics.get("min_latency_ms"),
+            "max_latency_ms": statistics.get("max_latency_ms"),
+            "write_errors": write_errors,
+            "scheduling_errors": scheduling_errors,
+            "decode_errors": decode_errors,
+        },
+        "interpretation": (
+            "Stage B is INCONCLUSIVE until structural validity, detection, and latency metrics are available"
+            if stage_b_status == "INCONCLUSIVE"
+            else "Stage B latency/control gate is evaluable"
+        ),
+    }
+    return {"stage_a": stage_a, "stage_b": stage_b}
+
+
 def _realtime_benchmark(args: argparse.Namespace) -> int:
     if not args.static_screen_confirmed:
         raise ValueError("realtime-benchmark requires --static-screen-confirmed on a safe static Android screen")
@@ -615,6 +734,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         "generated_at_utc": utc_now(),
         "command": "realtime-benchmark",
         "transport_policy": "input control transport is explicit; no fallback control transport is attempted",
+        "control_transport": args.control_transport,
+        "fallback_attempted": False,
         "human_prerequisite": "safe static portrait Android launcher for calibration, then offline/bot SMASH match with continuous movement",
         "capability": capability,
         "configuration": {
@@ -647,7 +768,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
                 "failure_evidence": {
                     "reason": "required ADB, scrcpy v4.1, or FFmpeg capability unavailable",
                     "capability_failures": capability.get("failures", []),
-                    "alternative_control_transport_attempted": False,
+                    "control_transport": args.control_transport,
+                    "fallback_attempted": False,
                 },
                 "concurrent": {"status": "not_run"},
                 "calibration": {"status": "not_run"},
@@ -669,7 +791,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
                 "failure_evidence": {
                     "reason": "verified official scrcpy v4.1 server unavailable",
                     "server": server,
-                    "alternative_control_transport_attempted": False,
+                    "control_transport": args.control_transport,
+                    "fallback_attempted": False,
                 },
                 "concurrent": {"status": "not_run"},
                 "calibration": {"status": "not_run"},
@@ -701,19 +824,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
         calibration_stats = report["calibration"].get("statistics", {})
-        control_writes = calibration_stats.get("control_writes", {})
-        stage_a_criteria = {
-            "five_control_writes": control_writes.get("trial_successful", 0) == 5
-            and control_writes.get("trial_attempted", 0) == 5,
-            "five_structurally_valid_trials": calibration_stats.get("structurally_valid_trials", 0) == 5,
-            "at_least_four_crosshair_detections": calibration_stats.get("detected_trials", 0) >= 4,
-            "five_pointer_up_recoveries": calibration_stats.get("marker_off_recovered_trials", 0) == 5,
-            "masked_background_stable": calibration_stats.get("background_stable_trials", 0) == 5,
-            "settings_restored_exactly": report["calibration"].get("settings_restoration", {}).get("success") is True,
-            "no_video_disconnect": calibration_source.get("disconnect_at_monotonic_seconds") is None,
-            "no_control_disconnect": report["calibration"].get("control_diagnostics", {}).get("unexpected_disconnects", 0) == 0,
-        }
-        stage_a_pass = all(stage_a_criteria.values())
+        stage_reports = classify_calibration_stages(report["calibration"])
         calibration_valid = (
             calibration_stats.get("valid_trials", 0) >= 30
             and calibration_stats.get("detection_success_rate", 0) >= 0.95
@@ -746,15 +857,12 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
                     "interpretation": "calibration-only evidence; moving-source gates intentionally unmeasured",
                 },
                 "status": "INCONCLUSIVE",
-                "stage_a": {
-                    "status": "PASS" if stage_a_pass else "FAIL",
-                    "criteria": stage_a_criteria,
-                    "interpretation": "Stage A pilot only; 30-trial latency and moving-source gates remain unmeasured",
-                },
+                **stage_reports,
                 "failure_evidence": {
                     "reason": "moving-source phases intentionally skipped by --calibration-only",
                     "calibration_validity": calibration_valid,
-                    "alternative_control_transport_attempted": False,
+                    "control_transport": args.control_transport,
+                    "fallback_attempted": False,
                 },
             }
         )
@@ -793,7 +901,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
                 "status": "INCONCLUSIVE",
                 "failure_evidence": {
                     "reason": "moving offline/bot SMASH source was not confirmed; throughput/freshness not run",
-                    "alternative_control_transport_attempted": False,
+                    "control_transport": args.control_transport,
+                    "fallback_attempted": False,
                 },
                 "concurrent": {"status": "not_run", "source_phase": "moving_smash_required"},
                 "freshness": {"status": "not_run", "source_phase": "moving_smash_required"},
@@ -852,7 +961,8 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "gesture_statistics": report["concurrent"].get("gestures", {}).get("statistics", {}),
             "calibration_statistics": report["calibration"].get("statistics", {}),
             "freshness_frame_age": report["freshness"].get("source", {}).get("consumed_frame_age_ms", {}),
-            "alternative_control_transport_attempted": False,
+            "control_transport": args.control_transport,
+            "fallback_attempted": False,
         }
     _write_realtime_report(run_dir, report)
     print(f"Report: {run_dir / 'report.json'}")
@@ -876,7 +986,7 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
         f"Status: {report.get('status', 'unknown')}",
         f"Device: {_value(report.get('capability', {}).get('adb'), 'selected_serial')}",
         f"Transport: {_value(report.get('capability', {}).get('adb'), 'transport')}",
-        f"Control transport: {control_transport}; no fallback attempted",
+        f"Control transport: {control_transport}; fallback_attempted={report.get('fallback_attempted', False)}",
         f"Moving source confirmed: {_value(report.get('moving_source_confirmation'), 'confirmed')}",
         f"Queue capacity: {_value(report.get('source_contract'), 'queue_capacity')}",
         f"Concurrent: {_value(report.get('concurrent'), 'status')}",
@@ -911,6 +1021,9 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
     if report.get("stage_a"):
         stage_a = report["stage_a"]
         lines.append(f"Stage A: {stage_a.get('status')}; criteria={stage_a.get('criteria')}")
+    if report.get("stage_b"):
+        stage_b = report["stage_b"]
+        lines.append(f"Stage B: {stage_b.get('status')}; criteria={stage_b.get('criteria')}")
         lines.append(
             "Calibration structure: "
             f"dispatched={calibration.get('trial_gestures_dispatched')}/{calibration.get('trial_gestures_attempted')}; "
