@@ -1,10 +1,13 @@
 import time
 import unittest
 import struct
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from smashbot_diagnostics.framed_video import H264PacketMerger, PACKET_FLAG_CONFIG
+from smashbot_diagnostics.perception import _FramedCaptureRecorder
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
@@ -871,6 +874,105 @@ class RealtimeTests(unittest.TestCase):
         for packet in packets:
             source._packet_observer(packet)
         self.assertEqual([packet.payload for packet in observed], [b"cfg", b"media"])
+
+    def test_health_snapshot_is_bounded_and_does_not_copy_histories(self):
+        source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+        source._frame_associations.extend({"decoded_frame_index": index} for index in range(3))
+        source._packet_metadata.extend({"packet_sequence_index": index} for index in range(3))
+
+        snapshot = source.health_snapshot()
+
+        self.assertEqual(snapshot["packet_count"], 0)
+        self.assertEqual(snapshot["associated_frame_count"], 0)
+        self.assertNotIn("frame_associations", snapshot)
+        self.assertNotIn("packet_metadata", snapshot)
+
+    def test_packet_observer_exception_stops_relay_fail_closed(self):
+        class RecordingStdin:
+            def write(self, payload):
+                return None
+
+            def flush(self):
+                return None
+
+            def close(self):
+                return None
+
+        class RecordingConnection:
+            def recv(self, size):
+                return struct.pack(">QI", PACKET_FLAG_CONFIG, 3) + b"cfg"
+
+        source = FramedH264FrameSource(
+            FakeAdb(), "ffmpeg", "/missing/server",
+            packet_observer=lambda packet: (_ for _ in ()).throw(RuntimeError("observer boom")),
+        )
+        source._decoder = SimpleNamespace(stdin=RecordingStdin())
+        source._connection = RecordingConnection()
+
+        source._relay()
+
+        self.assertTrue(source._stop.is_set())
+        self.assertEqual(source._disconnect.reason, "packet_observer_error")
+        self.assertIn("packet observer failed", source._framing_error)
+
+    def test_terminal_observer_packet_is_written_dispatched_associated_and_stops_before_next(self):
+        class RecordingStdin:
+            def __init__(self):
+                self.writes = []
+                self.closed = False
+
+            def write(self, payload):
+                self.writes.append(bytes(payload))
+
+            def flush(self):
+                return None
+
+            def close(self):
+                self.closed = True
+
+        class RecordingConnection:
+            def __init__(self, chunk):
+                self.chunk = chunk
+                self.calls = 0
+
+            def recv(self, size):
+                self.calls += 1
+                if self.calls == 1:
+                    return self.chunk
+                return b""
+
+        def wire(flags, payload):
+            return struct.pack(">QI", flags, len(payload)) + payload
+
+        with TemporaryDirectory() as directory:
+            recorder = _FramedCaptureRecorder(Path(directory) / "capture.framed", 1)
+            observed = []
+
+            def observe(packet):
+                observed.append(packet)
+                return recorder.observe(packet)
+
+            source = FramedH264FrameSource(
+                FakeAdb(), "ffmpeg", "/missing/server",
+                packet_observer=observe,
+            )
+            stdin = RecordingStdin()
+            source._decoder = SimpleNamespace(stdin=stdin)
+            source._connection = RecordingConnection(
+                wire(PACKET_FLAG_CONFIG, b"cfg")
+                + wire(0, b"media0")
+                + wire(1, b"media1")
+                + wire(2, b"next")
+            )
+            source._relay()
+            recorder.close()
+            self.assertEqual([packet.payload for packet in observed], [b"cfg", b"media0", b"media1"])
+            self.assertEqual(stdin.writes, [b"cfgmedia0", b"media1"])
+            self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 2)
+            self.assertTrue(source._relay_completed)
+            self.assertEqual(source._connection.calls, 1)
+            self.assertIsNotNone(source._associate_decoded_frame(0, 2.0))
+            self.assertEqual(source.association_diagnostics()["associated_frame_count"], 1)
 
     def test_live_config_packet_is_not_written_or_queued(self):
         from smashbot_diagnostics.framed_video import FramedVideoParser, PACKET_FLAG_CONFIG

@@ -8,7 +8,6 @@ validation and sample extraction happen offline.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import math
@@ -44,6 +43,7 @@ DEFAULT_DURATION_SECONDS = 20.0
 MIN_FREE_BYTES = 500 * 1024 * 1024
 SAMPLE_COUNT = 12
 FRAMED_CAPTURE_WATCHDOG_SECONDS = 30.0
+FRAMED_CAPTURE_WATCHDOG_MULTIPLIER = 3.0
 
 
 class PerceptionCaptureError(ValueError):
@@ -279,6 +279,15 @@ class _FramedCaptureRecorder:
     def wait(self, timeout_seconds: float) -> bool:
         return self._complete.wait(timeout_seconds)
 
+    @property
+    def complete(self) -> bool:
+        return self._complete.is_set()
+
+    @property
+    def media_count(self) -> int:
+        with self._lock:
+            return self._media_count
+
     def close(self) -> None:
         with self._lock:
             if not self._closed:
@@ -319,12 +328,24 @@ def _write_packets_and_h264(framed_path: Path, h264_path: Path, packets_path: Pa
     output = bytearray()
     previous_pts: int | None = None
     config_count = 0
+    packet_records: list[dict[str, Any]] = []
     for packet in packets:
         if packet.is_session:
             raise FramedVideoParseError("unexpected session packet in capture.framed")
+        packet_record: dict[str, Any] = {
+            "packet_sequence_index": packet.sequence_index,
+            "packet_type": "CONFIG" if packet.is_config else "media",
+            "flags": packet.flags,
+            "is_config": packet.is_config,
+            "is_key_frame": packet.is_key_frame,
+            "scrcpy_pts_us": None if packet.is_config else packet.pts_us,
+            "payload_size": packet.payload_size,
+            "payload_sha256": hashlib.sha256(packet.payload).hexdigest(),
+        }
         if packet.is_config:
             config_count += 1
             merger.merge(packet)
+            packet_records.append(packet_record)
             continue
         if packet.pts_us is None:
             raise FramedVideoParseError(f"media packet {packet.sequence_index} has no PTS")
@@ -338,16 +359,13 @@ def _write_packets_and_h264(framed_path: Path, h264_path: Path, packets_path: Pa
         output.extend(merged)
         media_records.append(
             {
-                "packet_sequence_index": packet.sequence_index,
+                **packet_record,
                 "media_frame_index": len(media_records),
-                "scrcpy_pts_us": packet.pts_us,
-                "key_frame": packet.is_key_frame,
-                "original_payload_bytes": len(packet.payload),
-                "original_payload_base64": base64.b64encode(packet.payload).decode("ascii"),
                 "derived_h264_offset": offset,
                 "derived_h264_size": len(merged),
             }
         )
+        packet_records.append(media_records[-1])
     h264_path.write_bytes(bytes(output))
     write_json(
         packets_path,
@@ -358,6 +376,7 @@ def _write_packets_and_h264(framed_path: Path, h264_path: Path, packets_path: Pa
             "packet_count": len(packets),
             "config_packet_count": config_count,
             "media_packet_count": len(media_records),
+            "packets": packet_records,
             "media_packets": media_records,
         },
     )
@@ -412,6 +431,9 @@ def _validate_framed_capture(
     decoded_frame_count = _parse_int(stream.get("nb_read_frames"))
     if decoded_frame_count is None:
         reasons.append("ffprobe did not report decoded/read frame count")
+    decoded_packet_count = _parse_int(stream.get("nb_read_packets"))
+    if decoded_packet_count is None:
+        reasons.append("ffprobe did not report decoded/read packet count")
     media_count = len(media_packets)
     if config_packet_count < 1:
         reasons.append("capture contains no CONFIG packet")
@@ -426,6 +448,8 @@ def _validate_framed_capture(
             reasons.append("PTS span is shorter than requested duration")
     if decoded_frame_count != media_count:
         reasons.append(f"decoded/read frame count {decoded_frame_count} differs from media AU count {media_count}")
+    if decoded_packet_count != media_count:
+        reasons.append(f"decoded/read packet count {decoded_packet_count} differs from media AU count {media_count}")
     return {
         "status": "PASS" if not reasons else "FAIL",
         "valid": not reasons,
@@ -435,6 +459,7 @@ def _validate_framed_capture(
         "height": height,
         "has_b_frames": has_b_frames,
         "decoded_frame_count": decoded_frame_count,
+        "decoded_packet_count": decoded_packet_count,
         "media_au_count": media_count,
         "config_packet_count": config_packet_count,
         "pts_span_us": span_us,
@@ -648,33 +673,47 @@ def run_perception_capture(
             )
             source.start(control=False)
             report["source"]["started"] = True
-            watchdog = duration * 3 + FRAMED_CAPTURE_WATCHDOG_SECONDS
+            watchdog = duration * FRAMED_CAPTURE_WATCHDOG_MULTIPLIER + FRAMED_CAPTURE_WATCHDOG_SECONDS
             deadline = time.monotonic() + watchdog
-            while not recorder._complete.is_set() and time.monotonic() < deadline:
-                diagnostics = source.stats()
-                if diagnostics.get("disconnect_reason") and not diagnostics.get("framed_video", {}).get("relay_completed"):
+            while not recorder.complete and time.monotonic() < deadline:
+                diagnostics = source.health_snapshot()
+                if diagnostics.get("disconnect_reason") and not diagnostics.get("relay_completed"):
                     report["failure_reasons"].append(f"source/disconnect failure: {diagnostics['disconnect_reason']}")
                     break
                 time.sleep(0.02)
-            if not recorder._complete.is_set() and not report["failure_reasons"]:
+            if not recorder.complete and not report["failure_reasons"]:
                 report["failure_reasons"].append("framed capture watchdog expired before requested PTS span")
-            if recorder._complete.is_set() and not report["failure_reasons"]:
+            if recorder.complete and not report["failure_reasons"]:
                 drain_deadline = time.monotonic() + max(10.0, duration)
                 while time.monotonic() < drain_deadline:
-                    association = source.association_diagnostics()
-                    if association.get("associated_frame_count") == recorder._media_count and association.get("pending_media_packets") == 0:
+                    health = source.health_snapshot()
+                    if health.get("associated_frame_count") == recorder.media_count and health.get("pending_media_packets") == 0:
                         break
                     time.sleep(0.02)
-                association = source.association_diagnostics()
-                if association.get("associated_frame_count") != recorder._media_count or association.get("pending_media_packets") != 0:
+                health = source.health_snapshot()
+                if health.get("associated_frame_count") != recorder.media_count or health.get("pending_media_packets") != 0:
                     report["failure_reasons"].append("decoder/source did not drain all media AUs before capture close")
-            report["stages"]["stage_a"] = {"status": "PASS" if recorder._complete.is_set() and not report["failure_reasons"] else "FAIL", "capture_started": True}
+            report["stages"]["stage_a"] = {"status": "PASS" if recorder.complete and not report["failure_reasons"] else "FAIL", "capture_started": True}
         except (OSError, RealtimeError, FramedVideoParseError, RuntimeError, ValueError) as exc:
             report["failure_reasons"].append(f"framed source failure: {exc}")
             report["stages"]["stage_a"] = {"status": "FAIL", "capture_started": True}
         finally:
             if source is not None:
-                source_diagnostics = source.stats()
+                try:
+                    report["cleanup"] = source.stop()
+                except Exception as exc:
+                    report["cleanup"] = {"cleanup_success": False, "cleanup_errors": [str(exc)]}
+                if not report["cleanup"].get("cleanup_success") or report["cleanup"].get("cleanup_errors"):
+                    report["failure_reasons"].extend(
+                        f"cleanup failure: {error}" for error in report["cleanup"].get("cleanup_errors", [])
+                    )
+                    if not report["cleanup"].get("cleanup_errors"):
+                        report["failure_reasons"].append("cleanup failure: source cleanup_success=false")
+                try:
+                    source_diagnostics = source.stats()
+                except Exception as exc:
+                    source_diagnostics = {"framed_video": {}, "frame_association": {}}
+                    report["failure_reasons"].append(f"source final diagnostics failed: {exc}")
                 report["source_diagnostics"] = source_diagnostics
                 report["stdout_tail"] = _tail("\n".join(source_diagnostics.get("server_stdout", [])))
                 report["stderr_tail"] = _tail("\n".join(source_diagnostics.get("server_stderr", [])))
@@ -690,7 +729,8 @@ def run_perception_capture(
                     report["failure_reasons"].extend(association_diagnostics["invariant_failures"])
                 if association_diagnostics.get("decode_errors", 0):
                     report["failure_reasons"].append("decoder errors reported by source")
-                report["cleanup"] = source.stop()
+                if report["failure_reasons"]:
+                    report["stages"]["stage_a"] = {"status": "FAIL", "capture_started": True}
             recorder.close()
             report["capture"].update(recorder.snapshot())
             report["capture"]["ended_at_utc"] = _utc_now()

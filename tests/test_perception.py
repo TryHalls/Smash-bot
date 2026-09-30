@@ -9,14 +9,23 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from smashbot_diagnostics.cli import build_parser
-from smashbot_diagnostics.framed_video import FramedVideoPacket, PACKET_FLAG_CONFIG, PACKET_FLAG_KEY_FRAME
+from smashbot_diagnostics.framed_video import (
+    FramedVideoPacket,
+    FramedVideoParseError,
+    PACKET_FLAG_CONFIG,
+    PACKET_FLAG_KEY_FRAME,
+    serialize_framed_video_packet,
+)
 from smashbot_diagnostics.perception import (
     DEFAULT_PACKAGE,
     MIN_FREE_BYTES,
     SAMPLE_COUNT,
     PerceptionCaptureError,
+    _FramedCaptureRecorder,
     _extract_exact_samples,
+    _parse_framed_capture,
     _validate_framed_capture,
+    _write_packets_and_h264,
     compute_sample_target_pts,
     dimensions_compatible_with_device,
     free_space_check,
@@ -92,6 +101,9 @@ class FakeFramedSource:
     def association_diagnostics(self):
         return {"associated_frame_count": self.associated, "pending_media_packets": 0, "overflow_count": 0, "decoded_frames_without_packet": 0, "invariant_failures": [], "decode_errors": 0}
 
+    def health_snapshot(self):
+        return {"disconnect_reason": None, "relay_completed": True, "pending_media_packets": 0, "associated_frame_count": self.associated, "overflow_count": 0, "decoded_frames_without_packet": 0, "invariant_failure_count": 0, "decoder_error_count": 0}
+
     def stats(self):
         return {
             "disconnect_reason": None,
@@ -111,6 +123,21 @@ class FailingFramedSource(FakeFramedSource):
     def start(self, *, control=False):
         self.control = control
         raise RuntimeError("fake source failure")
+
+
+class NeverCompleteSource(FakeFramedSource):
+    def start(self, *, control=False):
+        self.control = control
+        return self
+
+    def health_snapshot(self):
+        return {"disconnect_reason": None, "relay_completed": False, "pending_media_packets": 0, "associated_frame_count": 0, "overflow_count": 0, "decoded_frames_without_packet": 0, "invariant_failure_count": 0, "decoder_error_count": 0}
+
+
+class CleanupFailSource(FakeFramedSource):
+    def stop(self):
+        self.stopped = True
+        return {"cleanup_success": False, "cleanup_errors": ["adb forward cleanup failed"]}
 
 
 class PerceptionCaptureTests(unittest.TestCase):
@@ -221,6 +248,13 @@ else:
         packets = json.loads((run_dir / "packets.json").read_text())
         self.assertEqual(packets["config_packet_count"], 1)
         self.assertEqual(packets["media_packet_count"], 6)
+        self.assertEqual([item["packet_type"] for item in packets["packets"]], ["CONFIG", "media", "media", "media", "media", "media", "media"])
+        self.assertIsNone(packets["packets"][0]["scrcpy_pts_us"])
+        self.assertNotIn("original_payload_base64", packets["packets"][-1])
+        packet_json = json.dumps(packets)
+        self.assertNotIn('"payload":', packet_json)
+        self.assertNotIn("base64", packet_json.lower())
+        self.assertTrue(all("payload_sha256" in item for item in packets["packets"]))
         self.assertEqual(report["validation"]["decoded_frame_count"], 6)
         self.assertEqual(report["validation"]["media_au_count"], 6)
         self.assertEqual(report["capture"]["pts_span_us"], 5_000_000)
@@ -230,6 +264,83 @@ else:
         report = self._run(capability_result={"verified": False, "status": "FAIL", "has_b_frames": 1})
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(FakeFramedSource.instances, [])
+
+    def test_cleanup_failure_cannot_pass_dataset(self):
+        report = self._run(source_class=CleanupFailSource)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertFalse(report["dataset_valid"])
+        self.assertEqual(report["cleanup"]["cleanup_success"], False)
+        self.assertEqual(report["stages"]["stage_a"]["status"], "FAIL")
+
+    def test_watchdog_expiry_fails_closed_without_source_history_polling(self):
+        with patch.multiple(
+            "smashbot_diagnostics.perception",
+            FRAMED_CAPTURE_WATCHDOG_SECONDS=0.001,
+            FRAMED_CAPTURE_WATCHDOG_MULTIPLIER=0.0,
+        ):
+            report = self._run(source_class=NeverCompleteSource)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertIn("watchdog", " ".join(report["failure_reasons"]))
+
+    def test_framed_artifact_round_trip_and_truncation_fail_closed(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            framed = root / "capture.framed"
+            h264 = root / "capture.h264"
+            packets_json = root / "packets.json"
+            config = _packet(0, None, b"cfg", config=True, key=True)
+            media = _packet(1, 0, b"media", key=True)
+            framed.write_bytes(serialize_framed_video_packet(config) + serialize_framed_video_packet(media))
+            result = _write_packets_and_h264(framed, h264, packets_json)
+            self.assertEqual(result["media_packets"][0]["media_frame_index"], 0)
+            self.assertEqual(h264.read_bytes(), b"cfgmedia")
+            self.assertEqual(len(_parse_framed_capture(framed)), 2)
+            framed.write_bytes(framed.read_bytes()[:-1])
+            with self.assertRaises(FramedVideoParseError):
+                _parse_framed_capture(framed)
+
+    def test_session_missing_config_and_missing_media_fail(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = struct.pack(">III", 0x80000000, 864, 1920)
+            framed = root / "session.framed"
+            framed.write_bytes(session)
+            with self.assertRaises(FramedVideoParseError):
+                _write_packets_and_h264(framed, root / "x.h264", root / "x.json")
+            probe = {"streams": [{"codec_name": "h264", "width": 864, "height": 1920, "has_b_frames": 0, "nb_read_frames": 0, "nb_read_packets": 0}]}
+            validation = _validate_framed_capture(probe, root / "empty.h264", {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}, [], 5, 0)
+            self.assertEqual(validation["status"], "FAIL")
+            self.assertTrue(any("CONFIG" in reason for reason in validation["reasons"]))
+            self.assertTrue(any("media" in reason for reason in validation["reasons"]))
+
+    def test_duplicate_regressive_missing_pts_and_insufficient_span_fail(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _packet(0, None, b"cfg", config=True)
+            for pts in ((0, 0), (5, 4)):
+                framed = root / f"{pts[0]}.framed"
+                framed.write_bytes(serialize_framed_video_packet(config) + serialize_framed_video_packet(_packet(1, pts[0], b"a")) + serialize_framed_video_packet(_packet(2, pts[1], b"b")))
+                with self.assertRaises(FramedVideoParseError):
+                    _write_packets_and_h264(framed, root / "x.h264", root / "x.json")
+            probe = {"streams": [{"codec_name": "h264", "width": 864, "height": 1920, "has_b_frames": 0, "nb_read_frames": 2, "nb_read_packets": 2}]}
+            short = _validate_framed_capture(probe, root / "x.h264", {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}, [{"scrcpy_pts_us": 0}, {"scrcpy_pts_us": 1}], 5, 1)
+            self.assertEqual(short["status"], "FAIL")
+            self.assertIn("shorter", " ".join(short["reasons"]))
+            recorder = _FramedCaptureRecorder(root / "missing-pts.framed", 5)
+            with self.assertRaises(FramedVideoParseError):
+                recorder.observe(_packet(1, None, b"media"))
+            recorder.close()
+
+    def test_ffprobe_packet_count_is_required_and_must_match(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "capture.h264"
+            path.write_bytes(b"h264")
+            records = [{"scrcpy_pts_us": 0}, {"scrcpy_pts_us": 5_000_000}]
+            device = {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}
+            missing = _validate_framed_capture({"streams": [{"codec_name": "h264", "width": 864, "height": 1920, "has_b_frames": 0, "nb_read_frames": 2}]}, path, device, records, 5, 1)
+            mismatch = _validate_framed_capture({"streams": [{"codec_name": "h264", "width": 864, "height": 1920, "has_b_frames": 0, "nb_read_frames": 2, "nb_read_packets": 1}]}, path, device, records, 5, 1)
+        self.assertIn("packet count", " ".join(missing["reasons"]))
+        self.assertIn("differs", " ".join(mismatch["reasons"]))
         report = self._run(server_identity={"available": False, "verified": False})
         self.assertEqual(report["status"], "FAIL")
         self.assertEqual(FakeFramedSource.instances, [])

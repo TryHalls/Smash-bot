@@ -488,6 +488,82 @@ trial-by-trial median of `(D2-D0)/(V0-C0)` was approximately 66.3%, not a
 universal constant. No third transport is justified by this evidence, so the
 infrastructure latency investigation closes here.
 
+## Task 008: reproducible offline perception dataset
+
+Task 008 is host-only and passive. The scrcpy desktop frontend was
+definitively discarded for this task after repeated startup crashes; the
+available evidence shows that the X11 child-environment policy did not make
+that frontend reliable. This is an evidence-based frontend decision, not a
+claim about the root cause of the crash.
+
+The accepted capture backend is the direct framed-H.264 path already used by
+Tasks 005/006:
+
+- official scrcpy v4.1 server, started through the existing ADB forward;
+- `FramedVideoParser`, `H264PacketMerger`, and the existing FFmpeg decoder;
+- `control=False`, no control socket, and no ADB input/tap/swipe/keyevent;
+- `capture.framed` as the authoritative artifact, containing complete official
+  12-byte framed-video headers and exact payloads;
+- `capture.h264` as the derived decoder input, with device PTS—not host wall
+  time—authoritative for the requested duration;
+- one CONFIG plus non-config media AUs, strict PTS ordering, verified
+  `has_b_frames=0`, and exact AU/frame cardinality from both ffprobe frame and
+  packet counters;
+- exactly 12 deterministic interior AU/frame samples and one 4x3 contact
+  sheet. No detector, tracker, OpenCV, or ML framework is implemented.
+
+`packets.json` is metadata only: it records deterministic CONFIG/media order,
+flags, PTS, sizes, hashes, and derived offsets. It does not duplicate H.264
+payloads or store Base64. Generated captures remain under the gitignored
+`artifacts/task008/` tree. The live capture loop uses an O(1) health snapshot;
+full packet/frame histories are collected only for final evidence. Cleanup is
+fail-closed, so a cleanup error cannot produce `dataset_valid=true`.
+
+The earlier frontend/MKV reports remain local evidence and are not rewritten.
+The host test audit reported 128 tests before the direct-backend rewrite and
+120 at the initial direct-backend commit. The removed coverage was specific to
+the discarded client frontend: SDL/X11 child policy, client-version rejection,
+frontend argv, MKV subprocess failure/empty-MKV handling, and MKV audio/video
+validation. The replacement tests cover the corresponding safety intent at
+the direct framed-H.264 boundary: explicit confirmation and disk guards,
+official-server/capability gates, passive no-control operation, complete
+framing/CONFIG/PTS lifecycle, packet/frame cardinality, fail-closed cleanup,
+exact AU-index sampling, and artifact metadata. No Task 002–007 transport or
+protocol test was removed as a shortcut.
+
+## Task 009: perception characterization and shuttle-tracking baseline (research)
+
+This is a design note only; it does not implement perception or tracking.
+
+Known facts are limited to the accepted pipeline and historical evidence:
+portrait captures have historically been 864×1920, the source can provide up
+to approximately 60 FPS, runtime uses latest-frame semantics, framed H.264 and
+device PTS are available, and input latency has already been decomposed. No
+visual evidence from the new Task 008 dataset is treated as available until
+clips are captured and reviewed.
+
+The following remain hypotheses, not facts: shuttle size, contrast or color;
+motion blur; occlusion frequency; camera motion; player-sprite stability;
+court-geometry stability; and whether classical computer vision is adequate.
+The A/B/C clips should measure shuttle pixel diameter/range, blur and
+contrast, missed or occluded spans, player/opponent separability,
+camera/court invariance, effects and UI interference, frame-to-frame
+displacement, candidate ROI, and temporal continuity.
+
+Candidate architectures are intentionally unselected:
+
+1. classical CV plus a temporal tracker;
+2. heuristics plus a tracker;
+3. a lightweight learned detector or segmenter.
+
+Selection should be based on measured recall, false positives, localization
+error, continuity and processing cost across A/B/C—not on a preferred method
+in advance. Future reports should define shuttle detection recall, false
+positives per frame/time, center error in pixels, longest missed-frame burst,
+track continuity, reacquisition latency, host processing median/p95, frame
+age, player/opponent localization, and robustness by situation before setting
+thresholds. No annotation tool or model dependency is introduced here.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
