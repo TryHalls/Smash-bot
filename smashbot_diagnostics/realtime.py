@@ -26,6 +26,7 @@ from typing import Any, Callable
 from .adb import AdbClient, AdbError
 from .framed_video import (
     FramedVideoParseError,
+    FramedVideoPacket,
     FramedVideoParser,
     H264PacketMerger,
     decompose_prehost_packet_latency,
@@ -646,6 +647,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         no_b_frames_verified: bool = False,
         h264_capability: dict[str, Any] | None = None,
         decoder_profile: str = "baseline_current",
+        packet_observer: Callable[[FramedVideoPacket], bool | None] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
@@ -661,6 +663,8 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._no_b_frames_verified = no_b_frames_verified
         self._h264_capability = dict(h264_capability or {})
         self._decoder_profile = decoder_profile
+        self._packet_observer = packet_observer
+        self._relay_completed = False
         self._max_pending_media_packets = FRAMED_MAX_PENDING_MEDIA_PACKETS
         self._max_pending_depth = 0
         self._decoded_frames_without_packet = 0
@@ -716,6 +720,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._framing_error = None
         self._last_media_packet_monotonic_seconds = None
         self._last_decoded_monotonic_seconds = None
+        self._relay_completed = False
         port = _free_tcp_port()
         scid = int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF
         socket_name = f"scrcpy_{scid:08x}"
@@ -980,6 +985,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             "framing_error": self._framing_error,
             "last_media_packet_monotonic_seconds": self._last_media_packet_monotonic_seconds,
             "last_decoded_monotonic_seconds": self._last_decoded_monotonic_seconds,
+            "relay_completed": self._relay_completed,
             "packets": packets,
         }
         result["frame_association"] = self.association_diagnostics()
@@ -1110,7 +1116,13 @@ class FramedH264FrameSource(RawH264FrameSource):
                 )
                 for packet in packets:
                     self._record_packet(packet)
+                    observer_continue = True
+                    if self._packet_observer is not None:
+                        observer_result = self._packet_observer(packet)
+                        observer_continue = observer_result is not False
                     if packet.is_session:
+                        if not observer_continue:
+                            raise FramedVideoParseError("packet observer stopped on unexpected session packet")
                         continue
                     if self._decoder.stdin is None:
                         self._disconnect.mark("decoder_stdin_unavailable")
@@ -1134,6 +1146,11 @@ class FramedH264FrameSource(RawH264FrameSource):
                         self._disconnect.mark("packet_frame_association_overflow")
                         self._stop.set()
                         return
+                    if not observer_continue:
+                        self._relay_completed = True
+                        break
+                if self._relay_completed:
+                    break
         except FramedVideoParseError as exc:
             self._framing_error = str(exc)
             if not self._stop.is_set():
@@ -1165,8 +1182,11 @@ class FramedH264FrameSource(RawH264FrameSource):
             )
             if frame is None:
                 if self._decoder.poll() is not None and not self._stop.is_set():
-                    self._disconnect.mark("decoder_exit")
-                    self._stop.set()
+                    if self._relay_completed:
+                        self._stop.set()
+                    else:
+                        self._disconnect.mark("decoder_exit")
+                        self._stop.set()
                 continue
             if not complete:
                 continue

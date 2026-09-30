@@ -328,6 +328,16 @@ class FramedVideoPacket:
         }
 
 
+def serialize_framed_video_packet(packet: FramedVideoPacket) -> bytes:
+    """Serialize one complete official v4.1 media/config packet."""
+
+    if packet.is_session:
+        raise FramedVideoParseError("session packets are not serializable Task 008 video packets")
+    if packet.payload_size != len(packet.payload):
+        raise FramedVideoParseError("framed packet payload_size does not match payload length")
+    return struct.pack(">QI", packet.flags, packet.payload_size) + packet.payload
+
+
 class H264PacketMerger:
     """Implement scrcpy v4.1's ``sc_packet_merger`` semantics for H.264.
 

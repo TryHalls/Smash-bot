@@ -12,6 +12,7 @@ from smashbot_diagnostics.framed_video import (
     FramedVideoParseError,
     FramedVideoParser,
     H264PacketMerger,
+    serialize_framed_video_packet,
     decompose_prehost_packet_latency,
     decompose_visible_latency,
     framed_video_contract,
@@ -24,6 +25,21 @@ def media_packet(flags: int, payload: bytes) -> bytes:
 
 
 class FramedVideoTests(unittest.TestCase):
+    def test_official_packet_serialization_round_trip_golden_bytes(self):
+        flags = PACKET_FLAG_KEY_FRAME | 0x0102030405060708
+        payload = b"\x10\x20\x30"
+        packet = type("Packet", (), {
+            "is_session": False,
+            "flags": flags,
+            "payload_size": len(payload),
+            "payload": payload,
+        })()
+        wire = serialize_framed_video_packet(packet)
+        self.assertEqual(wire, struct.pack(">QI", flags, len(payload)) + payload)
+        parsed = FramedVideoParser().feed(wire, received_monotonic_seconds=1.0)
+        self.assertEqual(parsed[0].flags, flags)
+        self.assertEqual(parsed[0].payload, payload)
+
     def test_config_plus_media_produces_one_media_association_payload(self):
         parser = FramedVideoParser()
         packets = parser.feed(

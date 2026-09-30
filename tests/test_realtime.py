@@ -1,9 +1,10 @@
 import time
 import unittest
+import struct
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from smashbot_diagnostics.framed_video import H264PacketMerger
+from smashbot_diagnostics.framed_video import H264PacketMerger, PACKET_FLAG_CONFIG
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
@@ -854,6 +855,22 @@ class RealtimeTests(unittest.TestCase):
         association = source._associate_decoded_frame(0, 7.1)
         self.assertEqual(association["packet_sequence_index"], 7)
         self.assertEqual(source.association_diagnostics()["associated_frame_count"], 1)
+
+    def test_framed_packet_observer_is_optional_and_receives_complete_packets(self):
+        observed = []
+        source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server", packet_observer=observed.append)
+        from smashbot_diagnostics.framed_video import FramedVideoParser
+
+        def wire(flags, payload):
+            return struct.pack(">QI", flags, len(payload)) + payload
+
+        packets = FramedVideoParser().feed(
+            wire(PACKET_FLAG_CONFIG, b"cfg") + wire(123, b"media"),
+            received_monotonic_seconds=1.0,
+        )
+        for packet in packets:
+            source._packet_observer(packet)
+        self.assertEqual([packet.payload for packet in observed], [b"cfg", b"media"])
 
     def test_live_config_packet_is_not_written_or_queued(self):
         from smashbot_diagnostics.framed_video import FramedVideoParser, PACKET_FLAG_CONFIG

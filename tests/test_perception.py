@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import struct
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -8,20 +9,26 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from smashbot_diagnostics.cli import build_parser
+from smashbot_diagnostics.framed_video import FramedVideoPacket, PACKET_FLAG_CONFIG, PACKET_FLAG_KEY_FRAME
 from smashbot_diagnostics.perception import (
     DEFAULT_PACKAGE,
     MIN_FREE_BYTES,
     SAMPLE_COUNT,
     PerceptionCaptureError,
-    build_perception_capture_command,
-    compute_sample_timestamps,
+    _extract_exact_samples,
+    _validate_framed_capture,
+    compute_sample_target_pts,
     dimensions_compatible_with_device,
     free_space_check,
     run_perception_capture,
-    scrcpy_v41_identity,
     validate_capture_duration,
-    validate_ffprobe_metadata,
 )
+
+
+def _write_executable(path: Path, body: str) -> Path:
+    path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
 
 
 class FakeAdb:
@@ -43,10 +50,7 @@ class FakeAdb:
             "android_version": "14",
             "model": "Test Phone",
             "build_fingerprint": "test/build",
-            "display": {
-                "physical_resolution": {"width": 1080, "height": 2400},
-                "logical_resolution": {"width": 1080, "height": 2400},
-            },
+            "display": {"physical_resolution": {"width": 1080, "height": 2400}, "logical_resolution": {"width": 1080, "height": 2400}},
         }
 
     def package_info(self, package):
@@ -56,10 +60,57 @@ class FakeAdb:
         return SimpleNamespace(stdout_text="0\n")
 
 
-def _write_executable(path: Path, body: str) -> Path:
-    path.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
+def _packet(sequence: int, pts: int | None, payload: bytes, *, config: bool = False, key: bool = False) -> FramedVideoPacket:
+    flags = (PACKET_FLAG_CONFIG if config else (pts or 0)) | (PACKET_FLAG_KEY_FRAME if key else 0)
+    return FramedVideoPacket(sequence, flags, len(payload), payload, 1.0, 1.0, False, config, key, pts)
+
+
+class FakeFramedSource:
+    instances = []
+
+    def __init__(self, adb, ffmpeg, server_path, *, packet_observer, **kwargs):
+        self.observer = packet_observer
+        self.server_path = server_path
+        self.control = None
+        self.stopped = False
+        self.media_count = 0
+        self.associated = 0
+        self.__class__.instances.append(self)
+
+    def start(self, *, control=False):
+        self.control = control
+        packets = [_packet(0, None, b"CONFIG", config=True, key=True)]
+        packets.extend(_packet(i + 1, i * 1_000_000, f"AU{i}".encode(), key=i == 0) for i in range(6))
+        for packet in packets:
+            self.media_count += int(not packet.is_config)
+            keep_going = self.observer(packet)
+            if not keep_going:
+                break
+        self.associated = self.media_count
+        return self
+
+    def association_diagnostics(self):
+        return {"associated_frame_count": self.associated, "pending_media_packets": 0, "overflow_count": 0, "decoded_frames_without_packet": 0, "invariant_failures": [], "decode_errors": 0}
+
+    def stats(self):
+        return {
+            "disconnect_reason": None,
+            "server_stdout": ["Device: fake"],
+            "server_stderr": [],
+            "decoder_stderr": [],
+            "framed_video": {"framing_error": None},
+            "frame_association": self.association_diagnostics(),
+        }
+
+    def stop(self):
+        self.stopped = True
+        return {"cleanup_success": True, "cleanup_errors": []}
+
+
+class FailingFramedSource(FakeFramedSource):
+    def start(self, *, control=False):
+        self.control = control
+        raise RuntimeError("fake source failure")
 
 
 class PerceptionCaptureTests(unittest.TestCase):
@@ -67,295 +118,171 @@ class PerceptionCaptureTests(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.output = self.root / "artifacts" / "task008"
-        self.log = self.root / "scrcpy-env.txt"
-        self.environment_log = self.root / "scrcpy-child-environment.json"
-        self.old_log = os.environ.get("TASK008_FAKE_LOG")
-        self.old_environment_log = os.environ.get("TASK008_ENV_LOG")
-        self.old_display_environment = {
-            key: os.environ.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "SDL_VIDEODRIVER")
-        }
-        os.environ["TASK008_FAKE_LOG"] = str(self.log)
-        os.environ["TASK008_ENV_LOG"] = str(self.environment_log)
-        self.scrcpy = _write_executable(
-            self.root / "scrcpy",
-            """
-import os, sys
-import json
-from pathlib import Path
-if '--version' in sys.argv:
-    print(os.environ.get('TASK008_SCRCPY_VERSION', 'scrcpy 4.1'))
-    raise SystemExit(0)
-for arg in sys.argv:
-    if arg.startswith('--record='):
-        Path(arg.split('=', 1)[1]).write_bytes(b'fake-mkv')
-Path(os.environ['TASK008_FAKE_LOG']).write_text(os.environ.get('SCRCPY_SERVER_PATH', ''), encoding='utf-8')
-Path(os.environ['TASK008_ENV_LOG']).write_text(json.dumps({
-    'DISPLAY': os.environ.get('DISPLAY'),
-    'WAYLAND_DISPLAY': os.environ.get('WAYLAND_DISPLAY'),
-    'SDL_VIDEODRIVER': os.environ.get('SDL_VIDEODRIVER'),
-    'SCRCPY_SERVER_PATH': os.environ.get('SCRCPY_SERVER_PATH'),
-}), encoding='utf-8')
-raise SystemExit(int(os.environ.get('TASK008_SCRCPY_EXIT', '0')))
-""",
-        )
-        self.ffprobe = _write_executable(
-            self.root / "ffprobe",
-            """
-import json, os, sys
-if '-version' in sys.argv:
-    print('ffprobe version 6.0')
-elif '-show_frames' in sys.argv:
-    print(json.dumps({'frames': [{'best_effort_timestamp_time': str(i / 60)} for i in range(1200)]}))
-else:
-    mode = os.environ.get('TASK008_PROBE_MODE', 'valid')
-    codec = 'h264' if mode != 'non_h264' else 'vp9'
-    streams = [{'codec_type': 'video', 'codec_name': codec, 'width': 864, 'height': 1920}]
-    if mode == 'audio':
-        streams.append({'codec_type': 'audio', 'codec_name': 'aac'})
-    print(json.dumps({'streams': streams, 'format': {'duration': '20.0'}}))
-""",
-        )
-        self.ffmpeg = _write_executable(
-            self.root / "ffmpeg",
-            """
+        self.capability = self.root / "capability.mkv"
+        self.capability.write_bytes(b"capability")
+        self.server = self.root / "official-server"
+        self.server.write_bytes(b"official")
+        self.ffmpeg = _write_executable(self.root / "ffmpeg", """
 import sys
 from pathlib import Path
 if '-version' in sys.argv:
-    print('ffmpeg version 6.0')
+    print('ffmpeg version 7.0.2')
 else:
-    Path(sys.argv[-1]).write_bytes(b'fake-image')
-""",
-        )
-        self.server = self.root / "official-scrcpy-server"
-        self.server.write_bytes(b"official-server-fixture")
+    Path(sys.argv[-1]).write_bytes(b'PNG-or-JPEG')
+""")
+        self.ffprobe = _write_executable(self.root / "ffprobe", """
+import json, sys
+if '-version' in sys.argv:
+    print('ffprobe version 7.0.2')
+elif '-f' in sys.argv and 'h264' in sys.argv:
+    print(json.dumps({'streams': [{'codec_name': 'h264', 'profile': 'Main', 'width': 864, 'height': 1920, 'has_b_frames': 0, 'nb_read_frames': 6, 'nb_read_packets': 6}]}))
+else:
+    print(json.dumps({'streams': [{'codec_name': 'h264', 'width': 864, 'height': 1920, 'has_b_frames': 0}]}))
+""")
+        FakeFramedSource.instances.clear()
 
     def tearDown(self):
-        for name in ("TASK008_SCRCPY_VERSION", "TASK008_SCRCPY_EXIT", "TASK008_PROBE_MODE"):
-            os.environ.pop(name, None)
-        if self.old_log is None:
-            os.environ.pop("TASK008_FAKE_LOG", None)
-        else:
-            os.environ["TASK008_FAKE_LOG"] = self.old_log
-        if self.old_environment_log is None:
-            os.environ.pop("TASK008_ENV_LOG", None)
-        else:
-            os.environ["TASK008_ENV_LOG"] = self.old_environment_log
-        for key, value in self.old_display_environment.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
         self.tmp.cleanup()
 
-    def _server_identity(self):
-        return {"available": True, "verified": True, "path": str(self.server), "sha256": "fixture"}
-
     def _run(self, **overrides):
+        source_class = overrides.pop("source_class", FakeFramedSource)
+        capability_result = overrides.pop("capability_result", {"verified": True, "status": "PASS", "has_b_frames": 0, "sample_path": str(self.capability)})
+        server_identity = overrides.pop("server_identity", {"available": True, "verified": True, "path": str(self.server), "sha256": "fixture"})
         values = {
             "adb_executable": "adb",
             "serial": "TEST_SERIAL",
             "transport": "wireless_tcp",
             "package": DEFAULT_PACKAGE,
-            "duration_seconds": 20,
+            "duration_seconds": 5,
             "output_base": self.output,
-            "scrcpy": str(self.scrcpy),
             "scrcpy_server": self.server,
             "ffmpeg": str(self.ffmpeg),
             "ffprobe": str(self.ffprobe),
+            "h264_capability_sample": self.capability,
             "offline_bot_or_training_confirmed": True,
         }
         values.update(overrides)
         with patch("smashbot_diagnostics.perception.AdbClient", FakeAdb), patch(
-            "smashbot_diagnostics.perception.ensure_scrcpy_server", return_value=self._server_identity()
+            "smashbot_diagnostics.perception.FramedH264FrameSource", source_class
+        ), patch(
+            "smashbot_diagnostics.perception.ensure_scrcpy_server",
+            return_value=server_identity,
+        ), patch(
+            "smashbot_diagnostics.perception.verify_h264_no_b_frames",
+            return_value=capability_result,
         ):
             return run_perception_capture(**values)
 
-    def test_confirmation_flag_is_required_by_cli(self):
+    def test_cli_requires_confirmation_capability_sample_and_server(self):
         with self.assertRaises(SystemExit):
             build_parser().parse_args(["perception-capture", "--serial", "TEST_SERIAL"])
+        args = build_parser().parse_args([
+            "perception-capture", "--serial", "S", "--offline-bot-or-training-confirmed",
+            "--scrcpy-server", "server", "--h264-capability-sample", "sample",
+        ])
+        self.assertEqual(args.h264_capability_sample, Path("sample"))
+        self.assertFalse(hasattr(args, "scrcpy"))
 
-    def test_confirmation_is_checked_before_any_capture(self):
+    def test_confirmation_and_capability_are_required_before_source(self):
         with self.assertRaisesRegex(PerceptionCaptureError, "offline-bot-or-training-confirmed"):
             self._run(offline_bot_or_training_confirmed=False)
-        self.assertFalse(self.log.exists())
+        with self.assertRaisesRegex(PerceptionCaptureError, "h264-capability-sample"):
+            self._run(h264_capability_sample=None)
+        self.assertEqual(FakeFramedSource.instances, [])
 
-    def test_duration_bounds(self):
+    def test_duration_and_disk_guards(self):
         self.assertEqual(validate_capture_duration(5), 5.0)
         self.assertEqual(validate_capture_duration(60), 60.0)
         for value in (4, 61, "nan", "inf"):
             with self.assertRaises(PerceptionCaptureError):
                 validate_capture_duration(value)
-
-    def test_disk_guard_fails_before_capture(self):
         usage = SimpleNamespace(free=MIN_FREE_BYTES - 1, total=10, used=9)
         with patch("smashbot_diagnostics.perception.shutil.disk_usage", return_value=usage):
             with self.assertRaisesRegex(PerceptionCaptureError, "insufficient free space"):
                 self._run()
-        self.assertFalse(self.log.exists())
 
-    def test_scrcpy_other_than_v41_is_rejected(self):
-        os.environ["TASK008_SCRCPY_VERSION"] = "scrcpy 4.2"
-        report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertTrue(any("v4.1" in reason for reason in report["failure_reasons"]))
-        self.assertFalse(self.log.exists())
-        os.environ.pop("TASK008_SCRCPY_VERSION", None)
-
-    def test_official_server_identity_is_required(self):
-        with patch.object(
-            self,
-            "_server_identity",
-            return_value={"available": False, "verified": False, "error": "bad hash"},
-        ):
-            report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertFalse(self.log.exists())
-
-    def test_command_is_strictly_passive_and_frozen(self):
-        command = build_perception_capture_command("scrcpy", "SERIAL", Path("capture.mkv"), 20)
-        self.assertIn("--no-control", command)
-        self.assertIn("--no-audio", command)
-        self.assertIn("--no-playback", command)
-        self.assertIn("--no-window", command)
-        self.assertIn("--video-codec=h264", command)
-        self.assertIn("--max-size=1920", command)
-        self.assertIn("--max-fps=60", command)
-        self.assertIn("--record=capture.mkv", command)
-        self.assertIn("--time-limit=20", command)
-        self.assertNotIn("--control", command)
-        self.assertFalse(any(token in {"input", "tap", "swipe", "keyevent"} for token in command))
-
-    def test_scrcpy_environment_contains_verified_server(self):
+    def test_direct_backend_does_not_require_or_launch_scrcpy_and_disables_control(self):
         report = self._run()
         self.assertEqual(report["status"], "PASS")
-        self.assertEqual(self.log.read_text(encoding="utf-8"), str(self.server))
-        self.assertEqual(report["environment_overrides"]["SCRCPY_SERVER_PATH"], str(self.server))
+        self.assertEqual(report["capture_backend"], "direct_framed_h264")
+        self.assertFalse(report["source"]["control"])
+        self.assertFalse(hasattr(report, "scrcpy"))
+        self.assertEqual(FakeFramedSource.instances[0].control, False)
 
-    def test_task008_uses_x11_child_policy_without_mutating_parent(self):
-        os.environ["DISPLAY"] = ":0"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
-        os.environ.pop("SDL_VIDEODRIVER", None)
-        parent_before = {
-            "DISPLAY": os.environ.get("DISPLAY"),
-            "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY"),
-            "SDL_VIDEODRIVER": os.environ.get("SDL_VIDEODRIVER"),
-        }
-        report = self._run()
-        child = json.loads(self.environment_log.read_text(encoding="utf-8"))
-        self.assertEqual(child["DISPLAY"], ":0")
-        self.assertEqual(child["SDL_VIDEODRIVER"], "x11")
-        self.assertIsNone(child["WAYLAND_DISPLAY"])
-        self.assertEqual(child["SCRCPY_SERVER_PATH"], str(self.server))
-        self.assertEqual(report["environment_overrides"]["SDL_VIDEODRIVER"], "x11")
-        self.assertEqual(report["environment_overrides"]["WAYLAND_DISPLAY"], "unset")
-        self.assertEqual(report["environment_overrides"]["SCRCPY_SERVER_PATH"], str(self.server))
-        self.assertEqual(os.environ["DISPLAY"], ":0")
-        self.assertEqual(os.environ["WAYLAND_DISPLAY"], "wayland-0")
-        self.assertIsNone(os.environ.get("SDL_VIDEODRIVER"))
-        self.assertEqual(
-            {key: os.environ.get(key) for key in parent_before},
-            parent_before,
-        )
-
-    def test_task008_argv_remains_passive_and_unchanged_with_environment_policy(self):
-        os.environ["DISPLAY"] = ":0"
-        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
-        report = self._run()
-        self.assertEqual(
-            report["argv"],
-            build_perception_capture_command(
-                str(self.scrcpy), "TEST_SERIAL", Path(report["capture"]["path"]), 20.0
-            ),
-        )
-        self.assertNotIn("--render-driver", report["argv"])
-        self.assertFalse(any(token in {"--control", "input", "tap", "swipe", "keyevent"} for token in report["argv"]))
-
-    def test_subprocess_failure_is_not_a_valid_dataset(self):
-        os.environ["TASK008_SCRCPY_EXIT"] = "7"
-        report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertFalse(report["dataset_valid"])
-        self.assertEqual(report["capture"]["exit_code"], 7)
-        os.environ.pop("TASK008_SCRCPY_EXIT", None)
-
-    def test_empty_mkv_is_rejected(self):
-        script = self.scrcpy.read_text(encoding="utf-8")
-        self.scrcpy.write_text(script.replace("write_bytes(b'fake-mkv')", "write_bytes(b'')"), encoding="utf-8")
-        report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertIn("capture file is empty", report["failure_reasons"])
-
-    def test_valid_portrait_h264_has_sha_size_and_exact_samples(self):
-        report = self._run()
-        self.assertEqual(report["status"], "PASS")
-        self.assertTrue(report["dataset_valid"])
-        self.assertEqual(report["validation"]["codec"], "h264")
-        self.assertEqual(report["validation"]["width"], 864)
-        self.assertEqual(report["validation"]["height"], 1920)
-        capture = Path(report["capture"]["path"])
-        self.assertEqual(report["capture"]["bytes"], capture.stat().st_size)
-        self.assertEqual(report["capture"]["sha256"], __import__("hashlib").sha256(capture.read_bytes()).hexdigest())
-        self.assertEqual(report["samples"]["sample_count"], SAMPLE_COUNT)
-        self.assertEqual(len(list((capture.parent / "samples").glob("*.png"))), SAMPLE_COUNT)
-        self.assertTrue((capture.parent / "contact_sheet.jpg").is_file())
-        self.assertEqual(len(report["samples"]["contact_sheet_uses"]), SAMPLE_COUNT)
-
-    def test_ffprobe_audio_is_rejected(self):
-        os.environ["TASK008_PROBE_MODE"] = "audio"
-        report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertEqual(report["validation"]["audio_stream_count"], 1)
-        os.environ.pop("TASK008_PROBE_MODE", None)
-
-    def test_non_h264_is_rejected(self):
-        os.environ["TASK008_PROBE_MODE"] = "non_h264"
-        report = self._run()
-        self.assertEqual(report["status"], "FAIL")
-        self.assertIn("expected H.264 video", " ".join(report["failure_reasons"]))
-        os.environ.pop("TASK008_PROBE_MODE", None)
-
-    def test_sample_timestamps_are_deterministic_and_strictly_interior(self):
-        first = compute_sample_timestamps(20.0)
-        second = compute_sample_timestamps(20.0)
-        self.assertEqual(first, second)
-        self.assertEqual(len(first), SAMPLE_COUNT)
-        self.assertTrue(all(0 < timestamp < 20 for timestamp in first))
-        self.assertEqual(first, sorted(first))
-
-    def test_portrait_dimension_compatibility_is_conservative(self):
-        device = {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}
-        self.assertTrue(dimensions_compatible_with_device(864, 1920, device))
-        self.assertFalse(dimensions_compatible_with_device(1920, 1080, device))
-
-    def test_ffprobe_validation_rejects_missing_duration(self):
-        probe = {"streams": [{"codec_type": "video", "codec_name": "h264", "width": 864, "height": 1920}], "format": {}}
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "capture.mkv"
-            path.write_bytes(b"x")
-            result = validate_ffprobe_metadata(
-                probe,
-                path,
-                {"display": {"logical_resolution": {"width": 1080, "height": 2400}}},
-            )
-        self.assertEqual(result["status"], "FAIL")
-        self.assertIn("duration is not positive", " ".join(result["reasons"]))
-
-    def test_ffprobe_json_is_persisted_raw(self):
+    def test_pass_contract_and_exact_artifacts(self):
         report = self._run()
         run_dir = Path(report["run_directory"])
-        raw = json.loads((run_dir / "ffprobe.json").read_text(encoding="utf-8"))
-        self.assertEqual(raw["streams"][0]["codec_name"], "h264")
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["dataset_valid"])
+        self.assertEqual([report["stages"][name]["status"] for name in ("stage_a", "stage_b", "stage_c")], ["PASS"] * 3)
+        for relative in ["capture.framed", "capture.h264", "packets.json", "ffprobe.json", "samples.json", "contact_sheet.jpg", "manifest.json", "summary.txt"]:
+            self.assertTrue((run_dir / relative).is_file(), relative)
+        self.assertEqual(len(list((run_dir / "samples").glob("sample_*.png"))), 12)
+        packets = json.loads((run_dir / "packets.json").read_text())
+        self.assertEqual(packets["config_packet_count"], 1)
+        self.assertEqual(packets["media_packet_count"], 6)
+        self.assertEqual(report["validation"]["decoded_frame_count"], 6)
+        self.assertEqual(report["validation"]["media_au_count"], 6)
+        self.assertEqual(report["capture"]["pts_span_us"], 5_000_000)
+        self.assertEqual(report["capture"]["overshoot_us"], 0)
 
-    def test_previous_cli_paths_remain_available(self):
-        parser = build_parser()
-        for command in ("diagnose", "screenshot", "stream-capability", "realtime-benchmark"):
-            args = parser.parse_args([command])
-            self.assertEqual(args.command, command)
+    def test_capability_failure_and_server_failure_are_fail_closed(self):
+        report = self._run(capability_result={"verified": False, "status": "FAIL", "has_b_frames": 1})
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(FakeFramedSource.instances, [])
+        report = self._run(server_identity={"available": False, "verified": False})
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(FakeFramedSource.instances, [])
 
-    def test_scrcpy_identity_rejects_similar_versions(self):
-        self.assertTrue(scrcpy_v41_identity({"available": True, "version_command_success": True, "version_output": "scrcpy 4.1\n"}))
-        for version in ("scrcpy 4.10", "scrcpy 4.1.1", "scrcpy 4.0"):
-            self.assertFalse(scrcpy_v41_identity({"available": True, "version_command_success": True, "version_output": version}))
+    def test_source_failure_is_fail_closed(self):
+        report = self._run(source_class=FailingFramedSource)
+        self.assertEqual(report["status"], "FAIL")
+        self.assertEqual(report["stages"]["stage_a"]["status"], "FAIL")
+
+    def test_pts_targets_are_strictly_interior_and_nearest_is_deterministic(self):
+        targets = compute_sample_target_pts(100, 1_300, SAMPLE_COUNT)
+        self.assertEqual(len(targets), SAMPLE_COUNT)
+        self.assertTrue(all(100 < target < 1_300 for target in targets))
+        self.assertEqual(targets, compute_sample_target_pts(100, 1_300, SAMPLE_COUNT))
+
+    def test_new_capture_validation_rejects_b_frames_and_frame_count_mismatch(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "capture.h264"
+            path.write_bytes(b"h264")
+            records = [{"scrcpy_pts_us": 0}, {"scrcpy_pts_us": 5_000_000}]
+            probe = {"streams": [{"codec_name": "h264", "width": 864, "height": 1920, "has_b_frames": 1, "nb_read_frames": 1}]}
+            validation = _validate_framed_capture(probe, path, {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}, records, 5, 1)
+        self.assertEqual(validation["status"], "FAIL")
+        self.assertTrue(any("has_b_frames" in reason for reason in validation["reasons"]))
+        self.assertTrue(any("differs" in reason for reason in validation["reasons"]))
+
+    def test_exact_sample_commands_use_frame_index_and_contact_sheet_start_one(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            h264 = root / "capture.h264"
+            h264.write_bytes(b"h264")
+            records = [{"packet_sequence_index": i, "media_frame_index": i, "scrcpy_pts_us": i * 1_000_000} for i in range(13)]
+            ffmpeg = _write_executable(root / "ffmpeg", """
+import sys
+from pathlib import Path
+if '-version' not in sys.argv:
+    Path(sys.argv[-1]).write_bytes(b'image')
+""")
+            result, failures = _extract_exact_samples(str(ffmpeg), h264, root / "samples", root / "contact_sheet.jpg", records)
+        self.assertFalse(failures)
+        self.assertEqual(result["sample_count"], 12)
+        self.assertIn("-start_number", result["contact_sheet_command"])
+        self.assertEqual(result["contact_sheet_command"][result["contact_sheet_command"].index("-start_number") + 1], "1")
+        for record in result["samples"]:
+            filter_value = record["command"][record["command"].index("-vf") + 1]
+            self.assertIn("select=eq(n\\,", filter_value)
+            self.assertNotIn("-ss", record["command"])
+
+    def test_dimensions_and_free_space_helpers(self):
+        self.assertTrue(dimensions_compatible_with_device(864, 1920, {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}))
+        self.assertFalse(dimensions_compatible_with_device(1920, 1080, {"display": {"logical_resolution": {"width": 1080, "height": 2400}}}))
+        with TemporaryDirectory() as directory:
+            self.assertIn("free_bytes", free_space_check(Path(directory)))
 
 
 if __name__ == "__main__":

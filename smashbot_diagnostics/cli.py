@@ -213,10 +213,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="confirm that the permitted offline/bot/training environment is active",
     )
-    perception.add_argument("--scrcpy", default="scrcpy")
-    perception.add_argument("--scrcpy-server", type=Path, help="explicit official scrcpy-server-v4.1 path")
+    perception.add_argument("--scrcpy-server", type=Path, required=True, help="explicit official scrcpy-server-v4.1 path")
     perception.add_argument("--ffmpeg", default="ffmpeg")
-    perception.add_argument("--ffprobe", default=None)
+    perception.add_argument("--ffprobe", default="ffprobe")
+    perception.add_argument(
+        "--h264-capability-sample",
+        type=Path,
+        required=True,
+        help="real H.264 sample used to verify has_b_frames=0 before capture",
+    )
     perception.add_argument("--output-base", type=Path, default=PERCEPTION_OUTPUT_BASE)
     return parser
 
@@ -1268,10 +1273,10 @@ def _perception_capture(args: argparse.Namespace) -> int:
         package=args.package,
         duration_seconds=args.duration_seconds,
         output_base=args.output_base,
-        scrcpy=args.scrcpy,
         scrcpy_server=args.scrcpy_server,
         ffmpeg=args.ffmpeg,
-        ffprobe=args.ffprobe or "ffprobe",
+        ffprobe=args.ffprobe,
+        h264_capability_sample=args.h264_capability_sample,
         offline_bot_or_training_confirmed=args.offline_bot_or_training_confirmed,
     )
     run_directory = report.get("run_directory")
