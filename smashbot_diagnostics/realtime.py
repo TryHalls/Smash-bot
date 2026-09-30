@@ -672,6 +672,14 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._last_media_packet_monotonic_seconds: float | None = None
         self._last_decoded_monotonic_seconds: float | None = None
 
+    def _new_framed_parser(self) -> Any:
+        """Factory hook for an explicitly isolated framed-video dialect."""
+
+        return FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+
+    def _verify_server_identity(self) -> dict[str, Any]:
+        return verify_server_identity(self.server_path)
+
     def start(self, *, control: bool = False) -> "FramedH264FrameSource":
         if self._started and not self._stopped:
             if control != self._control_enabled:
@@ -687,14 +695,14 @@ class FramedH264FrameSource(RawH264FrameSource):
             )
         if control:
             try:
-                self._server_identity = verify_server_identity(self.server_path)
+                self._server_identity = self._verify_server_identity()
             except Exception as exc:
                 raise RealtimeError(str(exc)) from exc
         self._stop.clear()
         self._stopped = False
         self._control_enabled = control
         self._started_monotonic = time.monotonic()
-        self._framed_parser = FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+        self._framed_parser = self._new_framed_parser()
         self._packet_merger.reset()
         self._packet_metadata.clear()
         with self._association_lock:
@@ -1031,6 +1039,25 @@ class FramedH264FrameSource(RawH264FrameSource):
                 "decoded_frame_index": frame_index,
                 "decode_complete_monotonic_seconds": timestamp,
             }
+            # Task 007 packets carry an exact action/device snapshot in the
+            # same media AU that enters this FIFO. Preserve it on the frame
+            # association; never look up the latest telemetry after decode.
+            for key in (
+                "action_sequence",
+                "action_x",
+                "action_y",
+                "d0_nanos",
+                "d1_nanos",
+                "d2_nanos",
+                "inject_success",
+                "task007_flags",
+                "task007_telemetry",
+                "device_inject_call_ms",
+                "device_post_inject_to_encoded_output_ms",
+                "device_control_receive_to_encoded_output_ms",
+            ):
+                if key in packet:
+                    association[key] = packet[key]
             self._frame_associations.append(association)
             return association
 
@@ -1162,6 +1189,32 @@ class FramedH264FrameSource(RawH264FrameSource):
             self.buffer.put(decoded)
             with self._timestamps_lock:
                 self._timestamps.append(timestamp)
+
+
+class Task007FramedH264FrameSource(FramedH264FrameSource):
+    """Explicit Task 007 source using the diagnostic 56-byte sidecar."""
+
+    def _new_framed_parser(self) -> Any:
+        from .task007 import Task007FramedVideoParser
+
+        return Task007FramedVideoParser(max_payload_size=self._framed_parser.max_payload_size)
+
+    def _verify_server_identity(self) -> dict[str, Any]:
+        from .task007 import task007_server_identity
+
+        return task007_server_identity(self.server_path)
+
+    def metadata(self) -> dict[str, Any]:
+        result = super().metadata()
+        result["path"] = "task007_framed_h264"
+        result["task007_telemetry"] = {
+            "magic": "T7TM",
+            "version": 1,
+            "size_bytes": 56,
+            "sidecar_stripped_before_decoder": True,
+            "official_payload_size_excludes_sidecar": True,
+        }
+        return result
 
 
 @dataclass(frozen=True)

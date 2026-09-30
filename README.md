@@ -375,8 +375,29 @@ Stale previous-target frames were retained as backlog diagnostics. They did
 not invalidate the trials because causal A/B/C identity and the current-target
 associated packet remained authoritative. No decoder, threshold, parser,
 control, transport, codec, resolution/FPS setting, or classifier was changed
-for this documentation update. No further physical tests were run, and Task
-007 has not started.
+for this documentation update. No further physical tests were run.
+
+## Task 007: device-encoded latency host/build gate
+
+Task 007 is based exactly on `6789b96cc3955fe0e1ae2f0e8e31b77ee05bdce1`.
+The diagnostic server patch is pinned to scrcpy v4.1 commit
+`2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0` (annotated tag `v4.1`) and is
+kept separately in `task007/task007-server.patch`; the upstream checkout and
+generated server are gitignored. The accepted raw-H.264 path, official
+Task 005/006 parser, codec, resolution/FPS, control transport, and decoder
+remain unchanged.
+
+The isolated Task 007 source carries D0/D1/D2 in a fixed 56-byte big-endian
+`T7TM` block after the official 12-byte framed-video header. Its official
+`payload_size` excludes the sidecar. The host parser validates and strips the
+sidecar before the existing CONFIG merger/packet-to-frame FIFO, preserving
+byte-identical H.264 payloads and exact action/coordinate/PTS associations.
+
+Host tests pass, but the Android build gate is currently blocked by missing
+local `java`/`javac` and Android SDK (`ANDROID_HOME`/`ANDROID_SDK_ROOT` are
+unset). The exact prerequisite report and reproducible build command are in
+[`task007/README.md`](task007/README.md). No tools were installed or
+substituted, and no phone, SMASH run, or PR is part of this phase.
 
 ## Scope and artifacts
 
