@@ -650,8 +650,20 @@ def _median(values: list[float]) -> float | None:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def _start_decoder(ffmpeg: str, input_args: list[str]) -> subprocess.Popen[bytes]:
-    command = [
+DECODER_PROFILES = ("baseline_current", "scrcpy_low_delay")
+
+
+def decoder_command(
+    ffmpeg: str,
+    input_args: list[str],
+    decoder_profile: str = "baseline_current",
+) -> list[str]:
+    """Build the frozen FFmpeg decoder command for a diagnostic profile."""
+
+    if decoder_profile not in DECODER_PROFILES:
+        raise ValueError(f"unsupported decoder profile: {decoder_profile}")
+    profile_args = ["-flags", "low_delay"] if decoder_profile == "scrcpy_low_delay" else []
+    return [
         ffmpeg,
         "-hide_banner",
         "-loglevel",
@@ -660,6 +672,7 @@ def _start_decoder(ffmpeg: str, input_args: list[str]) -> subprocess.Popen[bytes
         "1M",
         "-analyzeduration",
         "100000",
+        *profile_args,
         *input_args,
         "-an",
         "-f",
@@ -668,6 +681,14 @@ def _start_decoder(ffmpeg: str, input_args: list[str]) -> subprocess.Popen[bytes
         "gray",
         "pipe:1",
     ]
+
+
+def _start_decoder(
+    ffmpeg: str,
+    input_args: list[str],
+    decoder_profile: str = "baseline_current",
+) -> subprocess.Popen[bytes]:
+    command = decoder_command(ffmpeg, input_args, decoder_profile)
     return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 

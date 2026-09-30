@@ -38,6 +38,8 @@ from .streaming import (
     SCRCPY_VERSION,
     DisconnectTracker,
     _adb_command,
+    DECODER_PROFILES,
+    decoder_command,
     _free_tcp_port,
     _parse_dimensions,
     _read_exact_fd,
@@ -641,9 +643,12 @@ class FramedH264FrameSource(RawH264FrameSource):
         max_payload_size: int | None = None,
         no_b_frames_verified: bool = False,
         h264_capability: dict[str, Any] | None = None,
+        decoder_profile: str = "baseline_current",
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
+        if decoder_profile not in DECODER_PROFILES:
+            raise ValueError(f"unsupported decoder profile: {decoder_profile}")
         parser_kwargs = {} if max_payload_size is None else {"max_payload_size": max_payload_size}
         self._framed_parser = FramedVideoParser(**parser_kwargs)
         self._packet_metadata: deque[dict[str, Any]] = deque(maxlen=100_000)
@@ -652,6 +657,7 @@ class FramedH264FrameSource(RawH264FrameSource):
         self._association_lock = threading.Lock()
         self._no_b_frames_verified = no_b_frames_verified
         self._h264_capability = dict(h264_capability or {})
+        self._decoder_profile = decoder_profile
         self._max_pending_media_packets = FRAMED_MAX_PENDING_MEDIA_PACKETS
         self._max_pending_depth = 0
         self._decoded_frames_without_packet = 0
@@ -752,7 +758,11 @@ class FramedH264FrameSource(RawH264FrameSource):
             self._connection = self._connect_forwarded_socket(port)
             if control:
                 self._control_connection = self._connect_forwarded_socket(port)
-            self._decoder = _start_decoder(self.ffmpeg, ["-f", "h264", "-i", "pipe:0"])
+            self._decoder = _start_decoder(
+                self.ffmpeg,
+                ["-f", "h264", "-i", "pipe:0"],
+                decoder_profile=self._decoder_profile,
+            )
             self._start_decoder_stderr_thread()
             self._relay_thread = threading.Thread(target=self._relay, name="framed-h264-relay", daemon=True)
             self._relay_thread.start()
@@ -784,6 +794,12 @@ class FramedH264FrameSource(RawH264FrameSource):
                     "send_frame_meta": True,
                 },
                 "h264_capability": dict(self._h264_capability),
+                "decoder_profile": self._decoder_profile,
+                "decoder_command": decoder_command(
+                    self.ffmpeg,
+                    ["-f", "h264", "-i", "pipe:0"],
+                    self._decoder_profile,
+                ),
             }
         )
         return result
@@ -831,6 +847,31 @@ class FramedH264FrameSource(RawH264FrameSource):
             "invariant_failures": invariant_failures,
             "history_bounded": True,
             "frame_associations": associations,
+        }
+
+    def pending_media_snapshot(self) -> dict[str, Any]:
+        """Return bounded FIFO state without retaining media payloads."""
+
+        with self._association_lock:
+            pending = list(self._pending_media_packets)
+
+        def packet_summary(packet: dict[str, Any] | None) -> dict[str, Any] | None:
+            if packet is None:
+                return None
+            return {
+                "sequence_index": packet["sequence_index"],
+                "pts_us": packet["pts_us"],
+                "host_packet_complete_monotonic_seconds": packet["received_monotonic_seconds"],
+            }
+
+        return {
+            "pending_au_count": len(pending),
+            "oldest_pending_packet": packet_summary(pending[0] if pending else None),
+            "newest_pending_packet": packet_summary(pending[-1] if pending else None),
+            "max_pending_depth": self._max_pending_depth,
+            "unmatched_frames": self._decoded_frames_without_packet,
+            "unmatched_packets": len(pending),
+            "overflow": self._association_overflow_count,
         }
 
     def wait_for_quiescent(
@@ -1073,6 +1114,13 @@ class Swipe:
             "y2": self.y2,
             "duration_ms": self.duration_ms,
         }
+
+
+FRAMED_CALIBRATION_TARGETS = (
+    Swipe(360, 1000, 360, 1000, 450),
+    Swipe(720, 1000, 720, 1000, 450),
+    Swipe(540, 1500, 540, 1500, 450),
+)
 
 
 def calibration_gesture_consistency(
@@ -1770,6 +1818,8 @@ def run_calibration(
     control_transport: str = "adb",
     video_path: str = "raw_h264",
     framed_h264_capability: dict[str, Any] | None = None,
+    decoder_profile: str = "baseline_current",
+    calibration_targets: tuple[Swipe, ...] | None = None,
     quiescent_interval_seconds: float = FRAMED_QUIESCENT_INTERVAL_SECONDS,
     quiescent_timeout_seconds: float = FRAMED_QUIESCENT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
@@ -1783,6 +1833,8 @@ def run_calibration(
         raise ValueError(
             "framed_h264 diagnostic path requires an ffprobe-verified has_b_frames=0 capability sample"
         )
+    if decoder_profile not in DECODER_PROFILES:
+        raise ValueError(f"unsupported decoder profile: {decoder_profile}")
     settings = TouchVisualizationSettings(adb, visualization_mode=visualization_mode)
     controller: Any | None = None
     source: Any | None = None
@@ -1793,6 +1845,15 @@ def run_calibration(
     coordinate_transform: DisplayCoordinateTransform | None = None
     display_report: dict[str, Any] | None = None
     calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 450)
+    target_sequence = (
+        tuple(calibration_targets or FRAMED_CALIBRATION_TARGETS)
+        if video_path == "framed_h264"
+        else (calibration_input_swipe,)
+    )
+    if video_path == "framed_h264" and len(target_sequence) < 3:
+        raise ValueError("framed_h264 causal calibration requires at least three targets")
+    if any(target.duration_ms != 450 or target.x1 != target.x2 or target.y1 != target.y2 for target in target_sequence):
+        raise ValueError("framed_h264 causal calibration targets must be 450 ms stationary presses")
     status = "INCONCLUSIVE"
     try:
         setup = settings.enable()
@@ -1803,6 +1864,7 @@ def run_calibration(
                 {
                     "no_b_frames_verified": True,
                     "h264_capability": framed_h264_capability,
+                    "decoder_profile": decoder_profile,
                 }
             )
         source = source_class(adb, ffmpeg, server_path, **source_kwargs)
@@ -1825,9 +1887,13 @@ def run_calibration(
             first_frame.height,
         )
         setup["display_coordinates"] = display_report
-        mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
+        mapped_target_sequence = tuple(coordinate_transform.map_swipe(target) for target in target_sequence)
+        mapped_calibration_swipe = mapped_target_sequence[0]
         setup["input_swipe"] = calibration_input_swipe.as_dict()
         setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
+        setup["calibration_target_sequence"] = [target.as_dict() for target in target_sequence]
+        setup["mapped_calibration_target_sequence"] = [target.as_dict() for target in mapped_target_sequence]
+        setup["decoder_profile"] = decoder_profile
         if control_transport == "scrcpy_v4_1":
             from .scrcpy_control import ScrcpyControlGestureController
 
@@ -1841,10 +1907,12 @@ def run_calibration(
         else:
             controller = AdbGestureController(adb)
             setup["control_transport"] = {"transport": "adb"}
+        warmup_input_swipe = target_sequence[-1] if video_path == "framed_h264" else calibration_input_swipe
+        warmup_mapped_swipe = mapped_target_sequence[-1] if video_path == "framed_h264" else mapped_calibration_swipe
         detector = (
-            PointerLocationDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
+            PointerLocationDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
             if visualization_mode == "pointer_location"
-            else TouchResponseDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
+            else TouchResponseDetector(first_frame.width, first_frame.height, warmup_mapped_swipe)
         )
 
         # VFR-aware setup: one decoded baseline frame, one unmeasured warm-up
@@ -1853,7 +1921,7 @@ def run_calibration(
         warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
             controller,
             source,
-            calibration_input_swipe,
+            warmup_input_swipe,
             initial_frame_index=first_frame.frame_index,
             response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
             label="warmup",
@@ -1967,8 +2035,33 @@ def run_calibration(
         baseline_frame = post_warmup_frame
         for trial_index in range(1, trials + 1):
             time.sleep(spacing_seconds)
+            target_index = (trial_index - 1) % len(target_sequence)
+            previous_target_index = (target_index - 1) % len(target_sequence)
+            current_input_swipe = target_sequence[target_index]
+            previous_input_swipe = (
+                warmup_input_swipe if trial_index == 1 else target_sequence[previous_target_index]
+            )
+            current_mapped_swipe = mapped_target_sequence[target_index]
+            previous_mapped_swipe = (
+                warmup_mapped_swipe if trial_index == 1 else mapped_target_sequence[previous_target_index]
+            )
+            current_detector = (
+                PointerLocationDetector(first_frame.width, first_frame.height, current_mapped_swipe)
+                if visualization_mode == "pointer_location"
+                else TouchResponseDetector(first_frame.width, first_frame.height, current_mapped_swipe)
+            )
+            previous_detector = (
+                PointerLocationDetector(first_frame.width, first_frame.height, previous_mapped_swipe)
+                if visualization_mode == "pointer_location"
+                else TouchResponseDetector(first_frame.width, first_frame.height, previous_mapped_swipe)
+            )
             trial: dict[str, Any] = {
                 "trial": trial_index,
+                "target_index": target_index,
+                "current_target": current_input_swipe.as_dict(),
+                "previous_target": previous_input_swipe.as_dict(),
+                "mapped_current_target": current_mapped_swipe.as_dict(),
+                "mapped_previous_target": previous_mapped_swipe.as_dict(),
                 "valid": False,
                 "structurally_valid": False,
                 "detection_succeeded": False,
@@ -1980,6 +2073,7 @@ def run_calibration(
             baseline["pixels"] = baseline_frame.pixels
             quiescent_baseline: dict[str, Any] | None = None
             if video_path == "framed_h264":
+                trial["fifo_at_dispatch"] = source.pending_media_snapshot()
                 quiescent_baseline = source.wait_for_quiescent(
                     quiet_interval_seconds=quiescent_interval_seconds,
                     timeout_seconds=quiescent_timeout_seconds,
@@ -1988,7 +2082,7 @@ def run_calibration(
             gesture, trial_frames, started, capture = _dispatch_capture_window(
                 controller,
                 source,
-                calibration_input_swipe,
+                current_input_swipe,
                 initial_frame_index=baseline_frame.frame_index,
                 response_timeout_seconds=response_timeout_seconds,
                 label=f"trial-{trial_index}",
@@ -1996,19 +2090,25 @@ def run_calibration(
             response_frame: DecodedFrame | None = None
             response_score: dict[str, Any] | None = None
             frame_diagnostics: list[dict[str, Any]] = []
+            stale_previous_target_frame_indices: list[int] = []
             for frame in trial_frames:
-                score = detector.score(baseline, frame.pixels)
+                current_score = current_detector.score(baseline, frame.pixels)
+                previous_score = previous_detector.score(baseline, frame.pixels)
+                previous_detected = bool(previous_score.get("crosshair_detected"))
+                if previous_detected:
+                    stale_previous_target_frame_indices.append(frame.frame_index)
                 frame_diagnostics.append(
                     {
                         "frame_index": frame.frame_index,
                         "timestamp": frame.host_receive_decode_monotonic_seconds,
-                        "score": score,
+                        "current_target_score": current_score,
+                        "previous_target_score": previous_score,
+                        "stale_previous_target": previous_detected,
                     }
                 )
-                if _calibration_marker_on(score, visualization_mode):
+                if response_frame is None and _calibration_marker_on(current_score, visualization_mode):
                     response_frame = frame
-                    response_score = score
-                    break
+                    response_score = current_score
             completion = gesture.get("host_completion_monotonic_seconds")
             post_completion_frames = [
                 frame
@@ -2019,7 +2119,7 @@ def run_calibration(
             marker_off_frame: DecodedFrame | None = None
             marker_off_score: dict[str, Any] | None = None
             for candidate in post_completion_frames:
-                candidate_score = detector.score(baseline, candidate.pixels)
+                candidate_score = current_detector.score(baseline, candidate.pixels)
                 if _calibration_pointer_up(candidate_score, visualization_mode):
                     marker_off_frame = candidate
                     marker_off_score = candidate_score
@@ -2028,7 +2128,9 @@ def run_calibration(
                 _roi_difference_summary(
                     baseline_frame.pixels,
                     marker_off_frame.pixels,
-                    comparison_indices,
+                    current_detector.background_indices
+                    if visualization_mode == "pointer_location"
+                    else current_detector.indices,
                 )
                 if marker_off_frame is not None
                 else None
@@ -2045,10 +2147,10 @@ def run_calibration(
                 and _static_baseline_matches(marker_off_difference)
             )
             consistency = calibration_gesture_consistency(
-                calibration_input_swipe,
+                current_input_swipe,
                 gesture.get("parameters"),
-                mapped_calibration_swipe,
-                detector.swipe,
+                current_mapped_swipe,
+                current_detector.swipe,
             )
             trial.update(
                 {
@@ -2057,10 +2159,10 @@ def run_calibration(
                     "command_completion_monotonic_seconds": completion,
                     "baseline_frame_index": baseline_frame.frame_index,
                     "baseline_frame_indices_for_temporal_noise": setup["shared_no_touch_baseline"]["frame_indices"],
-                    "input_swipe": calibration_input_swipe.as_dict(),
-                    "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
+                    "input_swipe": current_input_swipe.as_dict(),
+                    "mapped_frame_swipe": current_mapped_swipe.as_dict(),
                     "gesture_consistency": consistency,
-                    "threshold_rule": detector.threshold_rule,
+                    "threshold_rule": current_detector.threshold_rule,
                     "temporal_noise_frame_count": setup["shared_no_touch_baseline"].get("temporal_noise_frame_count"),
                     "temporal_noise_sample_count": setup["shared_no_touch_baseline"].get("temporal_noise_sample_count"),
                     "temporal_noise_median_abs_delta": setup["shared_no_touch_baseline"].get("temporal_noise_median_abs_delta"),
@@ -2083,14 +2185,19 @@ def run_calibration(
                     "background_stable": background_stable,
                     "marker_off_recovered": marker_off_recovered,
                     "frame_diagnostics": frame_diagnostics,
+                    "stale_previous_target": bool(stale_previous_target_frame_indices),
+                    "stale_previous_target_frame_indices": stale_previous_target_frame_indices,
+                    "stale_previous_target_detection_count": len(stale_previous_target_frame_indices),
                 }
             )
             decomposition: dict[str, Any] | None = None
             first_post_t0_packet_diagnostic: dict[str, Any] | None = None
             relevant_packet_timing: dict[str, Any] | None = None
             association_diagnostics: dict[str, Any] | None = None
+            fifo_at_response: dict[str, Any] | None = None
             if video_path == "framed_h264" and started is not None:
                 first_post_t0_packet_diagnostic = source.first_media_packet_after(started)
+                fifo_at_response = source.pending_media_snapshot()
                 relevant_packet_timing = (
                     dict(response_frame.packet_association)
                     if response_frame is not None and response_frame.packet_association is not None
@@ -2098,14 +2205,20 @@ def run_calibration(
                 )
                 association_diagnostics = source.association_diagnostics()
                 if relevant_packet_timing is not None and response_frame is not None:
-                    try:
-                        decomposition = decompose_visible_latency(
-                            started,
-                            relevant_packet_timing["host_packet_complete_monotonic_seconds"],
-                            response_frame.host_receive_decode_monotonic_seconds,
+                    relevant_packet_timestamp = relevant_packet_timing["host_packet_complete_monotonic_seconds"]
+                    if relevant_packet_timestamp < started:
+                        trial["invalid_reason"] = (
+                            "current-target associated packet T1 precedes current trial T0"
                         )
-                    except ValueError as exc:
-                        trial["invalid_reason"] = str(exc)
+                    else:
+                        try:
+                            decomposition = decompose_visible_latency(
+                                started,
+                                relevant_packet_timestamp,
+                                response_frame.host_receive_decode_monotonic_seconds,
+                            )
+                        except ValueError as exc:
+                            trial["invalid_reason"] = str(exc)
             trial.update(
                 {
                     "t0_action_down_write_monotonic_seconds": started,
@@ -2119,6 +2232,7 @@ def run_calibration(
                     ),
                     "relevant_packet_association": relevant_packet_timing,
                     "first_post_t0_media_packet_diagnostic": first_post_t0_packet_diagnostic,
+                    "fifo_at_response": fifo_at_response,
                     "frame_association_diagnostics": association_diagnostics,
                     "decomposition": decomposition,
                 }
@@ -2131,6 +2245,8 @@ def run_calibration(
                 trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
             elif not gesture.get("success") or started is None:
                 trial["invalid_reason"] = gesture.get("failure") or "gesture dispatch failed"
+            elif video_path == "framed_h264" and response_frame is None:
+                trial["invalid_reason"] = "current target crosshair was not detected"
             elif (
                 video_path == "framed_h264"
                 and response_frame is not None
@@ -2187,6 +2303,16 @@ def run_calibration(
         restoration = settings.restore()
     valid = [trial for trial in trials_report if trial.get("structurally_valid")]
     detected = [trial for trial in valid if trial.get("detection_succeeded")]
+    current_target_detected = [
+        trial
+        for trial in trials_report
+        if (
+            (trial.get("detection_score") or {}).get("crosshair_detected")
+            if visualization_mode == "pointer_location"
+            else (trial.get("detection_score") or {}).get("detected")
+        )
+    ]
+    stale_previous_target_trials = [trial for trial in trials_report if trial.get("stale_previous_target")]
     trial_gestures = [trial.get("gesture", {}) for trial in trials_report]
     successful_trial_gestures = [gesture for gesture in trial_gestures if gesture.get("success")]
     latency_samples_ms = [float(trial["dispatch_start_to_first_visible_response_ms"]) for trial in detected]
@@ -2234,6 +2360,8 @@ def run_calibration(
             "visualization_mode": visualization_mode,
             "control_transport": control_transport,
             "video_path": video_path,
+            "decoder_profile": decoder_profile,
+            "calibration_target_sequence": [target.as_dict() for target in target_sequence],
             "framed_h264_capability": framed_h264_capability if video_path == "framed_h264" else None,
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
@@ -2281,8 +2409,18 @@ def run_calibration(
         "statistics": {
             **latency_summary,
             "valid_trials": len(valid),
+            "causal_structurally_valid_trials": len(valid) if video_path == "framed_h264" else None,
             "detected_trials": len(detected),
             "detection_success_rate": detection_success_rate,
+            "current_target_detected_trials": len(current_target_detected),
+            "current_target_detection_rate": len(current_target_detected) / len(trials_report)
+            if trials_report
+            else 0.0,
+            "stale_previous_target_trials": len(stale_previous_target_trials),
+            "stale_previous_target_detections": sum(
+                int(trial.get("stale_previous_target_detection_count", 0) or 0)
+                for trial in trials_report
+            ),
             "structurally_valid_trials": len(valid),
             "trial_gestures_attempted": len(trial_gestures),
             "trial_gestures_dispatched": len(successful_trial_gestures),
@@ -2306,6 +2444,8 @@ def run_calibration(
             else "requires >=30 valid trials and >=95% automatic detection",
             "raw_detected_latency_samples_ms": latency_samples_ms,
             "video_decomposition": decomposition_statistics,
+            "decoder_profile": decoder_profile,
+            "calibration_target_sequence": [target.as_dict() for target in target_sequence],
         },
         "coordinate_mapping": display_report,
         "source_diagnostics": source_diagnostics,

@@ -15,6 +15,7 @@ from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, s
 from .framed_video import verify_h264_no_b_frames
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
+    DECODER_PROFILES,
     Swipe,
     evaluate_realtime_gate,
     run_calibration,
@@ -152,6 +153,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--h264-capability-sample",
         type=Path,
         help="short real-device H.264 sample for the required ffprobe has_b_frames=0 check",
+    )
+    realtime.add_argument(
+        "--decoder-profile",
+        choices=DECODER_PROFILES,
+        default="baseline_current",
+        help="diagnostic FFmpeg decoder profile; changes only the pinned low-delay flag",
     )
     realtime.add_argument("--x1", type=_nonnegative_int, default=160)
     realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
@@ -764,6 +771,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_visualization": args.calibration_visualization,
             "control_transport": args.control_transport,
             "video_path": args.video_path,
+            "decoder_profile": args.decoder_profile,
             "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
             "calibration_swipe": Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
@@ -883,6 +891,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         control_transport=args.control_transport,
         video_path=args.video_path,
         framed_h264_capability=framed_h264_capability,
+        decoder_profile=args.decoder_profile,
     )
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
@@ -1083,6 +1092,14 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"rate={calibration.get('detection_success_rate')}; evaluation={calibration.get('latency_evaluation')}; "
             f"median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
         )
+        if calibration.get("video_decomposition", {}).get("video_path") == "framed_h264":
+            lines.append(
+                "Causal targets: "
+                f"current={calibration.get('current_target_detected_trials')}/{calibration.get('trial_gestures_attempted')}; "
+                f"stale-previous={calibration.get('stale_previous_target_trials')}; "
+                f"causal-valid={calibration.get('causal_structurally_valid_trials')}; "
+                f"decoder={calibration.get('decoder_profile')}"
+            )
         decomposition = calibration.get("video_decomposition", {})
         if decomposition.get("video_path") == "framed_h264":
             lines.append(

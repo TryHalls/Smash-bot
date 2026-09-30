@@ -234,6 +234,34 @@ class RealtimeTests(unittest.TestCase):
         self.assertTrue(top_bar_score["detected"])
         self.assertEqual(top_bar_score["detection_source"], "top_coordinate_bar")
 
+    def test_pointer_location_causal_identity_accepts_only_current_target_roi(self):
+        current = PointerLocationDetector(200, 200, Swipe(50, 100, 50, 100, 450))
+        previous = PointerLocationDetector(200, 200, Swipe(150, 100, 150, 100, 450))
+        baseline = current.baseline([bytes(200 * 200), bytes(200 * 200)])
+
+        current_pixels = bytearray(200 * 200)
+        for index in current.crosshair_indices:
+            current_pixels[index] = 255
+        previous_pixels = bytearray(200 * 200)
+        for index in previous.crosshair_indices:
+            previous_pixels[index] = 255
+
+        current_score = current.score(baseline, bytes(current_pixels))
+        previous_score = previous.score(baseline, bytes(current_pixels))
+        stale_current_score = current.score(baseline, bytes(previous_pixels))
+        stale_previous_score = previous.score(baseline, bytes(previous_pixels))
+
+        self.assertTrue(current_score["crosshair_detected"])
+        self.assertFalse(previous_score["crosshair_detected"])
+        self.assertFalse(stale_current_score["crosshair_detected"])
+        self.assertTrue(stale_previous_score["crosshair_detected"])
+
+    def test_negative_relevant_packet_timestamp_is_not_a_valid_decomposition(self):
+        with self.assertRaises(ValueError):
+            from smashbot_diagnostics.framed_video import decompose_visible_latency
+
+            decompose_visible_latency(100.0, 99.0, 100.5)
+
     def test_android_input_coordinates_map_to_portrait_frame(self):
         transform, evidence = query_display_coordinate_transform(FakeAdb(), 864, 1920)
 
