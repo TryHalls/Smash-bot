@@ -16,6 +16,8 @@ from smashbot_diagnostics.realtime import (
     Task007FramedH264FrameSource,
     TouchResponseDetector,
     TouchVisualizationSettings,
+    _task007_candidates_and_recovery,
+    _task007_pre_touch_baseline,
     evaluate_realtime_gate,
     frame_source_class_for_video_path,
     gesture_statistics,
@@ -172,6 +174,31 @@ def frame(index, timestamp, value=0, width=8, height=8):
     return DecodedFrame(index, timestamp, width, height, "gray", bytes([value]) * (width * height))
 
 
+def task007_association(
+    *,
+    action_sequence,
+    packet_sequence_index,
+    pts_us,
+    action_x=50,
+    action_y=50,
+):
+    return {
+        "task007_telemetry": {"version": 1},
+        "inject_success": True,
+        "action_sequence": action_sequence,
+        "action_x": action_x,
+        "action_y": action_y,
+        "d0_nanos": 100,
+        "d1_nanos": 200,
+        "d2_nanos": 300,
+        "scrcpy_pts_us": pts_us,
+        "associated_packet_pts_us": pts_us,
+        "packet_sequence_index": packet_sequence_index,
+        "packet_start_observed_monotonic_seconds": 1.0,
+        "packet_complete_monotonic_seconds": 1.1,
+    }
+
+
 class RealtimeTests(unittest.TestCase):
     def test_latest_frame_buffer_is_bounded_and_replaces_stale_pixels(self):
         buffer = LatestFrameBuffer(capacity=1)
@@ -261,6 +288,210 @@ class RealtimeTests(unittest.TestCase):
         self.assertFalse(previous_score["crosshair_detected"])
         self.assertFalse(stale_current_score["crosshair_detected"])
         self.assertTrue(stale_previous_score["crosshair_detected"])
+
+    def test_task007_pre_touch_baseline_uses_recent_stable_frames(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+        stable_frames = [frame(index, float(index), width=400, height=800) for index in range(5)]
+
+        baseline, evidence, stable = _task007_pre_touch_baseline(
+            detector,
+            stable_frames,
+            visualization_mode="pointer_location",
+        )
+
+        self.assertTrue(stable)
+        self.assertEqual(evidence["authoritative_frame_index"], 4)
+        self.assertEqual(baseline["pixels"], stable_frames[-1].pixels)
+        self.assertEqual(evidence["frame_count"], 5)
+
+    def test_task007_unstable_pre_touch_baseline_is_rejected_before_input(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+        changed = bytearray(400 * 800)
+        for index in detector.background_indices[: max(100, len(detector.background_indices) // 20)]:
+            changed[index] = 255
+        _, evidence, stable = _task007_pre_touch_baseline(
+            detector,
+            [
+                frame(0, 0.0, width=400, height=800),
+                frame(1, 1.0, value=0, width=400, height=800),
+                DecodedFrame(2, 2.0, 400, 800, "gray", bytes(changed)),
+            ],
+            visualization_mode="pointer_location",
+        )
+
+        self.assertFalse(stable)
+        self.assertFalse(evidence["stable"])
+        self.assertTrue(any(not item["static_match"] for item in evidence["frames"]))
+
+    def test_task007_visual_sequence_zero_is_rejected_and_later_causal_sequence_selected(self):
+        detector = PointerLocationDetector(100, 100, Swipe(50, 50, 50, 50, 450))
+        baseline_pixels = bytes(100 * 100)
+        baseline = detector.baseline([baseline_pixels, baseline_pixels])
+        crosshair_pixels = bytearray(baseline_pixels)
+        for index in detector.crosshair_indices:
+            crosshair_pixels[index] = 255
+        frames = [
+            DecodedFrame(
+                1,
+                1.2,
+                100,
+                100,
+                "gray",
+                bytes(crosshair_pixels),
+                task007_association(
+                    action_sequence=0,
+                    packet_sequence_index=10,
+                    pts_us=1000,
+                ),
+            ),
+            DecodedFrame(
+                2,
+                1.3,
+                100,
+                100,
+                "gray",
+                bytes(crosshair_pixels),
+                task007_association(
+                    action_sequence=1,
+                    packet_sequence_index=11,
+                    pts_us=2000,
+                ),
+            ),
+        ]
+
+        response, _, validation, _, _, _, diagnostics = _task007_candidates_and_recovery(
+            frames,
+            detector=detector,
+            baseline_frame=frame(0, 0.0, width=100, height=100),
+            baseline=baseline,
+            visualization_mode="pointer_location",
+            expected_action_sequence=1,
+            expected_target=Swipe(50, 50, 50, 50, 450),
+            c0=0.0,
+            c1=0.1,
+            completion=1.0,
+        )
+
+        self.assertEqual(response.frame_index, 2)
+        self.assertTrue(validation["valid"])
+        self.assertFalse(diagnostics[0]["causal_candidate_valid"])
+        self.assertTrue(diagnostics[0]["causal_candidate_rejected"])
+        self.assertIn("action_sequence", diagnostics[0]["rejection_reasons"][0])
+
+    def test_task007_stale_visual_candidate_does_not_block_later_causal_response(self):
+        detector = PointerLocationDetector(100, 100, Swipe(50, 50, 50, 50, 450))
+        baseline_pixels = bytes(100 * 100)
+        baseline = detector.baseline([baseline_pixels, baseline_pixels])
+        crosshair_pixels = bytearray(baseline_pixels)
+        for index in detector.crosshair_indices:
+            crosshair_pixels[index] = 255
+        stale = DecodedFrame(
+            1,
+            1.2,
+            100,
+            100,
+            "gray",
+            bytes(crosshair_pixels),
+            task007_association(action_sequence=0, packet_sequence_index=10, pts_us=1000),
+        )
+        current = DecodedFrame(
+            2,
+            1.3,
+            100,
+            100,
+            "gray",
+            bytes(crosshair_pixels),
+            task007_association(action_sequence=1, packet_sequence_index=11, pts_us=2000),
+        )
+
+        response, _, _, _, _, _, _ = _task007_candidates_and_recovery(
+            [stale, current],
+            detector=detector,
+            baseline_frame=frame(0, 0.0, width=100, height=100),
+            baseline=baseline,
+            visualization_mode="pointer_location",
+            expected_action_sequence=1,
+            expected_target=Swipe(50, 50, 50, 50, 450),
+            c0=0.0,
+            c1=0.1,
+            completion=1.0,
+        )
+
+        self.assertEqual(response.frame_index, 2)
+
+    def test_task007_recovery_skips_unstable_marker_off_and_uses_later_stable_frame(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+        baseline_pixels = bytes(400 * 800)
+        baseline = detector.baseline([baseline_pixels, baseline_pixels])
+        crosshair_pixels = bytearray(baseline_pixels)
+        for index in detector.crosshair_indices:
+            crosshair_pixels[index] = 255
+        unstable = bytearray(baseline_pixels)
+        for index in detector.background_indices[: max(100, len(detector.background_indices) // 20)]:
+            unstable[index] = 255
+        response = DecodedFrame(
+            1,
+            1.2,
+            400,
+            800,
+            "gray",
+            bytes(crosshair_pixels),
+            task007_association(action_sequence=1, packet_sequence_index=10, pts_us=1000),
+        )
+        unstable_recovery = DecodedFrame(2, 1.4, 400, 800, "gray", bytes(unstable), task007_association(action_sequence=1, packet_sequence_index=11, pts_us=2000))
+        stable_recovery = DecodedFrame(3, 1.5, 400, 800, "gray", baseline_pixels, task007_association(action_sequence=1, packet_sequence_index=12, pts_us=3000))
+
+        response, _, _, recovery, _, _, diagnostics = _task007_candidates_and_recovery(
+            [response, unstable_recovery, stable_recovery],
+            detector=detector,
+            baseline_frame=frame(0, 0.0, width=400, height=800),
+            baseline=baseline,
+            visualization_mode="pointer_location",
+            expected_action_sequence=1,
+            expected_target=Swipe(50, 50, 50, 50, 450),
+            c0=0.0,
+            c1=0.1,
+            completion=1.0,
+        )
+
+        self.assertEqual(response.frame_index, 1)
+        self.assertEqual(recovery.frame_index, 3)
+        self.assertFalse(diagnostics[1]["stable_recovery_candidate"])
+        self.assertTrue(diagnostics[2]["stable_recovery_candidate"])
+
+    def test_task007_absent_stable_recovery_fails_closed(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+        baseline_pixels = bytes(400 * 800)
+        baseline = detector.baseline([baseline_pixels, baseline_pixels])
+        crosshair_pixels = bytearray(baseline_pixels)
+        for index in detector.crosshair_indices:
+            crosshair_pixels[index] = 255
+        unstable = bytearray(baseline_pixels)
+        for index in detector.background_indices[: max(100, len(detector.background_indices) // 20)]:
+            unstable[index] = 255
+        response = DecodedFrame(
+            1,
+            1.2,
+            100,
+            100,
+            "gray",
+            bytes(crosshair_pixels),
+            task007_association(action_sequence=1, packet_sequence_index=10, pts_us=1000),
+        )
+        _, _, _, recovery, _, _, _ = _task007_candidates_and_recovery(
+            [response, DecodedFrame(2, 1.4, 400, 800, "gray", bytes(unstable), task007_association(action_sequence=1, packet_sequence_index=11, pts_us=2000))],
+            detector=detector,
+            baseline_frame=frame(0, 0.0, width=400, height=800),
+            baseline=baseline,
+            visualization_mode="pointer_location",
+            expected_action_sequence=1,
+            expected_target=Swipe(50, 50, 50, 50, 450),
+            c0=0.0,
+            c1=0.1,
+            completion=1.0,
+        )
+
+        self.assertIsNone(recovery)
 
     def test_negative_relevant_packet_timestamp_is_not_a_valid_decomposition(self):
         with self.assertRaises(ValueError):

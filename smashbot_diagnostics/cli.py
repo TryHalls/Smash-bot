@@ -753,6 +753,25 @@ def _validate_task007_cli_requirements(
         raise ValueError("task007_framed_h264 requires an explicit --scrcpy-server")
 
 
+def _resolve_realtime_output_base(
+    *,
+    video_path: str,
+    control_transport: str,
+    output_base: Path,
+) -> Path:
+    """Apply only the implicit per-path roots; preserve explicit output paths."""
+
+    if output_base != Path("artifacts/realtime"):
+        return output_base
+    if video_path == "task007_framed_h264":
+        return Path("artifacts/task007")
+    if video_path == "framed_h264":
+        return Path("artifacts/task005")
+    if control_transport == "scrcpy_v4_1":
+        return Path("artifacts/task004")
+    return output_base
+
+
 def _realtime_benchmark(args: argparse.Namespace) -> int:
     if not args.static_screen_confirmed:
         raise ValueError("realtime-benchmark requires --static-screen-confirmed on a safe static Android screen")
@@ -762,13 +781,11 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         scrcpy_server=args.scrcpy_server,
     )
     adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
-    output_base = args.output_base
-    if args.control_transport == "scrcpy_v4_1" and output_base == Path("artifacts/realtime"):
-        output_base = Path("artifacts/task004")
-    if args.video_path == "framed_h264" and output_base == Path("artifacts/realtime"):
-        output_base = Path("artifacts/task005")
-    if args.video_path == "task007_framed_h264" and output_base == Path("artifacts/realtime"):
-        output_base = Path("artifacts/task007")
+    output_base = _resolve_realtime_output_base(
+        video_path=args.video_path,
+        control_transport=args.control_transport,
+        output_base=args.output_base,
+    )
     run_dir = new_run_directory(output_base)
     capability = capability_report(adb, args.scrcpy, args.ffmpeg)
     selected_serial = capability.get("adb", {}).get("selected_serial")

@@ -5,6 +5,7 @@ from smashbot_diagnostics.cli import (
     _validate_task007_cli_requirements,
     build_parser,
     classify_calibration_stages,
+    _resolve_realtime_output_base,
 )
 
 
@@ -92,6 +93,25 @@ class CalibrationReportingTests(unittest.TestCase):
             video_path="framed_h264",
             control_transport="scrcpy_v4_1",
             scrcpy_server=None,
+        )
+
+    def test_task007_default_output_root_wins_over_control_transport_root(self):
+        self.assertEqual(
+            _resolve_realtime_output_base(
+                video_path="task007_framed_h264",
+                control_transport="scrcpy_v4_1",
+                output_base=Path("artifacts/realtime"),
+            ),
+            Path("artifacts/task007"),
+        )
+        explicit = Path("/tmp/explicit-task007-output")
+        self.assertEqual(
+            _resolve_realtime_output_base(
+                video_path="task007_framed_h264",
+                control_transport="scrcpy_v4_1",
+                output_base=explicit,
+            ),
+            explicit,
         )
 
     def test_thirty_trial_run_is_not_classified_as_stage_a_fail(self):
