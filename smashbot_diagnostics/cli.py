@@ -13,6 +13,14 @@ from . import __version__
 from .adb import AdbClient, AdbError, AdbUnavailable
 from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, swipe_parameters, utc_now
 from .framed_video import verify_h264_no_b_frames
+from .perception import (
+    DEFAULT_DURATION_SECONDS,
+    DEFAULT_OUTPUT_BASE as PERCEPTION_OUTPUT_BASE,
+    DEFAULT_PACKAGE as PERCEPTION_PACKAGE,
+    PerceptionCaptureError,
+    run_perception_capture,
+    validate_capture_duration,
+)
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -65,6 +73,13 @@ def _positive_float(value: str) -> float:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("must be greater than zero")
     return parsed
+
+
+def _perception_duration(value: str) -> float:
+    try:
+        return validate_capture_duration(value)
+    except PerceptionCaptureError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -184,12 +199,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="run only the static portrait calibration and do not start the moving-source phases",
     )
     realtime.add_argument("--output-base", type=Path, default=Path("artifacts/realtime"))
+
+    perception = subparsers.add_parser(
+        "perception-capture",
+        help="capture one bounded passive offline/training video clip for Task 008",
+    )
+    _add_connection_options(perception, serial_required=True)
+    perception.add_argument("--package", default=PERCEPTION_PACKAGE)
+    perception.add_argument("--duration-seconds", type=_perception_duration, default=DEFAULT_DURATION_SECONDS)
+    perception.add_argument(
+        "--offline-bot-or-training-confirmed",
+        action="store_true",
+        required=True,
+        help="confirm that the permitted offline/bot/training environment is active",
+    )
+    perception.add_argument("--scrcpy", default="scrcpy")
+    perception.add_argument("--scrcpy-server", type=Path, help="explicit official scrcpy-server-v4.1 path")
+    perception.add_argument("--ffmpeg", default="ffmpeg")
+    perception.add_argument("--ffprobe", default=None)
+    perception.add_argument("--output-base", type=Path, default=PERCEPTION_OUTPUT_BASE)
     return parser
 
 
-def _add_connection_options(parser: argparse.ArgumentParser) -> None:
+def _add_connection_options(parser: argparse.ArgumentParser, *, serial_required: bool = False) -> None:
     parser.add_argument("--adb", default="adb", help="ADB executable or path")
-    parser.add_argument("--serial", help="device serial; required when multiple devices are ready")
+    parser.add_argument(
+        "--serial",
+        required=serial_required,
+        help="device serial; required when multiple devices are ready",
+    )
     parser.add_argument(
         "--transport",
         choices=("auto", "wireless_tcp", "usb", "other"),
@@ -1221,6 +1259,29 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _perception_capture(args: argparse.Namespace) -> int:
+    report = run_perception_capture(
+        adb_executable=args.adb,
+        serial=args.serial,
+        transport=args.transport,
+        timeout=args.timeout,
+        package=args.package,
+        duration_seconds=args.duration_seconds,
+        output_base=args.output_base,
+        scrcpy=args.scrcpy,
+        scrcpy_server=args.scrcpy_server,
+        ffmpeg=args.ffmpeg,
+        ffprobe=args.ffprobe or "ffprobe",
+        offline_bot_or_training_confirmed=args.offline_bot_or_training_confirmed,
+    )
+    run_directory = report.get("run_directory")
+    if run_directory:
+        print(f"Manifest: {Path(run_directory) / 'manifest.json'}")
+        print(f"Summary: {Path(run_directory) / 'summary.txt'}")
+    print(f"Status: {report.get('status')}")
+    return 0 if report.get("status") == "PASS" else 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1239,6 +1300,8 @@ def main(argv: list[str] | None = None) -> int:
             return _stream_benchmark(args)
         if args.command == "realtime-benchmark":
             return _realtime_benchmark(args)
+        if args.command == "perception-capture":
+            return _perception_capture(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2
