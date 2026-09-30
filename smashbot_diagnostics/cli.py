@@ -13,6 +13,17 @@ from . import __version__
 from .adb import AdbClient, AdbError, AdbUnavailable
 from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, swipe_parameters, utc_now
 from .reporting import new_run_directory, write_json, write_summary
+from .streaming import (
+    BASELINE_PROFILE,
+    FALLBACK_PROFILE,
+    capability_report,
+    ensure_scrcpy_server,
+    evaluate_gate,
+    profile_dict,
+    run_raw_h264_frame_benchmark,
+    run_scrcpy_baseline,
+    run_v4l2_frame_benchmark,
+)
 
 DEFAULT_PACKAGE = "com.cascade.badminton.game"
 DEFAULT_REPORT_BASE = Path("artifacts/diagnostics")
@@ -36,6 +47,13 @@ def _nonnegative_float(value: str) -> float:
     parsed = float(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be zero or greater")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
     return parsed
 
 
@@ -73,6 +91,25 @@ def build_parser() -> argparse.ArgumentParser:
     input_benchmark.add_argument("--interval", type=_nonnegative_float, default=0.0, help="seconds between swipes")
     input_benchmark.add_argument("--execute", action="store_true", help="actually send swipes to the device")
     input_benchmark.add_argument("--output-base", type=Path, default=DEFAULT_REPORT_BASE)
+
+    capability = subparsers.add_parser("stream-capability", help="report scrcpy, FFmpeg, V4L2, and ADB stream capabilities")
+    _add_connection_options(capability)
+    _add_stream_tool_options(capability)
+    capability.add_argument("--output-base", type=Path, default=Path("artifacts/streaming"))
+
+    stream = subparsers.add_parser("stream-benchmark", help="run the ordered scrcpy continuous-stream experiment")
+    _add_connection_options(stream)
+    _add_stream_tool_options(stream)
+    stream.add_argument("--duration-seconds", type=_positive_float, default=60.0)
+    stream.add_argument("--path", choices=("auto", "v4l2", "raw_h264"), default="auto")
+    stream.add_argument("--v4l2-sink", help="explicit /dev/videoN when using the V4L2 path")
+    stream.add_argument("--scrcpy-server", type=Path, help="verified official scrcpy-server-v4.1 path")
+    stream.add_argument(
+        "--active-gameplay-confirmed",
+        action="store_true",
+        help="confirm that SMASH is in an active, moving match for the full experiment",
+    )
+    stream.add_argument("--output-base", type=Path, default=Path("artifacts/streaming"))
     return parser
 
 
@@ -94,6 +131,11 @@ def _add_swipe_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--x2", type=_nonnegative_int, required=True)
     parser.add_argument("--y2", type=_nonnegative_int, required=True)
     parser.add_argument("--duration-ms", type=_nonnegative_int, required=True)
+
+
+def _add_stream_tool_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--scrcpy", default="scrcpy", help="official scrcpy v4.1 executable or path")
+    parser.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable or path")
 
 
 def _host_report() -> dict[str, Any]:
@@ -327,6 +369,174 @@ def _input_summary(result: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _stream_capability(args: argparse.Namespace) -> int:
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
+    report = capability_report(adb, args.scrcpy, args.ffmpeg)
+    run_dir = new_run_directory(args.output_base)
+    report["report_directory"] = str(run_dir)
+    write_json(run_dir / "report.json", report)
+    write_summary(run_dir / "summary.txt", _stream_capability_summary(report))
+    print(f"Report: {run_dir / 'report.json'}")
+    print(f"Summary: {run_dir / 'summary.txt'}")
+    return 0
+
+
+def _stream_capability_summary(report: dict[str, Any]) -> list[str]:
+    adb = report.get("adb", {})
+    scrcpy = report.get("scrcpy", {})
+    ffmpeg = report.get("ffmpeg", {})
+    v4l2 = report.get("v4l2", {})
+    return [
+        "SMASH Bot continuous video capability",
+        f"Host: {report['host']['os']} {report['host']['architecture']} / Python {report['host']['python_version']}",
+        f"ADB device: {adb.get('selected_serial') or 'none'}",
+        f"ADB transport: {_value(adb.get('transport'), 'effective')} ({_value(adb.get('transport'), 'evidence')})",
+        f"scrcpy: {scrcpy.get('path') or 'unavailable'} / {scrcpy.get('version') or 'unavailable'} (v{scrcpy.get('required_version', '4.1')} required)",
+        f"FFmpeg: {ffmpeg.get('path') or 'unavailable'} / {ffmpeg.get('version') or 'unavailable'}",
+        f"V4L2: {'usable' if v4l2.get('usable') else 'unavailable'}; devices={', '.join(v4l2.get('video_devices', [])) or 'none'}; loopback_loaded={v4l2.get('v4l2loopback_loaded')}",
+        "Initial profile: H.264, max_size=1920, max_fps=60, video_buffer=0, audio=off",
+        "No frame benchmark was run by stream-capability.",
+    ] + (["Limitations:"] + [f"- {item['field']}: {item['error']}" for item in report.get("failures", [])] if report.get("failures") else [])
+
+
+def _stream_benchmark(args: argparse.Namespace) -> int:
+    if not args.active_gameplay_confirmed:
+        raise ValueError("stream-benchmark requires --active-gameplay-confirmed after SMASH is placed in an active moving match")
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
+    run_dir = new_run_directory(args.output_base)
+    capability = capability_report(adb, args.scrcpy, args.ffmpeg)
+    selected_serial = capability.get("adb", {}).get("selected_serial")
+    scrcpy_path = capability.get("scrcpy", {}).get("path")
+    ffmpeg_path = capability.get("ffmpeg", {}).get("path")
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "tool_version": __version__,
+        "generated_at_utc": utc_now(),
+        "command": "stream-benchmark",
+        "human_prerequisite": "SMASH active and moving for every timed stage",
+        "requested_duration_seconds": args.duration_seconds,
+        "requested_path": args.path,
+        "capability": capability,
+        "experiment_order": [
+            "1_environment_capability",
+            "2_baseline_scrcpy_1920_60",
+            "3_machine_readable_frame_path",
+            "4_programmatic_frame_benchmark",
+            "5_controlled_fallback_only_if_initial_gate_fails",
+        ],
+    }
+    if not selected_serial or not scrcpy_path:
+        report.update(
+            {
+                "status": "INCONCLUSIVE",
+                "baseline": {"status": "not_run", "reason": "selected ADB device or scrcpy v4.1 unavailable"},
+                "initial_frame_benchmark": {"status": "not_run"},
+                "initial_gate": {"status": "INCONCLUSIVE", "reason": "environment prerequisites unavailable"},
+                "controlled_fallback": {"status": "not_run"},
+            }
+        )
+        _write_stream_report(run_dir, report)
+        print(f"Report: {run_dir / 'report.json'}")
+        print(f"Summary: {run_dir / 'summary.txt'}")
+        return 2
+
+    baseline = run_scrcpy_baseline(scrcpy_path, selected_serial, BASELINE_PROFILE, args.duration_seconds)
+    report["baseline"] = baseline
+    v4l2 = capability.get("v4l2", {})
+    path = args.path
+    if path == "auto":
+        path = "v4l2" if v4l2.get("usable") else "raw_h264"
+    report["chosen_machine_readable_path"] = path
+    initial_frame: dict[str, Any]
+    server_info: dict[str, Any] | None = None
+    if path == "v4l2":
+        sink = args.v4l2_sink or (v4l2.get("video_devices") or [None])[0]
+        if not sink or not ffmpeg_path:
+            initial_frame = {"status": "unavailable", "path": "v4l2", "reason": "V4L2 sink or FFmpeg unavailable"}
+        else:
+            initial_frame = run_v4l2_frame_benchmark(adb, scrcpy_path, ffmpeg_path, sink, BASELINE_PROFILE, args.duration_seconds)
+    else:
+        if not ffmpeg_path:
+            initial_frame = {"status": "unavailable", "path": "raw_h264", "reason": "FFmpeg unavailable"}
+        else:
+            server_info = ensure_scrcpy_server(run_dir, str(args.scrcpy_server) if args.scrcpy_server else None)
+            if not server_info.get("available"):
+                initial_frame = {"status": "unavailable", "path": "raw_h264", "reason": "verified scrcpy server v4.1 unavailable", "server": server_info}
+            else:
+                initial_frame = run_raw_h264_frame_benchmark(
+                    adb,
+                    ffmpeg_path,
+                    server_info["path"],
+                    BASELINE_PROFILE,
+                    args.duration_seconds,
+                )
+    report["initial_frame_benchmark"] = initial_frame
+    if server_info is not None:
+        report["scrcpy_server"] = server_info
+    if initial_frame.get("status") == "completed":
+        initial_gate = evaluate_gate(initial_frame, args.duration_seconds)
+    else:
+        initial_gate = {"status": "INCONCLUSIVE", "reason": initial_frame.get("reason") or initial_frame.get("error") or "frame benchmark did not complete"}
+    report["initial_gate"] = initial_gate
+    fallback: dict[str, Any] = {"status": "not_run", "reason": "initial gate did not fail"}
+    if initial_gate.get("status") == "FAIL":
+        if path == "v4l2":
+            sink = args.v4l2_sink or (v4l2.get("video_devices") or [None])[0]
+            if sink and ffmpeg_path:
+                fallback_frame = run_v4l2_frame_benchmark(adb, scrcpy_path, ffmpeg_path, sink, FALLBACK_PROFILE, args.duration_seconds)
+            else:
+                fallback_frame = {"status": "unavailable", "path": "v4l2", "reason": "V4L2 sink or FFmpeg unavailable"}
+        else:
+            if server_info is None:
+                server_info = ensure_scrcpy_server(run_dir, str(args.scrcpy_server) if args.scrcpy_server else None)
+            if ffmpeg_path and server_info.get("available"):
+                fallback_frame = run_raw_h264_frame_benchmark(adb, ffmpeg_path, server_info["path"], FALLBACK_PROFILE, args.duration_seconds)
+            else:
+                fallback_frame = {"status": "unavailable", "path": "raw_h264", "reason": "FFmpeg or verified scrcpy server unavailable"}
+        fallback_gate = evaluate_gate(fallback_frame, args.duration_seconds) if fallback_frame.get("status") == "completed" else {"status": "INCONCLUSIVE", "reason": fallback_frame.get("reason") or fallback_frame.get("error") or "fallback did not complete"}
+        fallback = {"status": "completed", "profile": profile_dict(FALLBACK_PROFILE), "frame_benchmark": fallback_frame, "gate": fallback_gate}
+    report["controlled_fallback"] = fallback
+    final_gate = fallback.get("gate") if fallback.get("gate") else initial_gate
+    report["status"] = final_gate.get("status", "INCONCLUSIVE")
+    _write_stream_report(run_dir, report)
+    print(f"Report: {run_dir / 'report.json'}")
+    print(f"Summary: {run_dir / 'summary.txt'}")
+    return 0 if report["status"] == "PASS" else 2
+
+
+def _write_stream_report(run_dir: Path, report: dict[str, Any]) -> None:
+    write_json(run_dir / "report.json", report)
+    write_summary(run_dir / "summary.txt", _stream_summary(report))
+
+
+def _stream_summary(report: dict[str, Any]) -> list[str]:
+    capability = report.get("capability", {})
+    adb = capability.get("adb", {})
+    lines = [
+        "SMASH Bot low-latency continuous video experiment",
+        f"Status: {report.get('status', 'capability-only')}",
+        f"Device: {adb.get('selected_serial') or 'none'}",
+        f"Transport: {_value(adb.get('transport'), 'effective')} ({_value(adb.get('transport'), 'evidence')})",
+        f"Path: {report.get('chosen_machine_readable_path', 'not selected')}",
+        f"Baseline status: {_value(report.get('baseline'), 'status')}",
+        f"Initial gate: {_value(report.get('initial_gate'), 'status')}",
+        f"Controlled fallback: {_value(report.get('controlled_fallback'), 'status')}",
+        "Capture-to-host visual latency: explicitly unmeasured",
+    ]
+    frame = report.get("initial_frame_benchmark", {})
+    if frame.get("decoded_frame_count") is not None:
+        lines.extend(
+            [
+                f"Frames: {frame.get('decoded_frame_count')}; effective FPS: {frame.get('effective_decoded_fps')}",
+                f"Resolution: {frame.get('width')}x{frame.get('height')}; median interval: {frame.get('median_inter_frame_interval_ms')} ms; p95: {frame.get('p95_inter_frame_interval_ms')} ms",
+                f"Gaps >100/250/500 ms: {frame.get('gaps_over_100ms')}/{frame.get('gaps_over_250ms')}/{frame.get('gaps_over_500ms')}; decode failures: {frame.get('decode_failures')}; disconnects: {frame.get('stream_disconnects')}",
+            ]
+        )
+    if report.get("initial_gate", {}).get("reason"):
+        lines.append(f"Initial gate note: {report['initial_gate']['reason']}")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -339,6 +549,10 @@ def main(argv: list[str] | None = None) -> int:
             return _input_command(args, benchmark=False)
         if args.command == "input-benchmark":
             return _input_command(args, benchmark=True)
+        if args.command == "stream-capability":
+            return _stream_capability(args)
+        if args.command == "stream-benchmark":
+            return _stream_benchmark(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2
