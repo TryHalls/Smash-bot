@@ -417,7 +417,10 @@ class PerceptionAnnotationTests(unittest.TestCase):
             atomic_write_json(root / "annotations.json", annotations)
             server = AnnotationHTTPServer(root / "subset.json", root / "annotations.json")
             try:
-                state = server.apply({"shuttle.visible": False})
+                cleared = server.apply({"shuttle.center_x": None, "shuttle.center_y": None, "ambiguous": True})
+                self.assertTrue(cleared["record_status"]["incomplete"])
+                self.assertIsNone(cleared["record"]["shuttle"]["center_x"])
+                state = server.apply({"shuttle.visible": False, "ambiguous": False})
                 self.assertFalse(state["record"]["shuttle"]["visible"])
                 self.assertIsNone(state["record"]["shuttle"]["center_x"])
                 self.assertIsNone(state["record"]["shuttle"]["center_y"])
@@ -447,9 +450,52 @@ class PerceptionAnnotationTests(unittest.TestCase):
         self.assertTrue(subset.no_extract)
         label = build_parser().parse_args(["perception-label", "--manifest", "subset.json", "--annotations", "annotations.json"])
         self.assertEqual(label.port, 0)
-        self.assertTrue("Shortcuts" in _html())
-        self.assertTrue("window.alert" in _html())
-        self.assertTrue("disabled" in _html(read_only=True))
+        html = _html()
+        self.assertIn("TASK 009 — Ground Truth", html)
+        self.assertIn("Frame ${state.index+1} / ${state.count}", html)
+        self.assertIn("Saving…", html)
+        self.assertIn("Saved ✓", html)
+        self.assertIn("Save failed", html)
+        self.assertIn("Clear center", html)
+        self.assertIn("naturalWidth", html)
+        self.assertIn("This frame is incomplete", html)
+        self.assertIn("needsNavigationWarning", html)
+        self.assertIn("Shortcuts", html)
+        self.assertNotIn("window.alert", html)
+        readonly = _html(read_only=True)
+        self.assertTrue(readonly.count(" disabled") >= 8)
+        self.assertIn("READ-ONLY", readonly)
+
+    def test_ui_reports_progress_and_noncontiguous_context(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = root / "images"
+            images.mkdir()
+            records = []
+            annotations = []
+            for index, frame_index in enumerate((10, 11, 99)):
+                identity = {"record_id": f"record-{index}", "image_path": f"images/record-{index}.png", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": frame_index, "pts_us": frame_index + 1}
+                records.append(identity)
+                annotations.append(_annotation(identity) if index == 0 else {**_annotation(identity, active=None, visible=None), "active_rally": None, "shuttle": {"visible": None, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False}})
+                (images / f"record-{index}.png").write_bytes(b"png")
+            manifest = root / "subset.json"
+            annotation_path = root / "annotations.json"
+            atomic_write_json(manifest, {"schema_version": 1, "width": 864, "height": 1920, "records": records})
+            atomic_write_json(annotation_path, {"schema_version": 1, "records": annotations})
+            server = AnnotationHTTPServer(manifest, annotation_path)
+            try:
+                state = server.state()
+                self.assertEqual(state["progress"]["labeled"], 1)
+                self.assertEqual(state["progress"]["unlabeled"], 2)
+                self.assertEqual(state["progress"]["visible"], 1)
+                self.assertEqual(state["progress"]["incomplete"], 0)
+                self.assertEqual(state["temporal"]["previous"]["frame_index"], 10)
+                self.assertIsNone(state["temporal"]["next"])
+                state = server.state(move=1)
+                self.assertIsNone(state["temporal"]["next"])
+                self.assertEqual(state["storage_path"], str(annotation_path.resolve()))
+            finally:
+                server.server_close()
 
 
 if __name__ == "__main__":
