@@ -113,6 +113,99 @@ The command writes `artifacts/streaming/<timestamp>/report.json` and `summary.tx
 
 If V4L2 is absent, the documented raw H.264 fallback is selected automatically. Enabling `v4l2loopback` is intentionally not automatic because it may require a persistent package installation or `sudo modprobe`; the capability report records that condition and preserves the fallback path. No long video recordings are generated or committed.
 
+## Task 003: real-time observe→act loop
+
+Task 003 reuses the accepted official scrcpy v4.1 raw H.264 path and adds a
+bounded latest-frame source plus the existing Wireless ADB swipe mechanism.
+It does not implement perception, gameplay policy, scrcpy control, or any
+alternative input transport. If ADB is unavailable or a gesture fails, the
+report is **FAIL** with the command evidence.
+
+Before running the command, leave the phone in portrait on a safe static
+launcher screen away from clock/status animations. The command first performs
+touch-visualization calibration there. It then pauses and explicitly asks for
+SMASH to be switched to an offline match against a bot with continuous
+movement; only after that confirmation does it run the throughput and
+slow-consumer freshness tests. It records frame drops, queue depth, decoded
+frame age, gesture command timestamps, and visual-response trials without
+retaining an unbounded pixel history:
+
+```bash
+python3 -m smashbot_diagnostics realtime-benchmark \
+  --adb /path/to/adb \
+  --scrcpy /path/to/scrcpy \
+  --ffmpeg /path/to/ffmpeg \
+  --scrcpy-server /path/to/scrcpy-server \
+  --transport wireless_tcp --serial DEVICE_SERIAL \
+  --duration-seconds 32 --gesture-count 30 \
+  --gesture-interval-seconds 1 --consumer-hz 20 \
+  --static-screen-confirmed
+```
+
+The default calibration press is the empty central wallpaper point
+`540,1200` with a 450 ms duration, just below the launcher's long-press
+threshold so it does not open home customization. Override it with
+`--calibration-x` and `--calibration-y` if the device layout requires another
+non-interactive point. These coordinates are independent of the stress swipe
+coordinates.
+
+The command writes `artifacts/realtime/<timestamp>/report.json` and
+`summary.txt`. It snapshots `system/show_touches`, enables it only for the
+calibration, and restores the exact original value in cleanup even when a
+trial fails. Calibration records the effective `wm size`, explicitly maps
+Android input coordinates into the decoded portrait frame, and uses a
+persistent 450 ms zero-distance press. The default `show_touches` detector
+derives its threshold from temporal no-touch noise. The pointer-location spike
+can be selected with `--calibration-visualization pointer_location`; it
+snapshots both `system/pointer_location` and `system/show_touches`, verifies
+`pointer_location=1` with `show_touches=0`, and restores both exact original
+values, including `null`. Its detector uses the mapped Pointer Location
+crosshair `(432,960)` and the top coordinate band rather than the circular
+`show_touches` detector. In this mode, a post-touch pointer-up frame may retain
+the Pointer Location trail: `crosshair_detected=false` is sufficient for the
+next baseline, while marker-on and latency use only `crosshair_detected=true`.
+A masked launcher-background check excludes the top coordinate band and a
+generous region around the calibration point. A PASS requires the complete Task 003 gate, including at
+least 30 successful ADB gestures, moving-source FPS/interval/disconnect
+limits, dropped stale frames with p95 consumed-frame age below 100 ms, 30
+valid visual-response trials, and the latency/detection thresholds from Issue
+#5. If calibration validity is below 30 valid trials and 95% detection, the
+input-visible latency result is **INCONCLUSIVE**, not evidence that ADB is
+slow. The >=45 FPS and frame-gap gates apply only to the moving SMASH phase.
+
+### Final Task 003 decision
+
+The final accepted evidence is the 30-trial Pointer Location calibration run
+at `artifacts/realtime/20260930T102732Z/report.json` (local, gitignored):
+
+- The official raw H.264 video/frame source passed, including the bounded
+  latest-frame and freshness behavior.
+- Wireless ADB gesture reliability passed: 30/30 gestures succeeded.
+- Pointer Location calibration was structurally valid: 30/30 trials, 30/30
+  `crosshair_detected=true`, 30/30 pointer-up recoveries, and 30/30 stable
+  masked launcher-background checks.
+- The measured dispatch-start to first decoded crosshair frame had a median of
+  334.028 ms and p95 of 453.756 ms.
+- Therefore Wireless ADB visible-response latency is **FAIL** against the
+  Issue #5 limits of median <150 ms and p95 <250 ms.
+
+Task 003 does not implement scrcpy-control or add an alternative control
+transport. That architectural decision is deferred to Task 004 / Issue #7;
+PR #6 remains limited to the accepted video pipeline, ADB reliability
+evidence, and the documented latency failure.
+
 ## Scope and artifacts
 
-The only device-side actions are `exec-out screencap -p`, explicitly requested `input swipe`, and the official scrcpy video server/CLI used by Task 002. No screenshots or long recordings are committed. No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat bypass, online automation, scrcpy control integration, or custom scrcpy framed protocol is included.
+The device-side actions are the existing `input swipe`, the official scrcpy
+raw H.264 server, and temporary `settings get/put/delete system/pointer_location`
+and `system/show_touches` operations whose exact original values are restored.
+Static calibration uses a
+VFR-aware state machine: one marker-off baseline frame, an unmeasured warm-up
+press, a shared temporal-noise baseline from the post-warm-up marker-off frame,
+and then `baseline marker-off -> dispatch -> marker-on -> marker-off/baseline
+next` for each trial. It does not require multiple fresh no-touch frames before
+dispatch. The persistent calibration press is 450 ms. Task 002 screenshot
+capture remains unchanged and no screenshots or long recordings are committed.
+No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
+bypass, online automation, scrcpy control integration, or custom scrcpy framed
+protocol is included.
