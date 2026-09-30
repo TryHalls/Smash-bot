@@ -659,46 +659,88 @@ def _read_setting(adb: AdbClient, namespace: str, key: str) -> str:
 
 
 class TouchVisualizationSettings:
-    """Snapshot, enable, and restore the minimum Android touch marker setting."""
+    """Snapshot and restore both Android calibration overlays exactly.
+
+    ``show_touches`` remains the original calibration mode.  The pointer
+    location spike enables only ``pointer_location`` and explicitly disables
+    ``show_touches`` so the two overlays cannot be confused in one run.
+    """
 
     namespace = "system"
-    key = "show_touches"
+    show_touches_key = "show_touches"
+    pointer_location_key = "pointer_location"
+    key = show_touches_key
 
-    def __init__(self, adb: AdbClient):
+    def __init__(self, adb: AdbClient, visualization_mode: str = "show_touches"):
+        if visualization_mode not in {"show_touches", "pointer_location"}:
+            raise ValueError(f"unsupported calibration visualization mode: {visualization_mode}")
         self.adb = adb
+        self.visualization_mode = visualization_mode
         self.original_value: str | None = None
+        self.original_values: dict[str, str | None] = {
+            self.show_touches_key: None,
+            self.pointer_location_key: None,
+        }
         self.restore_report: dict[str, Any] = {
             "attempted": False,
             "success": False,
             "original_value": None,
             "restored_value": None,
+            "original_values": dict(self.original_values),
+            "restored_values": {},
+            "visualization_mode": visualization_mode,
             "error": None,
         }
 
     def enable(self) -> dict[str, Any]:
-        self.original_value = _read_setting(self.adb, self.namespace, self.key)
+        for key in self.original_values:
+            self.original_values[key] = _read_setting(self.adb, self.namespace, key)
+        self.original_value = self.original_values[self.show_touches_key]
         self.restore_report["original_value"] = self.original_value
-        self.adb.shell("settings", "put", self.namespace, self.key, "1")
-        observed = _read_setting(self.adb, self.namespace, self.key)
-        if observed != "1":
-            raise RealtimeError(f"Android did not enable {self.namespace}/{self.key}; observed {observed!r}")
-        return {"namespace": self.namespace, "key": self.key, "original_value": self.original_value, "enabled_value": observed}
+        self.restore_report["original_values"] = dict(self.original_values)
+        desired = {
+            self.show_touches_key: "1" if self.visualization_mode == "show_touches" else "0",
+            self.pointer_location_key: "1" if self.visualization_mode == "pointer_location" else self.original_values[self.pointer_location_key],
+        }
+        for key, value in desired.items():
+            if value == "null":
+                self.adb.shell("settings", "delete", self.namespace, key)
+            elif value is not None:
+                self.adb.shell("settings", "put", self.namespace, key, value)
+        observed = {key: _read_setting(self.adb, self.namespace, key) for key in desired}
+        expected = {
+            self.show_touches_key: desired[self.show_touches_key],
+            self.pointer_location_key: desired[self.pointer_location_key],
+        }
+        if any(observed[key] != expected[key] for key in expected):
+            raise RealtimeError(
+                "Android calibration overlay settings did not reach requested values: "
+                f"expected {expected!r}, observed {observed!r}"
+            )
+        return {
+            "namespace": self.namespace,
+            "visualization_mode": self.visualization_mode,
+            "original_values": dict(self.original_values),
+            "enabled_values": observed,
+        }
 
     def restore(self) -> dict[str, Any]:
-        self.restore_report["attempted"] = self.original_value is not None
-        if self.original_value is None:
-            self.restore_report["error"] = "setting was not snapshotted"
+        self.restore_report["attempted"] = any(value is not None for value in self.original_values.values())
+        if not self.restore_report["attempted"]:
+            self.restore_report["error"] = "settings were not snapshotted"
             return self.restore_report
         try:
-            if self.original_value == "null":
-                self.adb.shell("settings", "delete", self.namespace, self.key)
-            else:
-                self.adb.shell("settings", "put", self.namespace, self.key, self.original_value)
-            observed = _read_setting(self.adb, self.namespace, self.key)
-            self.restore_report["restored_value"] = observed
-            self.restore_report["success"] = observed == self.original_value
+            for key, original in self.original_values.items():
+                if original == "null":
+                    self.adb.shell("settings", "delete", self.namespace, key)
+                else:
+                    self.adb.shell("settings", "put", self.namespace, key, original)
+            observed = {key: _read_setting(self.adb, self.namespace, key) for key in self.original_values}
+            self.restore_report["restored_values"] = observed
+            self.restore_report["restored_value"] = observed[self.show_touches_key]
+            self.restore_report["success"] = observed == self.original_values
             if not self.restore_report["success"]:
-                self.restore_report["error"] = f"expected {self.original_value!r}, observed {observed!r}"
+                self.restore_report["error"] = f"expected {self.original_values!r}, observed {observed!r}"
         except AdbError as exc:
             self.restore_report["error"] = str(exc)
         return self.restore_report
@@ -776,6 +818,153 @@ class TouchResponseDetector:
             "mean_absolute_change": mean_absolute_change,
             "absolute_change_threshold": threshold,
             "confidence": min(1.0, changed_fraction / 0.01) if changed_fraction else 0.0,
+        }
+
+
+class PointerLocationDetector:
+    """Detect Android Pointer Location's crosshair or coordinate bar.
+
+    This intentionally does not reuse the circular ``show_touches`` ROI.  It
+    models the thin crosshair centered at the mapped input point and a narrow
+    top coordinate band, with independent temporal-noise thresholds.
+    """
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        swipe: Swipe,
+        *,
+        crosshair_half_length: int = 28,
+        crosshair_thickness: int = 2,
+        top_bar_height: int = 96,
+    ):
+        self.width = width
+        self.height = height
+        self.swipe = swipe
+        self.center = (swipe.x1, swipe.y1)
+        self.crosshair_half_length = crosshair_half_length
+        self.crosshair_thickness = crosshair_thickness
+        self.top_bar_height = min(height, top_bar_height)
+        self.crosshair_indices = self._crosshair_indices()
+        self.indices = self.crosshair_indices
+        self.top_bar_indices = tuple(
+            y * width + x
+            for y in range(self.top_bar_height)
+            for x in range(width)
+        )
+        self.threshold_rule = (
+            "pointer_location detector: independent temporal no-touch p99 + 3*MAD "
+            "thresholds for the mapped crosshair and top coordinate band; detect "
+            "crosshair geometry OR coordinate-band change"
+        )
+
+    def _crosshair_indices(self) -> tuple[int, ...]:
+        center_x, center_y = self.center
+        indices: set[int] = set()
+        for offset in range(-self.crosshair_half_length, self.crosshair_half_length + 1):
+            for thickness in range(self.crosshair_thickness):
+                for x, y in (
+                    (center_x + offset, center_y + thickness),
+                    (center_x + thickness, center_y + offset),
+                ):
+                    if 0 <= x < self.width and 0 <= y < self.height:
+                        indices.add(y * self.width + x)
+        return tuple(indices)
+
+    @staticmethod
+    def _noise_model(no_touch_frames: list[bytes], indices: tuple[int, ...]) -> dict[str, float | int]:
+        noise = [
+            abs(int(current[index]) - int(previous[index]))
+            for previous, current in zip(no_touch_frames, no_touch_frames[1:])
+            for index in indices
+            if index < len(previous) and index < len(current)
+        ]
+        if not noise:
+            raise RealtimeError("pointer_location temporal baseline contains no ROI pixels")
+        noise_median = median(noise)
+        noise_mad = median([abs(value - noise_median) for value in noise])
+        noise_p99 = percentile(noise, 99) or 0.0
+        return {
+            "temporal_noise_sample_count": len(noise),
+            "temporal_noise_median_abs_delta": noise_median,
+            "temporal_noise_mad": noise_mad,
+            "temporal_noise_p99_abs_delta": noise_p99,
+            "absolute_change_threshold": min(255.0, max(8.0, noise_p99 + 3.0 * max(1.0, noise_mad))),
+        }
+
+    def baseline(self, no_touch_frames: list[bytes]) -> dict[str, Any]:
+        if len(no_touch_frames) < 2:
+            raise RealtimeError("pointer_location temporal no-touch baseline requires two decoded frames")
+        crosshair_noise = self._noise_model(no_touch_frames, self.crosshair_indices)
+        top_bar_noise = self._noise_model(no_touch_frames, self.top_bar_indices)
+        return {
+            "pixels": no_touch_frames[-1],
+            "temporal_noise_frame_count": len(no_touch_frames),
+            "crosshair": crosshair_noise,
+            "top_bar": top_bar_noise,
+            "threshold_rule": self.threshold_rule,
+        }
+
+    @staticmethod
+    def _region_score(
+        reference: bytes,
+        pixels: bytes,
+        indices: tuple[int, ...],
+        threshold: float,
+    ) -> dict[str, Any]:
+        differences = [
+            abs(int(pixels[index]) - int(reference[index]))
+            for index in indices
+            if index < len(reference) and index < len(pixels)
+        ]
+        changed = sum(value > threshold for value in differences)
+        changed_fraction = changed / len(differences) if differences else 0.0
+        mean_absolute_change = fmean(differences) if differences else 0.0
+        return {
+            "pixel_count": len(differences),
+            "changed_pixel_count": changed,
+            "changed_fraction": changed_fraction,
+            "mean_absolute_change": mean_absolute_change,
+            "maximum_absolute_change": max(differences) if differences else 0,
+            "absolute_change_threshold": threshold,
+        }
+
+    def score(self, baseline: dict[str, Any], pixels: bytes) -> dict[str, Any]:
+        reference = baseline["pixels"]
+        crosshair = self._region_score(
+            reference,
+            pixels,
+            self.crosshair_indices,
+            float(baseline["crosshair"]["absolute_change_threshold"]),
+        )
+        top_bar = self._region_score(
+            reference,
+            pixels,
+            self.top_bar_indices,
+            float(baseline["top_bar"]["absolute_change_threshold"]),
+        )
+        crosshair_detected = (
+            crosshair["changed_fraction"] >= 0.05
+            and crosshair["mean_absolute_change"] >= crosshair["absolute_change_threshold"] / 2
+        )
+        top_bar_detected = (
+            top_bar["changed_fraction"] >= 0.002
+            and top_bar["mean_absolute_change"] >= top_bar["absolute_change_threshold"] / 2
+        )
+        detected = crosshair_detected or top_bar_detected
+        source = "crosshair" if crosshair_detected else "top_coordinate_bar" if top_bar_detected else None
+        return {
+            "detected": detected,
+            "detection_source": source,
+            "crosshair_detected": crosshair_detected,
+            "top_bar_detected": top_bar_detected,
+            "crosshair": crosshair,
+            "top_bar": top_bar,
+            "confidence": max(
+                min(1.0, crosshair["changed_fraction"] / 0.05),
+                min(1.0, top_bar["changed_fraction"] / 0.002),
+            ),
         }
 
 
@@ -1032,8 +1221,9 @@ def run_calibration(
     calibration_swipe: Swipe | None = None,
     baseline_frame_count: int = 5,
     baseline_timeout_seconds: float = 2.0,
+    visualization_mode: str = "show_touches",
 ) -> dict[str, Any]:
-    settings = TouchVisualizationSettings(adb)
+    settings = TouchVisualizationSettings(adb, visualization_mode=visualization_mode)
     controller = AdbGestureController(adb)
     source: RawH264FrameSource | None = None
     trials_report: list[dict[str, Any]] = []
@@ -1062,10 +1252,10 @@ def run_calibration(
         mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
         setup["input_swipe"] = calibration_input_swipe.as_dict()
         setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
-        detector = TouchResponseDetector(
-            first_frame.width,
-            first_frame.height,
-            mapped_calibration_swipe,
+        detector = (
+            PointerLocationDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
+            if visualization_mode == "pointer_location"
+            else TouchResponseDetector(first_frame.width, first_frame.height, mapped_calibration_swipe)
         )
 
         # VFR-aware setup: one decoded baseline frame, one unmeasured warm-up
@@ -1123,7 +1313,15 @@ def run_calibration(
                 "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
             }
         )
-        warmup_scores = [detector.score(shared_baseline, frame.pixels) for frame in warmup_frames]
+        warmup_frame_diagnostics = [
+            {
+                "frame_index": frame.frame_index,
+                "timestamp": frame.host_receive_decode_monotonic_seconds,
+                "score": detector.score(shared_baseline, frame.pixels),
+            }
+            for frame in warmup_frames
+        ]
+        warmup_scores = [item["score"] for item in warmup_frame_diagnostics]
         warmup_marker_on = any(score["detected"] for score in warmup_scores)
         warmup_off_score = detector.score(shared_baseline, post_warmup_frame.pixels)
         warmup_static_match = _static_baseline_matches(post_warmup_difference)
@@ -1137,6 +1335,7 @@ def run_calibration(
                 "post_warmup_no_touch_difference": post_warmup_difference,
                 "post_warmup_marker_score": warmup_off_score,
                 "launcher_state_unchanged": warmup_static_match,
+                "frame_diagnostics": warmup_frame_diagnostics,
             }
         )
         if not warmup_gesture.get("success"):
@@ -1172,8 +1371,16 @@ def run_calibration(
             )
             response_frame: DecodedFrame | None = None
             response_score: dict[str, Any] | None = None
+            frame_diagnostics: list[dict[str, Any]] = []
             for frame in trial_frames:
                 score = detector.score(baseline, frame.pixels)
+                frame_diagnostics.append(
+                    {
+                        "frame_index": frame.frame_index,
+                        "timestamp": frame.host_receive_decode_monotonic_seconds,
+                        "score": score,
+                    }
+                )
                 if score["detected"]:
                     response_frame = frame
                     response_score = score
@@ -1218,12 +1425,18 @@ def run_calibration(
                     "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
                     "gesture_consistency": consistency,
                     "threshold_rule": detector.threshold_rule,
-                    "temporal_noise_frame_count": setup["shared_no_touch_baseline"]["temporal_noise_frame_count"],
-                    "temporal_noise_sample_count": setup["shared_no_touch_baseline"]["temporal_noise_sample_count"],
-                    "temporal_noise_median_abs_delta": setup["shared_no_touch_baseline"]["temporal_noise_median_abs_delta"],
-                    "temporal_noise_mad": setup["shared_no_touch_baseline"]["temporal_noise_mad"],
-                    "temporal_noise_p99_abs_delta": setup["shared_no_touch_baseline"]["temporal_noise_p99_abs_delta"],
-                    "absolute_change_threshold": setup["shared_no_touch_baseline"]["absolute_change_threshold"],
+                    "temporal_noise_frame_count": setup["shared_no_touch_baseline"].get("temporal_noise_frame_count"),
+                    "temporal_noise_sample_count": setup["shared_no_touch_baseline"].get("temporal_noise_sample_count"),
+                    "temporal_noise_median_abs_delta": setup["shared_no_touch_baseline"].get("temporal_noise_median_abs_delta"),
+                    "temporal_noise_mad": setup["shared_no_touch_baseline"].get("temporal_noise_mad"),
+                    "temporal_noise_p99_abs_delta": setup["shared_no_touch_baseline"].get("temporal_noise_p99_abs_delta"),
+                    "absolute_change_threshold": setup["shared_no_touch_baseline"].get("absolute_change_threshold"),
+                    "pointer_location_temporal_noise": {
+                        "crosshair": setup["shared_no_touch_baseline"].get("crosshair"),
+                        "top_bar": setup["shared_no_touch_baseline"].get("top_bar"),
+                    }
+                    if visualization_mode == "pointer_location"
+                    else None,
                     "detection_score": response_score,
                     "response_frame_index": response_frame.frame_index if response_frame else None,
                     "response_frame_timestamp": response_frame.host_receive_decode_monotonic_seconds if response_frame else None,
@@ -1232,6 +1445,7 @@ def run_calibration(
                     "marker_off_score": marker_off_score,
                     "marker_off_difference": marker_off_difference,
                     "marker_off_recovered": marker_off_recovered,
+                    "frame_diagnostics": frame_diagnostics,
                 }
             )
             if not consistency["consistent"]:
@@ -1289,6 +1503,7 @@ def run_calibration(
             "response_timeout_seconds": response_timeout_seconds,
             "stress_swipe": swipe.as_dict(),
             "calibration_swipe": calibration_input_swipe.as_dict(),
+            "visualization_mode": visualization_mode,
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
             "calibration_state_machine": [
@@ -1299,8 +1514,17 @@ def run_calibration(
             ],
             "pre_dispatch_new_frames_required": 0,
             "detector": {
-                "roi": "corridor around mapped persistent calibration press point",
-                "threshold_rule": TouchResponseDetector(1, 2, Swipe(0, 0, 0, 0, 500)).threshold_rule,
+                "roi": (
+                    "Pointer Location crosshair centered on mapped persistent calibration press point "
+                    "plus top coordinate band"
+                    if visualization_mode == "pointer_location"
+                    else "corridor around mapped persistent calibration press point"
+                ),
+                "threshold_rule": (
+                    PointerLocationDetector(1, 2, Swipe(0, 0, 0, 0, 450)).threshold_rule
+                    if visualization_mode == "pointer_location"
+                    else TouchResponseDetector(1, 2, Swipe(0, 0, 0, 0, 450)).threshold_rule
+                ),
             },
         },
         "setup": setup,

@@ -153,9 +153,15 @@ The command writes `artifacts/realtime/<timestamp>/report.json` and
 `summary.txt`. It snapshots `system/show_touches`, enables it only for the
 calibration, and restores the exact original value in cleanup even when a
 trial fails. Calibration records the effective `wm size`, explicitly maps
-Android input coordinates into the decoded portrait frame, uses a persistent
-450 ms zero-distance press, and derives its detection threshold from temporal
-no-touch noise. A PASS requires the complete Task 003 gate, including at
+Android input coordinates into the decoded portrait frame, and uses a
+persistent 450 ms zero-distance press. The default `show_touches` detector
+derives its threshold from temporal no-touch noise. The pointer-location spike
+can be selected with `--calibration-visualization pointer_location`; it
+snapshots both `system/pointer_location` and `system/show_touches`, verifies
+`pointer_location=1` with `show_touches=0`, and restores both exact original
+values, including `null`. Its detector uses the mapped Pointer Location
+crosshair `(432,960)` and the top coordinate band rather than the circular
+`show_touches` detector. A PASS requires the complete Task 003 gate, including at
 least 30 successful ADB gestures, moving-source FPS/interval/disconnect
 limits, dropped stale frames with p95 consumed-frame age below 100 ms, 30
 valid visual-response trials, and the latency/detection thresholds from Issue
@@ -166,8 +172,9 @@ slow. The >=45 FPS and frame-gap gates apply only to the moving SMASH phase.
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
-raw H.264 server, and temporary `settings get/put/delete system show_touches`
-operations whose exact original value is restored. Static calibration uses a
+raw H.264 server, and temporary `settings get/put/delete system/pointer_location`
+and `system/show_touches` operations whose exact original values are restored.
+Static calibration uses a
 VFR-aware state machine: one marker-off baseline frame, an unmeasured warm-up
 press, a shared temporal-noise baseline from the post-warm-up marker-off frame,
 and then `baseline marker-off -> dispatch -> marker-on -> marker-off/baseline

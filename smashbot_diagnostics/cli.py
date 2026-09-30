@@ -129,6 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument("--calibration-trials", type=_positive_int, default=30)
     realtime.add_argument("--calibration-spacing-seconds", type=_positive_float, default=1.0)
     realtime.add_argument("--calibration-timeout-seconds", type=_positive_float, default=1.0)
+    realtime.add_argument(
+        "--calibration-visualization",
+        choices=("show_touches", "pointer_location"),
+        default="show_touches",
+        help="Android calibration overlay; pointer_location is the explicit diagnostic spike",
+    )
     realtime.add_argument("--x1", type=_nonnegative_int, default=160)
     realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
     realtime.add_argument("--x2", type=_nonnegative_int, default=700)
@@ -610,6 +616,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_trials": args.calibration_trials,
             "calibration_spacing_seconds": args.calibration_spacing_seconds,
             "calibration_timeout_seconds": args.calibration_timeout_seconds,
+            "calibration_visualization": args.calibration_visualization,
             "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
             "calibration_swipe": Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
@@ -678,6 +685,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         response_timeout_seconds=args.calibration_timeout_seconds,
         swipe=stress_swipe,
         calibration_swipe=calibration_swipe,
+        visualization_mode=args.calibration_visualization,
     )
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
@@ -867,7 +875,8 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
         lines.append(
             "Calibration structure: "
             f"dispatched={calibration.get('trial_gestures_dispatched')}/{calibration.get('trial_gestures_attempted')}; "
-            f"marker-off recovered={calibration.get('marker_off_recovered_trials')}/{calibration.get('trial_gestures_attempted')}"
+            f"marker-off recovered={calibration.get('marker_off_recovered_trials')}/{calibration.get('trial_gestures_attempted')}; "
+            f"visualization={calibration.get('configuration', {}).get('visualization_mode')}"
         )
     age = report.get("freshness", {}).get("source", {}).get("consumed_frame_age_ms", {})
     if age:

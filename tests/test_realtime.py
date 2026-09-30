@@ -6,6 +6,7 @@ from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
     LatestFrameBuffer,
+    PointerLocationDetector,
     RawH264FrameSource,
     RealtimeError,
     Swipe,
@@ -156,6 +157,31 @@ class RealtimeTests(unittest.TestCase):
         self.assertLessEqual(result["absolute_change_threshold"], 255)
         self.assertIn("temporal no-touch", detector.threshold_rule)
 
+    def test_pointer_location_detector_uses_crosshair_and_top_coordinate_band(self):
+        detector = PointerLocationDetector(
+            100,
+            100,
+            Swipe(50, 50, 50, 50, 450),
+            crosshair_half_length=8,
+            top_bar_height=10,
+        )
+        baseline = detector.baseline([bytes(100 * 100), bytes(100 * 100)])
+
+        crosshair_pixels = bytearray(100 * 100)
+        for index in detector.crosshair_indices:
+            crosshair_pixels[index] = 255
+        crosshair_score = detector.score(baseline, bytes(crosshair_pixels))
+
+        top_bar_pixels = bytearray(100 * 100)
+        for index in detector.top_bar_indices[:20]:
+            top_bar_pixels[index] = 255
+        top_bar_score = detector.score(baseline, bytes(top_bar_pixels))
+
+        self.assertTrue(crosshair_score["detected"])
+        self.assertEqual(crosshair_score["detection_source"], "crosshair")
+        self.assertTrue(top_bar_score["detected"])
+        self.assertEqual(top_bar_score["detection_source"], "top_coordinate_bar")
+
     def test_android_input_coordinates_map_to_portrait_frame(self):
         transform, evidence = query_display_coordinate_transform(FakeAdb(), 864, 1920)
 
@@ -197,6 +223,10 @@ class RealtimeTests(unittest.TestCase):
         self.assertTrue(report["setup"]["warmup"]["marker_on_detected"])
         self.assertTrue(report["setup"]["warmup"]["marker_off_recovered"])
         self.assertEqual(report["setup"]["shared_no_touch_baseline"]["pre_dispatch_new_frames_required"], 0)
+        self.assertEqual(
+            trial["state_trace"],
+            ["baseline_marker_off", "dispatch", "marker_on_detected", "marker_off_baseline_next"],
+        )
         self.assertTrue(trial["structurally_valid"])
         self.assertTrue(trial["detection_succeeded"])
         self.assertTrue(trial["marker_off_recovered"])
@@ -234,6 +264,24 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(restored["original_value"], "0")
         self.assertEqual(restored["restored_value"], "0")
         self.assertEqual(adb.values["show_touches"], "0")
+
+    def test_pointer_location_enable_and_restore_preserves_null_values_exactly(self):
+        adb = FakeAdb()
+        adb.values = {}
+        settings = TouchVisualizationSettings(adb, visualization_mode="pointer_location")
+
+        enabled = settings.enable()
+
+        self.assertEqual(enabled["original_values"], {"show_touches": "null", "pointer_location": "null"})
+        self.assertEqual(enabled["enabled_values"], {"show_touches": "0", "pointer_location": "1"})
+        self.assertEqual(adb.values, {"show_touches": "0", "pointer_location": "1"})
+
+        restored = settings.restore()
+
+        self.assertTrue(restored["success"])
+        self.assertEqual(restored["original_values"], {"show_touches": "null", "pointer_location": "null"})
+        self.assertEqual(restored["restored_values"], {"show_touches": "null", "pointer_location": "null"})
+        self.assertEqual(adb.values, {})
 
     def test_touch_setting_null_value_is_deleted_on_restore(self):
         adb = FakeAdb()
