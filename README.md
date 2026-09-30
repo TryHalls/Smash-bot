@@ -397,7 +397,11 @@ Host tests pass, but the Android build gate is currently blocked by missing
 local `java`/`javac` and Android SDK (`ANDROID_HOME`/`ANDROID_SDK_ROOT` are
 unset). The exact prerequisite report and reproducible build command are in
 [`task007/README.md`](task007/README.md). No tools were installed or
-substituted, and no phone, SMASH run, or PR is part of this phase.
+substituted, and no phone, SMASH run, or PR is part of this phase. The
+diagnostic APK identity is fail-closed: it requires build metadata proving the
+exact upstream commit, current patch SHA, clean/apply-only checkout state,
+and the selected APK's recorded SHA-256. No server SHA is hardcoded before a
+successful build.
 
 ## Scope and artifacts
 

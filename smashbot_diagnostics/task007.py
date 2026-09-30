@@ -10,6 +10,7 @@ payload.
 from __future__ import annotations
 
 import hashlib
+import re
 import struct
 from collections import deque
 from dataclasses import dataclass
@@ -41,10 +42,28 @@ TASK007_KNOWN_FLAGS = (
 )
 TASK007_TELEMETRY_STRUCT = struct.Struct(">4sHHQIIQQQQ")
 TASK007_PACKET_PREFIX_SIZE = FRAME_HEADER_SIZE + TASK007_TELEMETRY_SIZE
+TASK007_UPSTREAM_COMMIT = "2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0"
+TASK007_UPSTREAM_TAG = "v4.1"
+TASK007_BUILD_COMMAND = "./gradlew -p server assembleRelease"
+TASK007_REQUIRED_METADATA = (
+    "upstream_commit",
+    "upstream_tag",
+    "patch_sha256",
+    "server_sha256",
+    "build_command",
+    "patch_apply_check",
+    "checkout_clean_before_patch",
+    "patch_applied",
+    "checkout_after_patch",
+)
 
 
 class Task007ProtocolError(FramedVideoParseError):
     """The diagnostic sidecar or its framing violates the pinned contract."""
+
+
+class Task007ServerIdentityError(RuntimeError):
+    """The selected diagnostic APK is not backed by valid build evidence."""
 
 
 @dataclass(frozen=True)
@@ -353,15 +372,86 @@ class Task007FramedVideoParser:
             raise Task007ProtocolError("Task 007 observation history is inconsistent at EOF")
 
 
-def task007_server_identity(path: str | Path) -> dict[str, Any]:
-    """Identify the explicitly selected diagnostic APK without trusting a path."""
+def _read_task007_build_metadata(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise Task007ServerIdentityError(f"cannot read Task 007 build metadata: {path}") from exc
+    if not lines:
+        raise Task007ServerIdentityError("Task 007 build metadata is empty")
+    values: dict[str, str] = {}
+    key_pattern = re.compile(r"^[a-z][a-z0-9_]*$")
+    for line_number, line in enumerate(lines, 1):
+        if not line or "=" not in line:
+            raise Task007ServerIdentityError(
+                f"malformed Task 007 build metadata line {line_number}"
+            )
+        key, value = line.split("=", 1)
+        if not key_pattern.fullmatch(key) or not value or key in values:
+            raise Task007ServerIdentityError(
+                f"malformed Task 007 build metadata line {line_number}"
+            )
+        values[key] = value
+    missing = [key for key in TASK007_REQUIRED_METADATA if key not in values]
+    if missing:
+        raise Task007ServerIdentityError(
+            f"Task 007 build metadata is missing: {', '.join(missing)}"
+        )
+    return values
+
+
+def task007_server_identity(
+    path: str | Path,
+    *,
+    metadata_path: str | Path | None = None,
+    patch_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Verify an APK against the exact Task 007 build evidence.
+
+    The server hash is deliberately read from build metadata rather than
+    hardcoded. The metadata is accepted only when it records the pinned
+    upstream commit, the current repository patch hash, a clean/apply-only
+    checkout, and the exact upstream build command.
+    """
 
     server_path = Path(path)
     if not server_path.is_file():
-        raise FileNotFoundError(server_path)
+        raise Task007ServerIdentityError(f"diagnostic server does not exist: {server_path}")
+    metadata = Path(metadata_path) if metadata_path is not None else server_path.parent / "build-metadata.txt"
+    patch = (
+        Path(patch_path)
+        if patch_path is not None
+        else Path(__file__).resolve().parents[1] / "task007" / "task007-server.patch"
+    )
+    if not patch.is_file():
+        raise Task007ServerIdentityError(f"Task 007 patch does not exist: {patch}")
+    values = _read_task007_build_metadata(metadata)
+    if values["upstream_commit"] != TASK007_UPSTREAM_COMMIT:
+        raise Task007ServerIdentityError("Task 007 metadata has the wrong upstream commit")
+    if values["upstream_tag"] != TASK007_UPSTREAM_TAG:
+        raise Task007ServerIdentityError("Task 007 metadata has the wrong upstream tag")
+    if values["build_command"] != TASK007_BUILD_COMMAND:
+        raise Task007ServerIdentityError("Task 007 metadata has the wrong build command")
+    for key in ("patch_apply_check", "checkout_clean_before_patch", "patch_applied", "checkout_after_patch"):
+        if values[key] != "PASS":
+            raise Task007ServerIdentityError(f"Task 007 metadata does not prove {key}=PASS")
+    sha_pattern = re.compile(r"^[0-9a-f]{64}$")
+    if not sha_pattern.fullmatch(values["patch_sha256"]):
+        raise Task007ServerIdentityError("Task 007 metadata has an invalid patch SHA-256")
+    if not sha_pattern.fullmatch(values["server_sha256"]):
+        raise Task007ServerIdentityError("Task 007 metadata has an invalid server SHA-256")
+    expected_patch_sha256 = hashlib.sha256(patch.read_bytes()).hexdigest()
+    if values["patch_sha256"] != expected_patch_sha256:
+        raise Task007ServerIdentityError("Task 007 patch SHA-256 does not match build metadata")
+    server_sha256 = hashlib.sha256(server_path.read_bytes()).hexdigest()
+    if server_sha256 != values["server_sha256"]:
+        raise Task007ServerIdentityError("selected diagnostic server SHA-256 does not match build metadata")
     return {
         "verified": True,
         "diagnostic": True,
-        "sha256": hashlib.sha256(server_path.read_bytes()).hexdigest(),
+        "sha256": server_sha256,
         "path": str(server_path),
+        "metadata_path": str(metadata),
+        "upstream_commit": values["upstream_commit"],
+        "patch_sha256": values["patch_sha256"],
     }

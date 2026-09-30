@@ -31,6 +31,18 @@ select substitutes.
 The script performs `git apply --check`, applies
 `task007/task007-server.patch`, runs the upstream server command exactly, and
 writes the APK plus `build-metadata.txt` under the ignored artifact directory.
+Before patching it force-checks out the pinned commit, resets tracked state,
+removes all untracked and ignored files, and records
+`checkout_clean_before_patch=PASS`. After patching it requires the exact set
+of Task 007 paths and records `patch_apply_check=PASS`,
+`patch_applied=PASS`, and `checkout_after_patch=PASS`.
+
+`task007_server_identity()` accepts an APK only beside metadata proving the
+pinned upstream commit/tag, the SHA-256 of the current repository patch, the
+exact upstream build command, all clean/apply state checks, and an APK
+SHA-256 equal to the selected file. There is deliberately no hardcoded APK
+SHA before the first successful diagnostic build; missing or malformed
+metadata, arbitrary APKs, and any mismatch fail closed.
 
 The host used for this implementation currently has Git (`2.39.5`) and the
 upstream wrapper checkout, but no `java`, `javac`, global `gradle`, Android

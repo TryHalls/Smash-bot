@@ -2,36 +2,85 @@ diff --git a/server/src/main/java/com/genymobile/scrcpy/Server.java b/server/src
 index d7d1a76b..b025edfb 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/Server.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/Server.java
-@@ -14,0 +15 @@ import com.genymobile.scrcpy.device.Streamer;
+@@ -12,6 +12,7 @@ import com.genymobile.scrcpy.control.Controller;
+ import com.genymobile.scrcpy.device.DesktopConnection;
+ import com.genymobile.scrcpy.device.Device;
+ import com.genymobile.scrcpy.device.Streamer;
 +import com.genymobile.scrcpy.diagnostic.Task007TimingState;
-@@ -111,0 +113 @@ public final class Server {
+ import com.genymobile.scrcpy.model.ConfigurationException;
+ import com.genymobile.scrcpy.model.NewDisplay;
+ import com.genymobile.scrcpy.opengl.OpenGLRunner;
+@@ -109,10 +110,11 @@ public final class Server {
+             }
+ 
+             Controller controller = null;
 +            Task007TimingState task007TimingState = video ? new Task007TimingState() : null;
-@@ -115 +117 @@ public final class Server {
+ 
+             if (control) {
+                 ControlChannel controlChannel = connection.getControlChannel();
 -                controller = new Controller(controlChannel, cleanUp, options);
 +                controller = new Controller(controlChannel, cleanUp, options, task007TimingState);
-@@ -141 +143 @@ public final class Server {
+                 asyncProcessors.add(controller);
+             }
+ 
+@@ -138,7 +140,7 @@ public final class Server {
+ 
+             if (video) {
+                 Streamer videoStreamer = new Streamer(connection.getVideoFd(), options.getVideoCodec(), options.getSendStreamMeta(),
 -                        options.getSendFrameMeta());
 +                        options.getSendFrameMeta(), task007TimingState);
-@@ -154 +156 @@ public final class Server {
+                 SurfaceCapture surfaceCapture;
+                 if (options.getVideoSource() == VideoSource.DISPLAY) {
+                     NewDisplay newDisplay = options.getNewDisplay();
+@@ -151,7 +153,7 @@ public final class Server {
+                 } else {
+                     surfaceCapture = new CameraCapture(options);
+                 }
 -                SurfaceEncoder surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, options);
 +                SurfaceEncoder surfaceEncoder = new SurfaceEncoder(surfaceCapture, videoStreamer, options, task007TimingState);
+                 asyncProcessors.add(surfaceEncoder);
+ 
+                 if (controller != null) {
 diff --git a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
 index 55d6e11b..03b712d6 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/control/Controller.java
-@@ -7,0 +8 @@ import com.genymobile.scrcpy.device.Device;
+@@ -5,6 +5,7 @@ import com.genymobile.scrcpy.AsyncProcessor;
+ import com.genymobile.scrcpy.CleanUp;
+ import com.genymobile.scrcpy.Options;
+ import com.genymobile.scrcpy.device.Device;
 +import com.genymobile.scrcpy.diagnostic.Task007TimingState;
-@@ -96,0 +98 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ import com.genymobile.scrcpy.display.DisplayInfo;
+ import com.genymobile.scrcpy.model.DeviceApp;
+ import com.genymobile.scrcpy.model.Point;
+@@ -94,6 +95,7 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     private final boolean clipboardAutosync;
+     private final boolean powerOn;
+     private final boolean keepActive;
 +    private final Task007TimingState task007TimingState;
-@@ -115,0 +118,5 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ 
+     private final KeyCharacterMap charMap = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+ 
+@@ -113,9 +115,15 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+     private SurfaceCapture surfaceCapture;
+ 
+     public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options) {
 +        this(controlChannel, cleanUp, options, null);
 +    }
 +
 +    public Controller(ControlChannel controlChannel, CleanUp cleanUp, Options options,
 +            Task007TimingState task007TimingState) {
-@@ -118,0 +126 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+         this.camera = options.getVideoSource() == VideoSource.CAMERA;
+         this.controlChannel = controlChannel;
+         this.cleanUp = cleanUp;
 +        this.task007TimingState = task007TimingState;
-@@ -358,2 +366,13 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+ 
+         if (this.camera) {
+             // Unused for camera
+@@ -355,8 +363,19 @@ public class Controller implements AsyncProcessor, VirtualDisplayListener {
+                     return true;
+                 case ControlMessage.TYPE_INJECT_TOUCH_EVENT:
+                     if (supportsInputEvents) {
 -                        injectTouch(
 -                                msg.getAction(), msg.getPointerId(), msg.getPosition(), msg.getPressure(), msg.getActionButton(), msg.getButtons());
 +                        int action = msg.getAction();
@@ -47,24 +96,48 @@ index 55d6e11b..03b712d6 100644
 +                            injectTouch(
 +                                    action, msg.getPointerId(), msg.getPosition(), msg.getPressure(), msg.getActionButton(), msg.getButtons());
 +                        }
+                     }
+                     return true;
+                 case ControlMessage.TYPE_INJECT_SCROLL_EVENT:
 diff --git a/server/src/main/java/com/genymobile/scrcpy/device/Streamer.java b/server/src/main/java/com/genymobile/scrcpy/device/Streamer.java
 index e793f67b..18b0e17f 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/device/Streamer.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/device/Streamer.java
-@@ -3,0 +4,2 @@ import com.genymobile.scrcpy.audio.AudioCodec;
+@@ -1,6 +1,8 @@
+ package com.genymobile.scrcpy.device;
+ 
+ import com.genymobile.scrcpy.audio.AudioCodec;
 +import com.genymobile.scrcpy.diagnostic.Task007Telemetry;
 +import com.genymobile.scrcpy.diagnostic.Task007TimingState;
-@@ -24,0 +27 @@ public final class Streamer {
+ import com.genymobile.scrcpy.model.Codec;
+ import com.genymobile.scrcpy.util.IO;
+ 
+@@ -22,14 +24,21 @@ public final class Streamer {
+     private final Codec codec;
+     private final boolean sendStreamMeta;
+     private final boolean sendFrameMeta;
 +    private final Task007TimingState task007TimingState;
-@@ -28,0 +32,5 @@ public final class Streamer {
+ 
+     private final ByteBuffer headerBuffer = ByteBuffer.allocate(12);
+ 
+     public Streamer(FileDescriptor fd, Codec codec, boolean sendCodecMeta, boolean sendFrameMeta) {
 +        this(fd, codec, sendCodecMeta, sendFrameMeta, null);
 +    }
 +
 +    public Streamer(FileDescriptor fd, Codec codec, boolean sendCodecMeta, boolean sendFrameMeta,
 +            Task007TimingState task007TimingState) {
-@@ -32,0 +41 @@ public final class Streamer {
+         this.fd = fd;
+         this.codec = codec;
+         this.sendStreamMeta = sendCodecMeta;
+         this.sendFrameMeta = sendFrameMeta;
 +        this.task007TimingState = task007TimingState;
-@@ -90,0 +100,25 @@ public final class Streamer {
+     }
+ 
+     public Codec getCodec() {
+@@ -88,6 +97,31 @@ public final class Streamer {
+         writePacket(codecBuffer, pts, config, keyFrame);
+     }
+ 
 +    public void writePacket(ByteBuffer codecBuffer, MediaCodec.BufferInfo bufferInfo, long d2) throws IOException {
 +        if (task007TimingState == null) {
 +            throw new IOException("Task 007 timing state is unavailable");
@@ -90,6 +163,9 @@ index e793f67b..18b0e17f 100644
 +        IO.writeFully(fd, buffer);
 +    }
 +
+     public void writeSessionMeta(int width, int height, boolean isClientResize) throws IOException {
+         if (sendStreamMeta) {
+             headerBuffer.clear();
 diff --git a/server/src/main/java/com/genymobile/scrcpy/diagnostic/Task007Telemetry.java b/server/src/main/java/com/genymobile/scrcpy/diagnostic/Task007Telemetry.java
 new file mode 100644
 index 00000000..72d31120
@@ -214,29 +290,59 @@ diff --git a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.jav
 index 539681b4..84dcfd81 100644
 --- a/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java
 +++ b/server/src/main/java/com/genymobile/scrcpy/video/SurfaceEncoder.java
-@@ -6,0 +7 @@ import com.genymobile.scrcpy.device.Streamer;
+@@ -4,6 +4,7 @@ import com.genymobile.scrcpy.AndroidVersions;
+ import com.genymobile.scrcpy.AsyncProcessor;
+ import com.genymobile.scrcpy.Options;
+ import com.genymobile.scrcpy.device.Streamer;
 +import com.genymobile.scrcpy.diagnostic.Task007TimingState;
-@@ -48,0 +50 @@ public class SurfaceEncoder implements AsyncProcessor {
+ import com.genymobile.scrcpy.model.Codec;
+ import com.genymobile.scrcpy.model.CodecOption;
+ import com.genymobile.scrcpy.model.ConfigurationException;
+@@ -46,6 +47,7 @@ public class SurfaceEncoder implements AsyncProcessor {
+     private final boolean downsizeOnError;
+     private final int minSizeAlignment;
+     private final boolean ignoreVideoEncoderConstraints;
 +    private final Task007TimingState task007TimingState;
-@@ -60,0 +63,5 @@ public class SurfaceEncoder implements AsyncProcessor {
+ 
+     private boolean firstFrameSent;
+     private int consecutiveErrors;
+@@ -58,8 +60,14 @@ public class SurfaceEncoder implements AsyncProcessor {
+     private VideoConstraints videoConstraints;
+ 
+     public SurfaceEncoder(SurfaceCapture capture, Streamer streamer, Options options) {
 +        this(capture, streamer, options, null);
 +    }
 +
 +    public SurfaceEncoder(SurfaceCapture capture, Streamer streamer, Options options,
 +            Task007TimingState task007TimingState) {
-@@ -62,0 +70 @@ public class SurfaceEncoder implements AsyncProcessor {
+         this.capture = capture;
+         this.streamer = streamer;
 +        this.task007TimingState = task007TimingState;
-@@ -262,0 +271 @@ public class SurfaceEncoder implements AsyncProcessor {
+         this.videoBitRate = options.getVideoBitRate();
+         this.maxSize = options.getMaxSize();
+         this.maxFps = options.getMaxFps();
+@@ -260,14 +268,20 @@ public class SurfaceEncoder implements AsyncProcessor {
+                 // On EOS, there might be data or not, depending on bufferInfo.size
+                 if (outputBufferId >= 0 && bufferInfo.size > 0) {
+                     boolean isConfig = (bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0;
 +                    long d2 = 0;
-@@ -263,0 +273 @@ public class SurfaceEncoder implements AsyncProcessor {
+                     if (!isConfig) {
 +                        d2 = SystemClock.elapsedRealtimeNanos();
-@@ -270 +280,5 @@ public class SurfaceEncoder implements AsyncProcessor {
+                         // If this is not a config packet, then it contains a frame
+                         firstFrameSent = true;
+                         consecutiveErrors = 0;
+                     }
+ 
+                     ByteBuffer codecBuffer = codec.getOutputBuffer(outputBufferId);
 -                    streamer.writePacket(codecBuffer, bufferInfo);
 +                    if (task007TimingState != null) {
 +                        streamer.writePacket(codecBuffer, bufferInfo, d2);
 +                    } else {
 +                        streamer.writePacket(codecBuffer, bufferInfo);
 +                    }
+                 }
+             } finally {
+                 if (outputBufferId >= 0) {
 diff --git a/server/src/test/java/com/genymobile/scrcpy/diagnostic/Task007TimingStateTest.java b/server/src/test/java/com/genymobile/scrcpy/diagnostic/Task007TimingStateTest.java
 new file mode 100644
 index 00000000..5b849403

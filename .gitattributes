@@ -1,0 +1,4 @@
+# The file is a textual patch, but its nested diff necessarily contains
+# context lines whose leading space is meaningful to the patch applicator.
+# Keep the outer repository's whitespace checker from misreading that format.
+task007/task007-server.patch -diff

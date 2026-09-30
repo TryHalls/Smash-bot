@@ -1,3 +1,4 @@
+import hashlib
 import struct
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ from smashbot_diagnostics.task007 import (
     TASK007_TELEMETRY_SIZE,
     Task007FramedVideoParser,
     Task007ProtocolError,
+    Task007ServerIdentityError,
     Task007Telemetry,
     task007_server_identity,
 )
@@ -38,6 +40,36 @@ def framed(payload, sidecar, *, pts=123, config=False, key=True):
     if key and not config:
         flags |= PACKET_FLAG_KEY_FRAME
     return struct.pack(">QI", flags, len(payload)) + sidecar.to_bytes() + payload
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PATCH_SHA256 = hashlib.sha256((REPO_ROOT / "task007/task007-server.patch").read_bytes()).hexdigest()
+
+
+def write_build_metadata(directory, server_sha256, **overrides):
+    directory = Path(directory)
+    values = {
+        "upstream_repository": "https://github.com/Genymobile/scrcpy.git",
+        "upstream_tag": "v4.1",
+        "upstream_commit": "2926c06c5dc3064ae6d8db706f1a98a37cfcf3f0",
+        "patch_sha256": PATCH_SHA256,
+        "server_sha256": server_sha256,
+        "java": "17.0.1",
+        "gradle_wrapper": "/tmp/gradlew",
+        "android_sdk": "/tmp/android-sdk",
+        "android_platform": "/tmp/android-sdk/platforms/android-36/android.jar",
+        "android_build_tools": "/tmp/android-sdk/build-tools/36.0.0",
+        "build_command": "./gradlew -p server assembleRelease",
+        "checkout_clean_before_patch": "PASS",
+        "patch_apply_check": "PASS",
+        "patch_applied": "PASS",
+        "checkout_after_patch": "PASS",
+    }
+    values.update(overrides)
+    (directory / "build-metadata.txt").write_text(
+        "".join(f"{key}={value}\n" for key, value in values.items()),
+        encoding="utf-8",
+    )
 
 
 class Task007Tests(unittest.TestCase):
@@ -178,14 +210,70 @@ class Task007Tests(unittest.TestCase):
         with self.assertRaises(Task007ProtocolError):
             Task007Telemetry.from_bytes(raw[12:12 + TASK007_TELEMETRY_SIZE - 1], is_config=False)
 
-    def test_diagnostic_server_identity_is_content_based(self):
+    def test_diagnostic_server_identity_requires_build_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "server-release-unsigned.apk"
+            path = Path(directory) / "scrcpy-server"
             path.write_bytes(b"diagnostic-server")
+            write_build_metadata(directory, hashlib.sha256(path.read_bytes()).hexdigest())
             identity = task007_server_identity(path)
         self.assertTrue(identity["verified"])
         self.assertTrue(identity["diagnostic"])
         self.assertTrue(identity["sha256"])
+
+    def test_diagnostic_server_identity_rejects_missing_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
+
+    def test_diagnostic_server_identity_rejects_malformed_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            (Path(directory) / "build-metadata.txt").write_text("not metadata\n", encoding="utf-8")
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
+
+    def test_diagnostic_server_identity_rejects_wrong_upstream_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            write_build_metadata(
+                Path(directory),
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                upstream_commit="wrong-commit",
+            )
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
+
+    def test_diagnostic_server_identity_rejects_wrong_patch_hash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            write_build_metadata(Path(directory), hashlib.sha256(path.read_bytes()).hexdigest(), patch_sha256="0" * 64)
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
+
+    def test_diagnostic_server_identity_rejects_apk_hash_mismatch_and_arbitrary_apk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            write_build_metadata(Path(directory), "1" * 64)
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
+
+    def test_diagnostic_server_identity_rejects_missing_clean_patch_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "scrcpy-server"
+            path.write_bytes(b"diagnostic-server")
+            write_build_metadata(
+                Path(directory),
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+                checkout_after_patch="FAIL",
+            )
+            with self.assertRaises(Task007ServerIdentityError):
+                task007_server_identity(path)
 
 
 if __name__ == "__main__":
