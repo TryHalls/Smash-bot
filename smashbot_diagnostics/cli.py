@@ -864,7 +864,8 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"attempted={gestures.get('attempted')}; failures={gestures.get('failure_count')}; "
             f"median dispatch={gestures.get('median_latency_ms')} ms; p95={gestures.get('p95_latency_ms')} ms"
         )
-    calibration = report.get("calibration", {}).get("statistics", {})
+    calibration_report = report.get("calibration", {})
+    calibration = calibration_report.get("statistics", {})
     if calibration:
         lines.append(
             "Visible response: "
@@ -876,7 +877,8 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             "Calibration structure: "
             f"dispatched={calibration.get('trial_gestures_dispatched')}/{calibration.get('trial_gestures_attempted')}; "
             f"marker-off recovered={calibration.get('marker_off_recovered_trials')}/{calibration.get('trial_gestures_attempted')}; "
-            f"visualization={calibration.get('configuration', {}).get('visualization_mode')}"
+            f"background stable={calibration.get('background_stable_trials')}/{calibration.get('trial_gestures_attempted')}; "
+            f"visualization={calibration_report.get('configuration', {}).get('visualization_mode')}"
         )
     age = report.get("freshness", {}).get("source", {}).get("consumed_frame_age_ms", {})
     if age:
