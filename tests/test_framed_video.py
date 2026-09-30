@@ -97,12 +97,13 @@ class FramedVideoTests(unittest.TestCase):
         parser = FramedVideoParser()
         packet = parser.feed(
             media_packet(7, b"one"),
-            received_monotonic_seconds=20.0,
+            received_monotonic_seconds=19.0,
             chunk_observed_monotonic_seconds=19.0,
         )[0]
 
         self.assertEqual(packet.packet_start_observed_monotonic_seconds, 19.0)
-        self.assertEqual(packet.packet_complete_monotonic_seconds, 20.0)
+        self.assertEqual(packet.packet_complete_monotonic_seconds, 19.0)
+        self.assertEqual(packet.metadata()["packet_receive_observation_span_ms"], 0.0)
 
     def test_multiple_packets_in_one_chunk_share_chunk_observation_timestamp(self):
         parser = FramedVideoParser()
@@ -142,6 +143,8 @@ class FramedVideoTests(unittest.TestCase):
         self.assertEqual(packets[0].packet_start_observed_monotonic_seconds, 39.0)
         self.assertEqual(packets[1].packet_start_observed_monotonic_seconds, 40.5)
         self.assertEqual([packet.packet_complete_monotonic_seconds for packet in packets], [41.0, 41.0])
+        self.assertEqual(packets[0].metadata()["packet_receive_observation_span_ms"], 2000.0)
+        self.assertEqual(packets[1].metadata()["packet_receive_observation_span_ms"], 500.0)
 
     def test_session_header_is_parsed_without_a_payload(self):
         parser = FramedVideoParser()

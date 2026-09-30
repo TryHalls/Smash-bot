@@ -309,6 +309,11 @@ class FramedVideoPacket:
             "payload_size": self.payload_size,
             "packet_start_observed_monotonic_seconds": self.packet_start_observed_monotonic_seconds,
             "packet_complete_monotonic_seconds": self.packet_complete_monotonic_seconds,
+            "packet_receive_observation_span_ms": (
+                self.packet_complete_monotonic_seconds
+                - self.packet_start_observed_monotonic_seconds
+            )
+            * 1000,
             # Retain the Task 005 field as an explicit completion alias for
             # existing reports and callers.
             "received_monotonic_seconds": self.packet_complete_monotonic_seconds,

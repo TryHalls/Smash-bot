@@ -1070,15 +1070,15 @@ class FramedH264FrameSource(RawH264FrameSource):
                     self._disconnect.mark("eof")
                     self._stop.set()
                     return
-                # This userspace sample is taken immediately after recv()
-                # returns.  It is deliberately not described as a network
+                # This single userspace sample is taken immediately after
+                # recv() returns. It timestamps every byte returned by that
+                # recv(), and is deliberately not described as a network
                 # first-byte timestamp.
-                chunk_observed = time.monotonic()
-                packet_complete_observed = time.monotonic()
+                recv_observed = time.monotonic()
                 packets = self._framed_parser.feed(
                     chunk,
-                    received_monotonic_seconds=packet_complete_observed,
-                    chunk_observed_monotonic_seconds=chunk_observed,
+                    received_monotonic_seconds=recv_observed,
+                    chunk_observed_monotonic_seconds=recv_observed,
                 )
                 for packet in packets:
                     self._record_packet(packet)
