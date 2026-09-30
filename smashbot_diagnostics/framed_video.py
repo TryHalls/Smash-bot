@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import math
 import struct
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -20,10 +22,90 @@ PACKET_FLAG_CONFIG = 1 << 62
 PACKET_FLAG_KEY_FRAME = 1 << 61
 PTS_MASK = PACKET_FLAG_KEY_FRAME - 1
 DEFAULT_MAX_PAYLOAD_SIZE = 16 * 1024 * 1024
+DEFAULT_FFPROBE_TIMEOUT_SECONDS = 10.0
 
 
 class FramedVideoParseError(ValueError):
     """The input does not satisfy the pinned scrcpy v4.1 packet contract."""
+
+
+def verify_h264_no_b_frames(
+    ffprobe: str,
+    sample_path: str | Path,
+    *,
+    timeout_seconds: float = DEFAULT_FFPROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Verify no decoded-frame reordering in a real H.264 sample.
+
+    FIFO packet/frame association is only valid after this capability check.
+    The sample is intentionally external to the receiver so the check cannot
+    silently turn an assumption about the decoder into runtime evidence.
+    """
+
+    sample = Path(sample_path)
+    command = [
+        str(ffprobe),
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,profile,width,height,has_b_frames",
+        "-of",
+        "json",
+        str(sample),
+    ]
+    result: dict[str, Any] = {
+        "verified": False,
+        "status": "INCONCLUSIVE",
+        "sample_path": str(sample),
+        "ffprobe": str(ffprobe),
+        "command": command,
+        "has_b_frames": None,
+        "streams": [],
+        "error": None,
+    }
+    if not sample.is_file():
+        result["error"] = f"H.264 capability sample does not exist: {sample}"
+        return result
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result["error"] = str(exc)
+        return result
+    if completed.returncode != 0:
+        result["error"] = completed.stderr.strip() or f"ffprobe exited with {completed.returncode}"
+        return result
+    try:
+        import json
+
+        payload = json.loads(completed.stdout)
+        streams = payload.get("streams") or []
+    except (TypeError, ValueError) as exc:
+        result["error"] = f"ffprobe returned invalid JSON: {exc}"
+        return result
+    result["streams"] = streams
+    if len(streams) != 1:
+        result["error"] = f"expected exactly one video stream, got {len(streams)}"
+        return result
+    stream = streams[0]
+    has_b_frames = stream.get("has_b_frames")
+    result["has_b_frames"] = has_b_frames
+    if stream.get("codec_name") != "h264":
+        result["error"] = f"expected H.264 sample, got {stream.get('codec_name')!r}"
+        return result
+    if has_b_frames != 0:
+        result["error"] = f"H.264 sample reports has_b_frames={has_b_frames!r}, expected 0"
+        return result
+    result["verified"] = True
+    result["status"] = "PASS"
+    return result
 
 
 @dataclass(frozen=True)
@@ -164,19 +246,19 @@ class FramedVideoParser:
 
 def decompose_visible_latency(
     t0_action_down_write: float,
-    t1_media_packet_complete: float,
+    t1_relevant_packet_complete: float,
     t2_crosshair_decode_complete: float,
 ) -> dict[str, float]:
-    """Compute the Task 005 T0/T1/T2 intervals without clock subtraction."""
+    """Compute corrected T0/T1/T2 intervals without clock subtraction."""
 
-    values = (t0_action_down_write, t1_media_packet_complete, t2_crosshair_decode_complete)
+    values = (t0_action_down_write, t1_relevant_packet_complete, t2_crosshair_decode_complete)
     if not all(math.isfinite(value) for value in values):
         raise ValueError("T0, T1 and T2 must be finite monotonic timestamps")
-    if not t0_action_down_write <= t1_media_packet_complete <= t2_crosshair_decode_complete:
+    if not t0_action_down_write <= t1_relevant_packet_complete <= t2_crosshair_decode_complete:
         raise ValueError("Task 005 requires T0 <= T1 <= T2")
     return {
-        "upstream_to_packet_ms": (t1_media_packet_complete - t0_action_down_write) * 1000,
-        "packet_to_visible_decode_ms": (t2_crosshair_decode_complete - t1_media_packet_complete) * 1000,
+        "upstream_to_relevant_packet_ms": (t1_relevant_packet_complete - t0_action_down_write) * 1000,
+        "relevant_packet_to_decode_ms": (t2_crosshair_decode_complete - t1_relevant_packet_complete) * 1000,
         "total_visible_ms": (t2_crosshair_decode_complete - t0_action_down_write) * 1000,
     }
 

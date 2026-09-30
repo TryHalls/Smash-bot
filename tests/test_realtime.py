@@ -417,6 +417,67 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(result["frame_count_at_start"], result["frame_count_at_end"])
         self.assertLessEqual(result["waited_seconds"], 0.02 + 0.02)
 
+    def test_framed_fifo_uses_crosshair_frame_packet_not_repeated_baseline_packet(self):
+        source = FramedH264FrameSource(
+            FakeAdb(),
+            "ffmpeg",
+            "/missing/server",
+            no_b_frames_verified=True,
+            h264_capability={"verified": True, "has_b_frames": 0},
+        )
+        baseline_packet = {
+            "sequence_index": 10,
+            "pts_us": 1000,
+            "received_monotonic_seconds": 50.010,
+        }
+        crosshair_packet = {
+            "sequence_index": 11,
+            "pts_us": 2000,
+            "received_monotonic_seconds": 50.120,
+        }
+
+        # The first packet is a repeated no-touch baseline immediately after
+        # T0; the second packet is the one that produces the visible crosshair.
+        self.assertTrue(source._record_media_packet_for_decoder(baseline_packet))
+        self.assertTrue(source._record_media_packet_for_decoder(crosshair_packet))
+        first_frame = source._associate_decoded_frame(20, 50.030)
+        crosshair_frame = source._associate_decoded_frame(21, 50.250)
+
+        self.assertEqual(first_frame["packet_sequence_index"], 10)
+        self.assertEqual(crosshair_frame["packet_sequence_index"], 11)
+        self.assertEqual(crosshair_frame["scrcpy_pts_us"], 2000)
+        self.assertAlmostEqual(
+            (crosshair_frame["host_packet_complete_monotonic_seconds"] - 50.0) * 1000,
+            120.0,
+        )
+        self.assertEqual(source.association_diagnostics()["invariant_failures"], [])
+
+    def test_framed_fifo_invariants_report_missing_packet_and_overflow(self):
+        source = FramedH264FrameSource(
+            FakeAdb(),
+            "ffmpeg",
+            "/missing/server",
+            no_b_frames_verified=True,
+            h264_capability={"verified": True, "has_b_frames": 0},
+        )
+        self.assertIsNone(source._associate_decoded_frame(0, 1.0))
+        self.assertEqual(source.association_diagnostics()["decoded_frames_without_packet"], 1)
+
+        source = FramedH264FrameSource(
+            FakeAdb(),
+            "ffmpeg",
+            "/missing/server",
+            no_b_frames_verified=True,
+            h264_capability={"verified": True, "has_b_frames": 0},
+        )
+        source._max_pending_media_packets = 1
+        packet = {"sequence_index": 1, "pts_us": 1, "received_monotonic_seconds": 1.0}
+        self.assertTrue(source._record_media_packet_for_decoder(packet))
+        self.assertFalse(source._record_media_packet_for_decoder(packet))
+        diagnostics = source.association_diagnostics()
+        self.assertEqual(diagnostics["overflow_count"], 1)
+        self.assertTrue(diagnostics["invariant_failures"])
+
     def test_acceptance_gate_fails_when_gesture_transport_fails(self):
         report = {
             "source_contract": {"start_stop_clean": True, "queue_capacity": 1, "pixel_history_retained": False},

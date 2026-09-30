@@ -12,6 +12,7 @@ from typing import Any, Callable
 from . import __version__
 from .adb import AdbClient, AdbError, AdbUnavailable
 from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, swipe_parameters, utc_now
+from .framed_video import verify_h264_no_b_frames
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     Swipe,
@@ -147,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="raw_h264",
         help="diagnostic video path; framed_h264 enables the Task 005 v4.1 packet-timing path",
     )
+    realtime.add_argument(
+        "--h264-capability-sample",
+        type=Path,
+        help="short real-device H.264 sample for the required ffprobe has_b_frames=0 check",
+    )
     realtime.add_argument("--x1", type=_nonnegative_int, default=160)
     realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
     realtime.add_argument("--x2", type=_nonnegative_int, default=700)
@@ -196,6 +202,7 @@ def _add_swipe_options(parser: argparse.ArgumentParser) -> None:
 def _add_stream_tool_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scrcpy", default="scrcpy", help="official scrcpy v4.1 executable or path")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable or path")
+    parser.add_argument("--ffprobe", default=None, help="ffprobe executable or path for framed-video capability checks")
 
 
 def _host_report() -> dict[str, Any]:
@@ -814,6 +821,51 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         print(f"Summary: {run_dir / 'summary.txt'}")
         return 2
 
+    framed_h264_capability: dict[str, Any] | None = None
+    if args.video_path == "framed_h264":
+        ffprobe_path = args.ffprobe or str(Path(ffmpeg_path).with_name("ffprobe"))
+        if not args.h264_capability_sample:
+            report.update(
+                {
+                    "status": "INCONCLUSIVE",
+                    "failure_evidence": {
+                        "reason": "framed_h264 requires a short real-device ffprobe capability sample",
+                        "control_transport": args.control_transport,
+                        "fallback_attempted": False,
+                    },
+                    "calibration": {"status": "not_run"},
+                    "concurrent": {"status": "not_run"},
+                    "freshness": {"status": "not_run"},
+                    "gate": {"status": "INCONCLUSIVE", "criteria": {}},
+                }
+            )
+            _write_realtime_report(run_dir, report)
+            print(f"Report: {run_dir / 'report.json'}")
+            print(f"Summary: {run_dir / 'summary.txt'}")
+            return 2
+        framed_h264_capability = verify_h264_no_b_frames(ffprobe_path, args.h264_capability_sample)
+        report["configuration"]["h264_capability"] = framed_h264_capability
+        if not framed_h264_capability.get("verified"):
+            report.update(
+                {
+                    "status": "INCONCLUSIVE",
+                    "failure_evidence": {
+                        "reason": "could not verify has_b_frames=0; framed packet/frame FIFO not started",
+                        "h264_capability": framed_h264_capability,
+                        "control_transport": args.control_transport,
+                        "fallback_attempted": False,
+                    },
+                    "calibration": {"status": "not_run"},
+                    "concurrent": {"status": "not_run"},
+                    "freshness": {"status": "not_run"},
+                    "gate": {"status": "INCONCLUSIVE", "criteria": {}},
+                }
+            )
+            _write_realtime_report(run_dir, report)
+            print(f"Report: {run_dir / 'report.json'}")
+            print(f"Summary: {run_dir / 'summary.txt'}")
+            return 2
+
     stress_swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
     calibration_swipe = Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450)
     # Static calibration is intentionally completed before the human changes the
@@ -830,6 +882,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         visualization_mode=args.calibration_visualization,
         control_transport=args.control_transport,
         video_path=args.video_path,
+        framed_h264_capability=framed_h264_capability,
     )
     if args.calibration_only:
         calibration_source = report["calibration"].get("source_diagnostics", {})
@@ -1035,8 +1088,8 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             lines.append(
                 "T0/T1/T2 decomposition: "
                 f"valid={decomposition.get('structurally_valid_decomposition_trials')}; "
-                f"upstream median={decomposition.get('upstream_to_packet_ms', {}).get('median_latency_ms')} ms; "
-                f"packet→decode median={decomposition.get('packet_to_visible_decode_ms', {}).get('median_latency_ms')} ms; "
+                f"upstream→relevant-packet median={decomposition.get('upstream_to_relevant_packet_ms', {}).get('median_latency_ms')} ms; "
+                f"relevant-packet→decode median={decomposition.get('relevant_packet_to_decode_ms', {}).get('median_latency_ms')} ms; "
                 f"total median={decomposition.get('total_visible_ms', {}).get('median_latency_ms')} ms"
             )
     if report.get("stage_a"):

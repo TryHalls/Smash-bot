@@ -1,5 +1,8 @@
 import struct
 import unittest
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from unittest.mock import patch
 
 from smashbot_diagnostics.framed_video import (
     FRAME_HEADER_SIZE,
@@ -10,6 +13,7 @@ from smashbot_diagnostics.framed_video import (
     FramedVideoParser,
     decompose_visible_latency,
     framed_video_contract,
+    verify_h264_no_b_frames,
 )
 
 
@@ -85,8 +89,8 @@ class FramedVideoTests(unittest.TestCase):
         result = decompose_visible_latency(100.0, 100.125, 100.375)
 
         self.assertEqual(result, {
-            "upstream_to_packet_ms": 125.0,
-            "packet_to_visible_decode_ms": 250.0,
+            "upstream_to_relevant_packet_ms": 125.0,
+            "relevant_packet_to_decode_ms": 250.0,
             "total_visible_ms": 375.0,
         })
         with self.assertRaises(ValueError):
@@ -101,6 +105,40 @@ class FramedVideoTests(unittest.TestCase):
         self.assertFalse(contract["send_stream_meta"])
         self.assertTrue(contract["send_frame_meta"])
         self.assertEqual(contract["max_payload_size_bytes"], 16 * 1024 * 1024)
+
+    def test_ffprobe_capability_requires_h264_has_b_frames_zero(self):
+        with NamedTemporaryFile() as sample:
+            completed = type(
+                "Completed",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": '{"streams":[{"codec_name":"h264","has_b_frames":0,"width":864,"height":1920}]}',
+                    "stderr": "",
+                },
+            )()
+            with patch("smashbot_diagnostics.framed_video.subprocess.run", return_value=completed):
+                result = verify_h264_no_b_frames("ffprobe", Path(sample.name))
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["has_b_frames"], 0)
+
+    def test_ffprobe_capability_rejects_reordered_h264_sample(self):
+        with NamedTemporaryFile() as sample:
+            completed = type(
+                "Completed",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": '{"streams":[{"codec_name":"h264","has_b_frames":2}]}',
+                    "stderr": "",
+                },
+            )()
+            with patch("smashbot_diagnostics.framed_video.subprocess.run", return_value=completed):
+                result = verify_h264_no_b_frames("ffprobe", Path(sample.name))
+
+        self.assertFalse(result["verified"])
+        self.assertIn("has_b_frames", result["error"])
 
 
 if __name__ == "__main__":
