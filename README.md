@@ -154,7 +154,7 @@ The command writes `artifacts/realtime/<timestamp>/report.json` and
 calibration, and restores the exact original value in cleanup even when a
 trial fails. Calibration records the effective `wm size`, explicitly maps
 Android input coordinates into the decoded portrait frame, uses a persistent
-500 ms zero-distance press, and derives its detection threshold from temporal
+450 ms zero-distance press, and derives its detection threshold from temporal
 no-touch noise. A PASS requires the complete Task 003 gate, including at
 least 30 successful ADB gestures, moving-source FPS/interval/disconnect
 limits, dropped stale frames with p95 consumed-frame age below 100 ms, 30
@@ -167,7 +167,12 @@ slow. The >=45 FPS and frame-gap gates apply only to the moving SMASH phase.
 
 The device-side actions are the existing `input swipe`, the official scrcpy
 raw H.264 server, and temporary `settings get/put/delete system show_touches`
-operations whose exact original value is restored. Task 002 screenshot
+operations whose exact original value is restored. Static calibration uses a
+VFR-aware state machine: one marker-off baseline frame, an unmeasured warm-up
+press, a shared temporal-noise baseline from the post-warm-up marker-off frame,
+and then `baseline marker-off -> dispatch -> marker-on -> marker-off/baseline
+next` for each trial. It does not require multiple fresh no-touch frames before
+dispatch. The persistent calibration press is 450 ms. Task 002 screenshot
 capture remains unchanged and no screenshots or long recordings are committed.
 No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
 bypass, online automation, scrcpy control integration, or custom scrcpy framed

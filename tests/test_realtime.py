@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -56,23 +57,35 @@ class RecordingAdb(FakeAdb):
 
     def swipe(self, x1, y1, x2, y2, duration_ms):
         self.swipes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms})
+        time.sleep(0.005)
         return FakeResult()
 
 
 class CalibrationSourceStub:
     def __init__(self, *args, **kwargs):
-        base = [frame(index, float(index), value=0, width=4, height=8) for index in range(4)]
-        changed = frame(4, 4.0, value=255, width=4, height=8)
-        self.frames = base + [changed]
+        self.adb = args[0]
+        self.initial = [(0, 0)]
+        self.warmup_frames = [(1, 255), (2, 0), (3, 0), (4, 0)]
+        self.trial_frames = [(5, 255), (6, 0), (7, 0), (8, 0)]
         self.stopped = False
 
     def start(self):
         return self
 
     def latest_frame(self, timeout_seconds=None):
-        if not self.frames:
+        if not self.adb.swipes and self.initial:
+            frames = self.initial
+        elif len(self.adb.swipes) == 1:
+            frames = self.warmup_frames
+        else:
+            frames = self.trial_frames
+        if not frames:
+            if timeout_seconds:
+                time.sleep(min(timeout_seconds, 0.002))
             return None
-        return self.frames.pop(0)
+        time.sleep(0.003)
+        index, value = frames.pop(0)
+        return frame(index, time.monotonic(), value=value, width=4, height=8)
 
     def stop(self):
         self.stopped = True
@@ -81,8 +94,8 @@ class CalibrationSourceStub:
     def stats(self):
         return {
             "metadata": {"queue_capacity": 1, "pixel_history_retained": False},
-            "produced_frames": 5,
-            "source_timestamp_count": 5,
+            "produced_frames": 9,
+            "source_timestamp_count": 9,
             "disconnect_at_monotonic_seconds": None,
             "disconnect_reason": None,
             "decoder_stderr": [],
@@ -93,7 +106,7 @@ class CalibrationSourceStub:
         }
 
     def stream_statistics(self, start, end):
-        return {"produced_frame_count": 5}
+        return {"produced_frame_count": 9}
 
 
 def frame(index, timestamp, value=0, width=8, height=8):
@@ -163,7 +176,7 @@ class RealtimeTests(unittest.TestCase):
 
         adb = RecordingAdb()
         stress_swipe = Swipe(0, 4, 3, 4, 120)
-        calibration_swipe = Swipe(1, 4, 1, 4, 500)
+        calibration_swipe = Swipe(1, 4, 1, 4, 450)
 
         with patch("smashbot_diagnostics.realtime.RawH264FrameSource", CalibrationSourceStub):
             report = run_calibration(
@@ -175,17 +188,25 @@ class RealtimeTests(unittest.TestCase):
                 response_timeout_seconds=0.1,
                 swipe=stress_swipe,
                 calibration_swipe=calibration_swipe,
-                baseline_frame_count=2,
-                baseline_timeout_seconds=0.1,
+                baseline_frame_count=5,
+                baseline_timeout_seconds=0.01,
             )
 
         trial = report["trials"][0]
-        self.assertEqual(adb.swipes, [calibration_swipe.as_dict()])
-        self.assertNotEqual(adb.swipes[0], stress_swipe.as_dict())
+        self.assertEqual(adb.swipes, [calibration_swipe.as_dict(), calibration_swipe.as_dict()])
+        self.assertTrue(report["setup"]["warmup"]["marker_on_detected"])
+        self.assertTrue(report["setup"]["warmup"]["marker_off_recovered"])
+        self.assertEqual(report["setup"]["shared_no_touch_baseline"]["pre_dispatch_new_frames_required"], 0)
+        self.assertTrue(trial["structurally_valid"])
+        self.assertTrue(trial["detection_succeeded"])
+        self.assertTrue(trial["marker_off_recovered"])
+        self.assertNotEqual(adb.swipes[1], stress_swipe.as_dict())
         self.assertEqual(trial["gesture"]["parameters"], calibration_swipe.as_dict())
         self.assertTrue(trial["gesture_consistency"]["requested_matches_dispatched"])
         self.assertTrue(trial["gesture_consistency"]["mapped_roi_matches_mapping"])
-        self.assertEqual(trial["mapped_frame_swipe"], {"x1": 1, "y1": 4, "x2": 1, "y2": 4, "duration_ms": 500})
+        self.assertEqual(trial["mapped_frame_swipe"], {"x1": 1, "y1": 4, "x2": 1, "y2": 4, "duration_ms": 450})
+        self.assertEqual(report["statistics"]["valid_trials"], 1)
+        self.assertEqual(report["statistics"]["detected_trials"], 1)
 
     def test_gesture_statistics_records_failures_without_hiding_them(self):
         records = [

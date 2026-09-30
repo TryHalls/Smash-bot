@@ -909,6 +909,105 @@ def _collect_distinct_frames(
     return frames
 
 
+def _roi_difference_summary(
+    reference: bytes,
+    candidate: bytes,
+    indices: tuple[int, ...],
+    *,
+    pixel_delta_threshold: int = 8,
+) -> dict[str, Any]:
+    """Summarize a static-state transition without changing the touch threshold."""
+
+    differences = [
+        abs(int(candidate[index]) - int(reference[index]))
+        for index in indices
+        if index < len(reference) and index < len(candidate)
+    ]
+    changed = sum(value > pixel_delta_threshold for value in differences)
+    return {
+        "pixel_count": len(differences),
+        "changed_pixel_count": changed,
+        "changed_fraction": changed / len(differences) if differences else 0.0,
+        "mean_absolute_change": fmean(differences) if differences else 0.0,
+        "maximum_absolute_change": max(differences) if differences else 0,
+        "pixel_delta_threshold": pixel_delta_threshold,
+    }
+
+
+def _static_baseline_matches(summary: dict[str, Any]) -> bool:
+    """Recognize the same static surface while tolerating small codec noise."""
+
+    return (
+        summary.get("changed_fraction", 1.0) < 0.01
+        and summary.get("mean_absolute_change", float("inf")) <= 8.0
+    )
+
+
+def _dispatch_capture_window(
+    controller: AdbGestureController,
+    source: RawH264FrameSource,
+    swipe: Swipe,
+    *,
+    initial_frame_index: int,
+    response_timeout_seconds: float,
+    label: str,
+) -> tuple[dict[str, Any], list[DecodedFrame], float | None, dict[str, Any]]:
+    """Dispatch once while retaining only the bounded sequence for this state window.
+
+    The caller deliberately starts from the latest known baseline frame.  It does
+    not ask for a fresh pre-dispatch frame, which is the important VFR behavior.
+    """
+
+    started_holder: dict[str, float] = {}
+    result_holder: dict[str, Any] = {}
+
+    def on_started(value: float) -> None:
+        started_holder["value"] = value
+
+    def dispatch() -> None:
+        result_holder["value"] = controller.dispatch_swipe(swipe, on_started=on_started)
+
+    dispatch_thread = threading.Thread(target=dispatch, name=f"calibration-{label}-dispatch")
+    dispatch_thread.start()
+    frames: list[DecodedFrame] = []
+    seen_index = initial_frame_index
+    capture_deadline: float | None = None
+    hard_deadline = time.monotonic() + max(2.0, response_timeout_seconds * 3.0 + 1.0)
+    while time.monotonic() < hard_deadline:
+        frame = source.latest_frame(timeout_seconds=0.01)
+        if frame is not None and frame.frame_index > seen_index:
+            seen_index = frame.frame_index
+            started = started_holder.get("value")
+            if started is not None and frame.host_receive_decode_monotonic_seconds >= started:
+                frames.append(frame)
+        if not dispatch_thread.is_alive():
+            gesture = result_holder.get("value")
+            completion = gesture.get("host_completion_monotonic_seconds") if gesture else None
+            capture_deadline = max(
+                time.monotonic(),
+                (completion or time.monotonic()) + response_timeout_seconds,
+            )
+            if time.monotonic() >= capture_deadline:
+                break
+        if capture_deadline is not None and time.monotonic() >= capture_deadline:
+            break
+    dispatch_thread.join(timeout=2.0)
+    gesture = result_holder.get("value", {"success": False, "failure": "dispatch thread did not complete"})
+    completion = gesture.get("host_completion_monotonic_seconds")
+    post_completion_frames = [
+        frame
+        for frame in frames
+        if completion is not None and frame.host_receive_decode_monotonic_seconds >= completion
+    ]
+    return gesture, frames, started_holder.get("value"), {
+        "label": label,
+        "frames_after_dispatch": [frame.frame_index for frame in frames],
+        "post_completion_frame_indices": [frame.frame_index for frame in post_completion_frames],
+        "post_completion_frame_count": len(post_completion_frames),
+        "capture_window_timeout_seconds": response_timeout_seconds,
+    }
+
+
 def _inconclusive_latency_summary() -> dict[str, Any]:
     return {
         "sample_count": 0,
@@ -943,8 +1042,7 @@ def run_calibration(
     source_finished: float | None = None
     coordinate_transform: DisplayCoordinateTransform | None = None
     display_report: dict[str, Any] | None = None
-    baseline_window: list[DecodedFrame] = []
-    calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 500)
+    calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 450)
     status = "INCONCLUSIVE"
     try:
         setup = settings.enable()
@@ -964,85 +1062,144 @@ def run_calibration(
         mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
         setup["input_swipe"] = calibration_input_swipe.as_dict()
         setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
-        baseline_window = _collect_distinct_frames(
-            source,
-            required_count=max(2, baseline_frame_count),
-            timeout_seconds=baseline_timeout_seconds,
-            initial_frames=[first_frame],
+        detector = TouchResponseDetector(
+            first_frame.width,
+            first_frame.height,
+            mapped_calibration_swipe,
         )
-        setup["shared_no_touch_baseline"] = {
-            "required_frame_count": max(2, baseline_frame_count),
-            "frame_indices": [frame.frame_index for frame in baseline_window],
-            "collected_frame_count": len(baseline_window),
-            "timeout_seconds": baseline_timeout_seconds,
+
+        # VFR-aware setup: one decoded baseline frame, one unmeasured warm-up
+        # press, then retain the latest post-command no-touch frame.  The pair
+        # is the one shared temporal noise model for all subsequent trials.
+        warmup_gesture, warmup_frames, warmup_started, warmup_capture = _dispatch_capture_window(
+            controller,
+            source,
+            calibration_input_swipe,
+            initial_frame_index=first_frame.frame_index,
+            response_timeout_seconds=max(response_timeout_seconds, baseline_timeout_seconds),
+            label="warmup",
+        )
+        warmup_completion = warmup_gesture.get("host_completion_monotonic_seconds")
+        warmup_post_completion = [
+            frame
+            for frame in warmup_frames
+            if warmup_completion is not None
+            and frame.host_receive_decode_monotonic_seconds >= warmup_completion
+        ]
+        post_warmup_frame = (warmup_post_completion or warmup_frames)[-1] if (warmup_post_completion or warmup_frames) else None
+        if post_warmup_frame is None:
+            raise RealtimeError("warm-up produced no decoded frame after dispatch")
+        if (post_warmup_frame.width, post_warmup_frame.height) != (first_frame.width, first_frame.height):
+            raise RealtimeError("decoded frame dimensions changed during warm-up")
+
+        post_warmup_difference = _roi_difference_summary(
+            first_frame.pixels,
+            post_warmup_frame.pixels,
+            detector.indices,
+        )
+        setup["warmup"] = {
+            "gesture": warmup_gesture,
+            "dispatch_start_monotonic_seconds": warmup_started,
+            "command_completion_monotonic_seconds": warmup_completion,
+            "initial_baseline_frame_index": first_frame.frame_index,
+            "post_warmup_baseline_frame_index": post_warmup_frame.frame_index,
+            "state_trace": [
+                "baseline_marker_off",
+                "warmup_dispatch",
+                "marker_on_window_unmeasured",
+                "marker_off_baseline_next",
+            ],
+            "capture": warmup_capture,
         }
-        if len(baseline_window) < 2:
+        setup["shared_no_touch_baseline"] = detector.baseline(
+            [first_frame.pixels, post_warmup_frame.pixels]
+        )
+        setup["shared_no_touch_baseline"].update(
+            {
+                "frame_indices": [first_frame.frame_index, post_warmup_frame.frame_index],
+                "pre_dispatch_new_frames_required": 0,
+                "legacy_baseline_frame_count_argument": baseline_frame_count,
+                "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
+            }
+        )
+        warmup_scores = [detector.score(setup["shared_no_touch_baseline"], frame.pixels) for frame in warmup_frames]
+        warmup_marker_on = any(score["detected"] for score in warmup_scores)
+        warmup_off_score = detector.score(setup["shared_no_touch_baseline"], post_warmup_frame.pixels)
+        warmup_static_match = _static_baseline_matches(post_warmup_difference)
+        setup["warmup"].update(
+            {
+                "marker_on_detected": warmup_marker_on,
+                "marker_on_frame_indices": [
+                    frame.frame_index for frame, score in zip(warmup_frames, warmup_scores) if score["detected"]
+                ],
+                "marker_off_recovered": warmup_static_match and not warmup_off_score["detected"],
+                "post_warmup_no_touch_difference": post_warmup_difference,
+                "post_warmup_marker_score": warmup_off_score,
+                "launcher_state_unchanged": warmup_static_match,
+            }
+        )
+        if not warmup_gesture.get("success"):
+            raise RealtimeError(warmup_gesture.get("failure") or "warm-up gesture dispatch failed")
+        if not warmup_static_match:
             raise RealtimeError(
-                "calibration requires at least two no-touch decoded frames to estimate temporal noise"
+                "post-warm-up no-touch frame materially differs from initial launcher baseline"
             )
+        if warmup_off_score["detected"]:
+            raise RealtimeError("warm-up did not recover a marker-off baseline")
+
+        baseline_frame = post_warmup_frame
         for trial_index in range(1, trials + 1):
             time.sleep(spacing_seconds)
             trial: dict[str, Any] = {
                 "trial": trial_index,
                 "valid": False,
+                "structurally_valid": False,
                 "detection_succeeded": False,
                 "invalid_reason": None,
+                "detection_failure_reason": None,
+                "state_trace": ["baseline_marker_off", "dispatch"],
             }
-            no_touch_window = _collect_distinct_frames(
+            baseline = dict(setup["shared_no_touch_baseline"])
+            baseline["pixels"] = baseline_frame.pixels
+            gesture, trial_frames, started, capture = _dispatch_capture_window(
+                controller,
                 source,
-                required_count=max(2, baseline_frame_count),
-                timeout_seconds=baseline_timeout_seconds,
+                calibration_input_swipe,
+                initial_frame_index=baseline_frame.frame_index,
+                response_timeout_seconds=response_timeout_seconds,
+                label=f"trial-{trial_index}",
             )
-            if len(no_touch_window) < 2:
-                trial["invalid_reason"] = "insufficient fresh no-touch decoded frames"
-                trials_report.append(trial)
-                continue
-            baseline_frame = no_touch_window[-1]
-            if (baseline_frame.width, baseline_frame.height) != (first_frame.width, first_frame.height):
-                trial["invalid_reason"] = "decoded frame dimensions changed during calibration"
-                trials_report.append(trial)
-                continue
-            detector = TouchResponseDetector(
-                baseline_frame.width,
-                baseline_frame.height,
-                mapped_calibration_swipe,
-            )
-            try:
-                baseline = detector.baseline([frame.pixels for frame in no_touch_window])
-            except RealtimeError as exc:
-                trial["invalid_reason"] = str(exc)
-                trials_report.append(trial)
-                continue
-            started_holder: dict[str, float] = {}
-
-            def on_started(value: float) -> None:
-                started_holder["value"] = value
-
-            result_holder: dict[str, Any] = {}
-
-            def dispatch() -> None:
-                result_holder["value"] = controller.dispatch_swipe(calibration_input_swipe, on_started=on_started)
-
-            dispatch_thread = threading.Thread(target=dispatch, name=f"calibration-dispatch-{trial_index}")
-            dispatch_thread.start()
             response_frame: DecodedFrame | None = None
             response_score: dict[str, Any] | None = None
-            seen_index = baseline_frame.frame_index
-            while dispatch_thread.is_alive() or (started_holder and time.monotonic() < started_holder["value"] + response_timeout_seconds):
-                frame = source.latest_frame(timeout_seconds=0.01)
-                if frame is None or frame.frame_index <= seen_index:
-                    continue
-                seen_index = frame.frame_index
-                if not started_holder or frame.host_receive_decode_monotonic_seconds < started_holder["value"]:
-                    continue
+            for frame in trial_frames:
                 score = detector.score(baseline, frame.pixels)
                 if score["detected"]:
                     response_frame = frame
                     response_score = score
                     break
-            dispatch_thread.join(timeout=2)
-            gesture = result_holder.get("value", {"success": False, "failure": "dispatch thread did not complete"})
-            started = started_holder.get("value")
+            completion = gesture.get("host_completion_monotonic_seconds")
+            post_completion_frames = [
+                frame
+                for frame in trial_frames
+                if completion is not None
+                and frame.host_receive_decode_monotonic_seconds >= completion
+            ]
+            marker_off_frame = post_completion_frames[-1] if post_completion_frames else None
+            marker_off_score = (
+                detector.score(baseline, marker_off_frame.pixels) if marker_off_frame is not None else None
+            )
+            marker_off_difference = (
+                _roi_difference_summary(baseline_frame.pixels, marker_off_frame.pixels, detector.indices)
+                if marker_off_frame is not None
+                else None
+            )
+            marker_off_recovered = bool(
+                marker_off_frame is not None
+                and marker_off_score is not None
+                and not marker_off_score["detected"]
+                and marker_off_difference is not None
+                and _static_baseline_matches(marker_off_difference)
+            )
             consistency = calibration_gesture_consistency(
                 calibration_input_swipe,
                 gesture.get("parameters"),
@@ -1053,35 +1210,48 @@ def run_calibration(
                 {
                     "gesture": gesture,
                     "dispatch_start_monotonic_seconds": started,
-                    "command_completion_monotonic_seconds": gesture.get("host_completion_monotonic_seconds"),
+                    "command_completion_monotonic_seconds": completion,
                     "baseline_frame_index": baseline_frame.frame_index,
-                    "baseline_frame_indices_for_temporal_noise": [frame.frame_index for frame in no_touch_window],
+                    "baseline_frame_indices_for_temporal_noise": setup["shared_no_touch_baseline"]["frame_indices"],
                     "input_swipe": calibration_input_swipe.as_dict(),
                     "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
                     "gesture_consistency": consistency,
                     "threshold_rule": detector.threshold_rule,
-                    "temporal_noise_frame_count": baseline["temporal_noise_frame_count"],
-                    "temporal_noise_sample_count": baseline["temporal_noise_sample_count"],
-                    "temporal_noise_median_abs_delta": baseline["temporal_noise_median_abs_delta"],
-                    "temporal_noise_mad": baseline["temporal_noise_mad"],
-                    "temporal_noise_p99_abs_delta": baseline["temporal_noise_p99_abs_delta"],
-                    "absolute_change_threshold": baseline["absolute_change_threshold"],
+                    "temporal_noise_frame_count": setup["shared_no_touch_baseline"]["temporal_noise_frame_count"],
+                    "temporal_noise_sample_count": setup["shared_no_touch_baseline"]["temporal_noise_sample_count"],
+                    "temporal_noise_median_abs_delta": setup["shared_no_touch_baseline"]["temporal_noise_median_abs_delta"],
+                    "temporal_noise_mad": setup["shared_no_touch_baseline"]["temporal_noise_mad"],
+                    "temporal_noise_p99_abs_delta": setup["shared_no_touch_baseline"]["temporal_noise_p99_abs_delta"],
+                    "absolute_change_threshold": setup["shared_no_touch_baseline"]["absolute_change_threshold"],
                     "detection_score": response_score,
                     "response_frame_index": response_frame.frame_index if response_frame else None,
                     "response_frame_timestamp": response_frame.host_receive_decode_monotonic_seconds if response_frame else None,
+                    "capture": capture,
+                    "marker_off_frame_index": marker_off_frame.frame_index if marker_off_frame else None,
+                    "marker_off_score": marker_off_score,
+                    "marker_off_difference": marker_off_difference,
+                    "marker_off_recovered": marker_off_recovered,
                 }
             )
             if not consistency["consistent"]:
                 trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
-            elif gesture.get("success") and started is not None:
+            elif not gesture.get("success") or started is None:
+                trial["invalid_reason"] = gesture.get("failure") or "gesture dispatch failed"
+            elif not marker_off_recovered:
+                trial["invalid_reason"] = "marker-off baseline was not recovered after command completion"
+            else:
+                trial["structurally_valid"] = True
                 trial["valid"] = True
                 if response_frame is not None:
                     trial["detection_succeeded"] = True
-                    trial["dispatch_start_to_first_visible_response_ms"] = (response_frame.host_receive_decode_monotonic_seconds - started) * 1000
+                    trial["dispatch_start_to_first_visible_response_ms"] = (
+                        response_frame.host_receive_decode_monotonic_seconds - started
+                    ) * 1000
                 else:
-                    trial["invalid_reason"] = "no touch visualization detected within timeout"
-            else:
-                trial["invalid_reason"] = gesture.get("failure") or "gesture dispatch failed"
+                    trial["detection_failure_reason"] = "no touch visualization detected within timeout"
+                baseline_frame = marker_off_frame
+                trial["state_trace"].append("marker_on_detected" if response_frame else "marker_on_not_detected")
+                trial["state_trace"].append("marker_off_baseline_next")
             trials_report.append(trial)
         status = "completed"
     except (AdbError, RealtimeError) as exc:
@@ -1097,8 +1267,10 @@ def run_calibration(
             else None
         )
         restoration = settings.restore()
-    valid = [trial for trial in trials_report if trial.get("valid")]
+    valid = [trial for trial in trials_report if trial.get("structurally_valid")]
     detected = [trial for trial in valid if trial.get("detection_succeeded")]
+    trial_gestures = [trial.get("gesture", {}) for trial in trials_report]
+    successful_trial_gestures = [gesture for gesture in trial_gestures if gesture.get("success")]
     latency_samples_ms = [float(trial["dispatch_start_to_first_visible_response_ms"]) for trial in detected]
     detection_success_rate = len(detected) / len(valid) if valid else 0.0
     latency_evaluable = len(valid) >= 30 and detection_success_rate >= 0.95
@@ -1118,6 +1290,13 @@ def run_calibration(
             "calibration_swipe": calibration_input_swipe.as_dict(),
             "baseline_frame_count": baseline_frame_count,
             "baseline_timeout_seconds": baseline_timeout_seconds,
+            "calibration_state_machine": [
+                "baseline_marker_off",
+                "dispatch",
+                "marker_on",
+                "marker_off_baseline_next",
+            ],
+            "pre_dispatch_new_frames_required": 0,
             "detector": {
                 "roi": "corridor around mapped persistent calibration press point",
                 "threshold_rule": TouchResponseDetector(1, 2, Swipe(0, 0, 0, 0, 500)).threshold_rule,
@@ -1130,6 +1309,11 @@ def run_calibration(
             "valid_trials": len(valid),
             "detected_trials": len(detected),
             "detection_success_rate": detection_success_rate,
+            "structurally_valid_trials": len(valid),
+            "trial_gestures_attempted": len(trial_gestures),
+            "trial_gestures_dispatched": len(successful_trial_gestures),
+            "trial_gesture_dispatch_rate": len(successful_trial_gestures) / len(trial_gestures) if trial_gestures else 0.0,
+            "marker_off_recovered_trials": sum(1 for trial in trials_report if trial.get("marker_off_recovered")),
             "latency_evaluable": latency_evaluable,
             "latency_evaluation": "evaluable" if latency_evaluable else "INCONCLUSIVE",
             "latency_inconclusive_reason": None

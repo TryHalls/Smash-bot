@@ -673,7 +673,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         adb,
         ffmpeg_path,
         server["path"],
-        trials=max(30, args.calibration_trials),
+        trials=args.calibration_trials,
         spacing_seconds=args.calibration_spacing_seconds,
         response_timeout_seconds=args.calibration_timeout_seconds,
         swipe=stress_swipe,
@@ -863,6 +863,11 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
             f"valid={calibration.get('valid_trials')}; detected={calibration.get('detected_trials')}; "
             f"rate={calibration.get('detection_success_rate')}; evaluation={calibration.get('latency_evaluation')}; "
             f"median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
+        )
+        lines.append(
+            "Calibration structure: "
+            f"dispatched={calibration.get('trial_gestures_dispatched')}/{calibration.get('trial_gestures_attempted')}; "
+            f"marker-off recovered={calibration.get('marker_off_recovered_trials')}/{calibration.get('trial_gestures_attempted')}"
         )
     age = report.get("freshness", {}).get("source", {}).get("consumed_frame_age_ms", {})
     if age:
