@@ -434,6 +434,8 @@ class RealtimeTests(unittest.TestCase):
         self.assertFalse(framed.metadata()["framed_video"]["raw_stream"])
         self.assertTrue(framed.metadata()["framed_video"]["send_frame_meta"])
         self.assertEqual(framed.metadata()["framed_video"]["header_size_bytes"], 12)
+        self.assertTrue(framed.stats()["framed_video"]["metadata_history_bounded"])
+        self.assertFalse(raw.metadata()["path"] == framed.metadata()["path"])
         self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
         self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
 
@@ -480,6 +482,8 @@ class RealtimeTests(unittest.TestCase):
             (crosshair_frame["host_packet_complete_monotonic_seconds"] - 50.0) * 1000,
             120.0,
         )
+        self.assertEqual(crosshair_frame["packet_start_observed_monotonic_seconds"], 50.120)
+        self.assertEqual(crosshair_frame["packet_complete_monotonic_seconds"], 50.120)
         self.assertEqual(source.association_diagnostics()["invariant_failures"], [])
 
     def test_framed_config_is_merged_but_never_enters_packet_frame_fifo(self):

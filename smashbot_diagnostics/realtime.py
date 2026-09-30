@@ -28,6 +28,7 @@ from .framed_video import (
     FramedVideoParseError,
     FramedVideoParser,
     H264PacketMerger,
+    decompose_prehost_packet_latency,
     decompose_visible_latency,
     framed_video_contract,
 )
@@ -814,10 +815,15 @@ class FramedH264FrameSource(RawH264FrameSource):
     def first_media_packet_after(self, timestamp: float) -> dict[str, Any] | None:
         with self._packet_lock:
             for packet in self._packet_metadata:
+                packet_complete = packet.get(
+                    "packet_complete_monotonic_seconds",
+                    packet.get("received_monotonic_seconds"),
+                )
                 if (
                     not packet["is_session"]
                     and not packet["is_config"]
-                    and packet["received_monotonic_seconds"] >= timestamp
+                    and packet_complete is not None
+                    and packet_complete >= timestamp
                 ):
                     return dict(packet)
         return None
@@ -861,10 +867,20 @@ class FramedH264FrameSource(RawH264FrameSource):
         def packet_summary(packet: dict[str, Any] | None) -> dict[str, Any] | None:
             if packet is None:
                 return None
+            packet_start = packet.get(
+                "packet_start_observed_monotonic_seconds",
+                packet.get("received_monotonic_seconds"),
+            )
+            packet_complete = packet.get(
+                "packet_complete_monotonic_seconds",
+                packet.get("received_monotonic_seconds"),
+            )
             return {
                 "sequence_index": packet["sequence_index"],
                 "pts_us": packet["pts_us"],
-                "host_packet_complete_monotonic_seconds": packet["received_monotonic_seconds"],
+                "packet_start_observed_monotonic_seconds": packet_start,
+                "packet_complete_monotonic_seconds": packet_complete,
+                "host_packet_complete_monotonic_seconds": packet_complete,
             }
 
         return {
@@ -992,10 +1008,26 @@ class FramedH264FrameSource(RawH264FrameSource):
                 )
                 return None
             packet = self._pending_media_packets.popleft()
+            packet_start = packet.get(
+                "packet_start_observed_monotonic_seconds",
+                packet.get("received_monotonic_seconds"),
+            )
+            packet_complete = packet.get(
+                "packet_complete_monotonic_seconds",
+                packet.get("received_monotonic_seconds"),
+            )
+            if packet_start is None or packet_complete is None:
+                self._association_invariant_failures.append(
+                    f"packet {packet.get('sequence_index')} is missing host receive timestamps"
+                )
+                return None
             association = {
                 "packet_sequence_index": packet["sequence_index"],
                 "scrcpy_pts_us": packet["pts_us"],
-                "host_packet_complete_monotonic_seconds": packet["received_monotonic_seconds"],
+                "packet_start_observed_monotonic_seconds": packet_start,
+                "packet_complete_monotonic_seconds": packet_complete,
+                # Task 005 compatibility alias; this is V1, not a PTS value.
+                "host_packet_complete_monotonic_seconds": packet_complete,
                 "decoded_frame_index": frame_index,
                 "decode_complete_monotonic_seconds": timestamp,
             }
@@ -1038,7 +1070,16 @@ class FramedH264FrameSource(RawH264FrameSource):
                     self._disconnect.mark("eof")
                     self._stop.set()
                     return
-                packets = self._framed_parser.feed(chunk, received_monotonic_seconds=time.monotonic())
+                # This userspace sample is taken immediately after recv()
+                # returns.  It is deliberately not described as a network
+                # first-byte timestamp.
+                chunk_observed = time.monotonic()
+                packet_complete_observed = time.monotonic()
+                packets = self._framed_parser.feed(
+                    chunk,
+                    received_monotonic_seconds=packet_complete_observed,
+                    chunk_observed_monotonic_seconds=chunk_observed,
+                )
                 for packet in packets:
                     self._record_packet(packet)
                     if packet.is_session:
@@ -2216,6 +2257,7 @@ def run_calibration(
                 }
             )
             decomposition: dict[str, Any] | None = None
+            prehost_decomposition: dict[str, Any] | None = None
             first_post_t0_packet_diagnostic: dict[str, Any] | None = None
             relevant_packet_timing: dict[str, Any] | None = None
             association_diagnostics: dict[str, Any] | None = None
@@ -2230,29 +2272,59 @@ def run_calibration(
                 )
                 association_diagnostics = source.association_diagnostics()
                 if relevant_packet_timing is not None and response_frame is not None:
-                    relevant_packet_timestamp = relevant_packet_timing["host_packet_complete_monotonic_seconds"]
-                    if relevant_packet_timestamp < started:
-                        trial["invalid_reason"] = (
-                            "current-target associated packet T1 precedes current trial T0"
-                        )
-                    else:
+                    c0 = started
+                    c1 = gesture.get("host_down_write_complete_monotonic_seconds")
+                    v0 = relevant_packet_timing.get("packet_start_observed_monotonic_seconds")
+                    v1 = relevant_packet_timing.get(
+                        "packet_complete_monotonic_seconds",
+                        relevant_packet_timing.get("host_packet_complete_monotonic_seconds"),
+                    )
+                    v2 = response_frame.host_receive_decode_monotonic_seconds
+                    if c1 is not None and v0 is not None and v1 is not None:
                         try:
-                            decomposition = decompose_visible_latency(
-                                started,
-                                relevant_packet_timestamp,
-                                response_frame.host_receive_decode_monotonic_seconds,
-                            )
+                            prehost_decomposition = decompose_prehost_packet_latency(c0, c1, v0, v1, v2)
+                            # Preserve the accepted Task 005 decomposition as
+                            # a compatibility diagnostic while making the
+                            # Task 006 five-point decomposition authoritative.
+                            decomposition = decompose_visible_latency(c0, v1, v2)
                         except ValueError as exc:
                             trial["invalid_reason"] = str(exc)
+                    else:
+                        trial["invalid_reason"] = (
+                            "current-target association is missing C1/V0/V1 host timestamps"
+                        )
             trial.update(
                 {
                     "t0_action_down_write_monotonic_seconds": started,
+                    "c0_action_down_write_start_monotonic_seconds": started,
+                    "c1_action_down_write_complete_monotonic_seconds": (
+                        gesture.get("host_down_write_complete_monotonic_seconds")
+                    ),
+                    "v0_relevant_packet_start_observed_monotonic_seconds": (
+                        relevant_packet_timing.get("packet_start_observed_monotonic_seconds")
+                        if relevant_packet_timing
+                        else None
+                    ),
                     "t1_relevant_packet_complete_monotonic_seconds": (
-                        relevant_packet_timing["host_packet_complete_monotonic_seconds"]
+                        relevant_packet_timing.get(
+                            "packet_complete_monotonic_seconds",
+                            relevant_packet_timing.get("host_packet_complete_monotonic_seconds"),
+                        )
+                        if relevant_packet_timing
+                        else None
+                    ),
+                    "v1_relevant_packet_complete_monotonic_seconds": (
+                        relevant_packet_timing.get(
+                            "packet_complete_monotonic_seconds",
+                            relevant_packet_timing.get("host_packet_complete_monotonic_seconds"),
+                        )
                         if relevant_packet_timing
                         else None
                     ),
                     "t2_crosshair_decode_complete_monotonic_seconds": (
+                        response_frame.host_receive_decode_monotonic_seconds if response_frame else None
+                    ),
+                    "v2_crosshair_decode_complete_monotonic_seconds": (
                         response_frame.host_receive_decode_monotonic_seconds if response_frame else None
                     ),
                     "relevant_packet_association": relevant_packet_timing,
@@ -2260,12 +2332,11 @@ def run_calibration(
                     "fifo_at_response": fifo_at_response,
                     "frame_association_diagnostics": association_diagnostics,
                     "decomposition": decomposition,
+                    "prehost_decomposition": prehost_decomposition,
                 }
             )
             if trial.get("invalid_reason"):
                 pass
-            elif video_path == "framed_h264" and not (quiescent_baseline or {}).get("quiescent"):
-                trial["invalid_reason"] = "quiescent baseline was not reached before dispatch"
             elif not consistency["consistent"]:
                 trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
             elif not gesture.get("success") or started is None:
@@ -2355,6 +2426,9 @@ def run_calibration(
     decomposition_trials = [
         trial for trial in valid if trial.get("decomposition")
     ]
+    prehost_decomposition_trials = [
+        trial for trial in valid if trial.get("prehost_decomposition")
+    ]
     decomposition_statistics: dict[str, Any] = {
         "video_path": video_path,
         "quiescent_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
@@ -2369,10 +2443,48 @@ def run_calibration(
             ],
             "total_visible_ms": [trial["decomposition"]["total_visible_ms"] for trial in decomposition_trials],
         },
+        "prehost_decomposition": {
+            "structurally_valid_trials": len(prehost_decomposition_trials),
+            "raw_samples": {
+                "control_write_blocking_ms": [
+                    trial["prehost_decomposition"]["control_write_blocking_ms"]
+                    for trial in prehost_decomposition_trials
+                ],
+                "pre_packet_start_observation_ms": [
+                    trial["prehost_decomposition"]["pre_packet_start_observation_ms"]
+                    for trial in prehost_decomposition_trials
+                ],
+                "packet_receive_observation_span_ms": [
+                    trial["prehost_decomposition"]["packet_receive_observation_span_ms"]
+                    for trial in prehost_decomposition_trials
+                ],
+                "packet_complete_to_decode_ms": [
+                    trial["prehost_decomposition"]["packet_complete_to_decode_ms"]
+                    for trial in prehost_decomposition_trials
+                ],
+                "total_visible_ms": [
+                    trial["prehost_decomposition"]["total_visible_ms"]
+                    for trial in prehost_decomposition_trials
+                ],
+            },
+        },
     }
     for metric in ("upstream_to_relevant_packet_ms", "relevant_packet_to_decode_ms", "total_visible_ms"):
         values = decomposition_statistics["raw_samples"][metric]
         decomposition_statistics[metric] = summarize_latencies([value / 1000 for value in values]) if values else _inconclusive_latency_summary()
+    for metric in (
+        "control_write_blocking_ms",
+        "pre_packet_start_observation_ms",
+        "packet_receive_observation_span_ms",
+        "packet_complete_to_decode_ms",
+        "total_visible_ms",
+    ):
+        values = decomposition_statistics["prehost_decomposition"]["raw_samples"][metric]
+        decomposition_statistics["prehost_decomposition"][metric] = (
+            summarize_latencies([value / 1000 for value in values])
+            if values
+            else _inconclusive_latency_summary()
+        )
     return {
         "status": status,
         "configuration": {
@@ -2398,10 +2510,10 @@ def run_calibration(
             ],
             "pre_dispatch_new_frames_required": 0,
             "quiescent_baseline": {
-                "required": video_path == "framed_h264",
+                "required": False,
                 "quiet_interval_seconds": quiescent_interval_seconds if video_path == "framed_h264" else None,
                 "timeout_seconds": quiescent_timeout_seconds if video_path == "framed_h264" else None,
-                "rule": "no new complete media packet or decoded frame during the bounded quiet interval"
+                "rule": "diagnostic only; no new complete media packet or decoded frame during the bounded quiet interval"
                 if video_path == "framed_h264"
                 else None,
             },

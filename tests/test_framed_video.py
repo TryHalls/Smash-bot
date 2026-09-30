@@ -12,6 +12,7 @@ from smashbot_diagnostics.framed_video import (
     FramedVideoParseError,
     FramedVideoParser,
     H264PacketMerger,
+    decompose_prehost_packet_latency,
     decompose_visible_latency,
     framed_video_contract,
     verify_h264_no_b_frames,
@@ -73,10 +74,74 @@ class FramedVideoTests(unittest.TestCase):
         parser = FramedVideoParser()
         wire = media_packet(42, b"0123456789")
 
-        self.assertEqual(parser.feed(wire[:FRAME_HEADER_SIZE - 1], received_monotonic_seconds=1.0), [])
+        self.assertEqual(
+            parser.feed(
+                wire[:FRAME_HEADER_SIZE - 1],
+                received_monotonic_seconds=1.0,
+                chunk_observed_monotonic_seconds=0.5,
+            ),
+            [],
+        )
         self.assertEqual(parser.buffered_bytes, FRAME_HEADER_SIZE - 1)
-        self.assertEqual(parser.feed(wire[FRAME_HEADER_SIZE - 1 :], received_monotonic_seconds=2.0)[0].payload, b"0123456789")
+        packet = parser.feed(
+            wire[FRAME_HEADER_SIZE - 1 :],
+            received_monotonic_seconds=2.0,
+            chunk_observed_monotonic_seconds=1.5,
+        )[0]
+        self.assertEqual(packet.payload, b"0123456789")
+        self.assertEqual(packet.packet_start_observed_monotonic_seconds, 0.5)
+        self.assertEqual(packet.packet_complete_monotonic_seconds, 2.0)
         self.assertEqual(parser.buffered_bytes, 0)
+
+    def test_complete_packet_in_one_chunk_uses_same_chunk_observation(self):
+        parser = FramedVideoParser()
+        packet = parser.feed(
+            media_packet(7, b"one"),
+            received_monotonic_seconds=20.0,
+            chunk_observed_monotonic_seconds=19.0,
+        )[0]
+
+        self.assertEqual(packet.packet_start_observed_monotonic_seconds, 19.0)
+        self.assertEqual(packet.packet_complete_monotonic_seconds, 20.0)
+
+    def test_multiple_packets_in_one_chunk_share_chunk_observation_timestamp(self):
+        parser = FramedVideoParser()
+        packets = parser.feed(
+            media_packet(1, b"one") + media_packet(2, b"two"),
+            received_monotonic_seconds=30.0,
+            chunk_observed_monotonic_seconds=29.0,
+        )
+
+        self.assertEqual(len(packets), 2)
+        self.assertEqual(
+            [packet.packet_start_observed_monotonic_seconds for packet in packets],
+            [29.0, 29.0],
+        )
+        self.assertEqual([packet.packet_complete_monotonic_seconds for packet in packets], [30.0, 30.0])
+
+    def test_packet_start_timestamp_tracks_second_packet_when_first_is_fragmented(self):
+        parser = FramedVideoParser()
+        first = media_packet(1, b"one")
+        second = media_packet(2, b"two")
+
+        self.assertEqual(
+            parser.feed(
+                first[:5],
+                received_monotonic_seconds=40.0,
+                chunk_observed_monotonic_seconds=39.0,
+            ),
+            [],
+        )
+        packets = parser.feed(
+            first[5:] + second,
+            received_monotonic_seconds=41.0,
+            chunk_observed_monotonic_seconds=40.5,
+        )
+
+        self.assertEqual(len(packets), 2)
+        self.assertEqual(packets[0].packet_start_observed_monotonic_seconds, 39.0)
+        self.assertEqual(packets[1].packet_start_observed_monotonic_seconds, 40.5)
+        self.assertEqual([packet.packet_complete_monotonic_seconds for packet in packets], [41.0, 41.0])
 
     def test_session_header_is_parsed_without_a_payload(self):
         parser = FramedVideoParser()
@@ -124,6 +189,26 @@ class FramedVideoTests(unittest.TestCase):
         })
         with self.assertRaises(ValueError):
             decompose_visible_latency(3.0, 2.0, 4.0)
+
+    def test_task006_prehost_decomposition_requires_c0_c1_v0_v1_v2_order(self):
+        result = decompose_prehost_packet_latency(100.0, 100.010, 100.125, 100.150, 100.375)
+
+        self.assertEqual(set(result), {
+            "control_write_blocking_ms",
+            "pre_packet_start_observation_ms",
+            "packet_receive_observation_span_ms",
+            "packet_complete_to_decode_ms",
+            "total_visible_ms",
+        })
+        self.assertAlmostEqual(result["control_write_blocking_ms"], 10.0)
+        self.assertAlmostEqual(result["pre_packet_start_observation_ms"], 125.0)
+        self.assertAlmostEqual(result["packet_receive_observation_span_ms"], 25.0)
+        self.assertAlmostEqual(result["packet_complete_to_decode_ms"], 225.0)
+        self.assertAlmostEqual(result["total_visible_ms"], 375.0)
+        with self.assertRaises(ValueError):
+            decompose_prehost_packet_latency(100.0, 100.2, 100.1, 100.3, 100.4)
+        with self.assertRaises(ValueError):
+            decompose_prehost_packet_latency(100.0, 100.1, 100.2, 100.15, 100.4)
 
     def test_contract_freezes_framed_diagnostic_options(self):
         contract = framed_video_contract()
