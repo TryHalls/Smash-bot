@@ -767,8 +767,16 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             for field in ("split", "clip", "source_run", "burst_id", "frame_index", "pts_us"):
                 if annotation_record.get(field) != manifest_record.get(field):
                     raise AnnotationError(f"annotation/subset identity mismatch for {record_id}: {field}")
-        self._cursor = 0
         self._annotation_by_id = annotation_by_id
+        self._cursor = next(
+            (
+                index
+                for index, record in enumerate(self.records)
+                if annotation_by_id[record["record_id"]]["active_rally"] is None
+                or annotation_by_id[record["record_id"]]["shuttle"]["visible"] is None
+            ),
+            0,
+        )
         super().__init__((host, port), _AnnotationHandler)
 
     def state(self, *, move: int = 0, next_unlabeled: bool = False) -> dict[str, Any]:

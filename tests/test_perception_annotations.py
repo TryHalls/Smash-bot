@@ -357,6 +357,39 @@ class PerceptionAnnotationTests(unittest.TestCase):
             finally:
                 server.server_close()
 
+    def test_restart_resumes_at_first_unlabeled_without_losing_labels(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = root / "images"
+            images.mkdir()
+            records = []
+            annotations = []
+            for index in range(2):
+                image = images / f"record-{index}.png"
+                image.write_bytes(b"png")
+                identity = {"record_id": f"record-{index}", "image_path": f"images/record-{index}.png", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": index, "pts_us": index + 1}
+                records.append(identity)
+                annotations.append(_annotation(identity, active=True, visible=True) if index == 0 else {
+                    **_annotation(identity, active=None, visible=None),
+                    "active_rally": None,
+                    "shuttle": {"visible": None, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False},
+                })
+            manifest_path = root / "subset.json"
+            annotations_path = root / "annotations.json"
+            atomic_write_json(manifest_path, {"schema_version": 1, "width": 864, "height": 1920, "records": records})
+            atomic_write_json(annotations_path, {"schema_version": 1, "records": annotations})
+            first = AnnotationHTTPServer(manifest_path, annotations_path)
+            try:
+                self.assertEqual(first.state()["index"], 1)
+            finally:
+                first.server_close()
+            second = AnnotationHTTPServer(manifest_path, annotations_path)
+            try:
+                self.assertEqual(second.state()["index"], 1)
+                self.assertTrue(second.state()["progress"]["labeled"], 1)
+            finally:
+                second.server_close()
+
     def test_ui_can_mark_invisible_without_leaving_stale_center(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
