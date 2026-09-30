@@ -221,9 +221,8 @@ video socket, decoder, server, and ADB forward deterministically.
 
 The host suite includes v4.1 golden-byte, socket-contract, coordinate/size,
 event-order, duration, bounded-scheduling, disconnect, cleanup, and pinned
-server-identity tests. The first physical experiment is Stage A only: five
-static Pointer Location trials on the launcher. It is intentionally not run
-until the phone is left on that safe static screen:
+server-identity tests. The physical sequence was Stage A followed by the
+authorized static Stage B run; the moving SMASH phase was not run.
 
 ```bash
 python3 -m smashbot_diagnostics realtime-benchmark \
@@ -239,9 +238,51 @@ python3 -m smashbot_diagnostics realtime-benchmark \
 ```
 
 This command writes gitignored JSON and summary artifacts under
-`artifacts/task004/<timestamp>/`. Stage B's 30 trials and any moving SMASH
-validation remain gated on a successful Stage A review; neither is part of
-the host implementation step.
+`artifacts/task004/<timestamp>/`. Stage B is classified independently from
+Stage A: a 30-trial run is never classified as a Stage A failure.
+
+### Final Task 004 decision
+
+Stage A passed in the accepted five-trial pilot
+(`artifacts/task004/20260930T105610Z/report.json`):
+
+- 5/5 gestures dispatched successfully, with the frozen 450 ms gesture and
+  47 control events per gesture.
+- 5/5 trials structurally valid, 5/5 `crosshair_detected=true`, 5/5
+  pointer-up recoveries, and 5/5 stable masked-background checks.
+- Settings were restored exactly (`pointer_location=null`,
+  `show_touches=0`), with zero control/video disconnects and zero
+  write/scheduling/decode errors.
+
+The authorized Stage B run is recorded at
+`artifacts/task004/20260930T110614Z/report.json` and remains formally:
+`stage_b.status = INCONCLUSIVE`. It had 30/30 gestures dispatched, but only
+28/30 structurally valid trials, so the frozen Stage B gate requiring at least
+30 valid trials is not evaluable. The run had 30/30 marker-on detections
+(100%; 28/28 within the structurally valid subset), 28/30 pointer-up
+recoveries, and 28/30 stable masked-background checks. The two invalid trials
+failed only recovery of the marker-off baseline; their crosshair detections
+were still observed. No detector, threshold, ROI, timing, or result was
+changed to alter this classification.
+
+The separate architectural decision is determined by the observed latency
+bound, without changing the formal gate status:
+
+- The 28 valid raw latencies were all at least 223.714 ms; 19/28 exceeded
+  250 ms.
+- Their observed median was 274.677 ms and p95 was 353.563 ms.
+- Even assigning 0 ms to both invalid trials would produce an approximately
+  269.932 ms median over 30 trials, still above the 150 ms limit; the p95
+  would also remain above 250 ms.
+
+Therefore the formal Stage B result is **INCONCLUSIVE**, while scrcpy v4.1
+control is architecturally **rejected for the current visible-latency
+objective**. Completing only the two missing trials cannot make the frozen
+latency gate pass. Stage C / moving SMASH is **NOT RUN** because Stage B did
+not pass. No third transport was attempted. The pinned scrcpy v4.1 control
+implementation and its host tests remain available as diagnostic
+infrastructure, and further transport investigation is deferred to Task 005 /
+Issue #8.
 
 ## Scope and artifacts
 
