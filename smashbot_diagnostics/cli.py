@@ -13,6 +13,13 @@ from . import __version__
 from .adb import AdbClient, AdbError, AdbUnavailable
 from .benchmarks import benchmark_input, benchmark_screenshots, execute_swipe, swipe_parameters, utc_now
 from .reporting import new_run_directory, write_json, write_summary
+from .realtime import (
+    Swipe,
+    evaluate_realtime_gate,
+    run_calibration,
+    run_concurrent_stress,
+    run_fresh_frame_benchmark,
+)
 from .streaming import (
     BASELINE_PROFILE,
     FALLBACK_PROFILE,
@@ -110,6 +117,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="confirm that SMASH is in an active, moving match for the full experiment",
     )
     stream.add_argument("--output-base", type=Path, default=Path("artifacts/streaming"))
+
+    realtime = subparsers.add_parser("realtime-benchmark", help="run the Task 003 observe-act measurements")
+    _add_connection_options(realtime)
+    _add_stream_tool_options(realtime)
+    realtime.add_argument("--scrcpy-server", type=Path, help="verified official scrcpy-server-v4.1 path")
+    realtime.add_argument("--duration-seconds", type=_positive_float, default=32.0)
+    realtime.add_argument("--gesture-count", type=_positive_int, default=30)
+    realtime.add_argument("--gesture-interval-seconds", type=_positive_float, default=1.0)
+    realtime.add_argument("--consumer-hz", type=_positive_float, default=20.0)
+    realtime.add_argument("--calibration-trials", type=_positive_int, default=30)
+    realtime.add_argument("--calibration-spacing-seconds", type=_positive_float, default=0.35)
+    realtime.add_argument("--calibration-timeout-seconds", type=_positive_float, default=0.8)
+    realtime.add_argument("--x1", type=_nonnegative_int, default=160)
+    realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
+    realtime.add_argument("--x2", type=_nonnegative_int, default=700)
+    realtime.add_argument("--y2", type=_nonnegative_int, default=1200)
+    realtime.add_argument("--duration-ms", type=_nonnegative_int, default=120)
+    realtime.add_argument(
+        "--static-screen-confirmed",
+        action="store_true",
+        help="confirm that the phone is on a safe static screen for all Task 003 measurements",
+    )
+    realtime.add_argument("--output-base", type=Path, default=Path("artifacts/realtime"))
     return parser
 
 
@@ -543,6 +573,192 @@ def _stream_summary(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _realtime_benchmark(args: argparse.Namespace) -> int:
+    if not args.static_screen_confirmed:
+        raise ValueError("realtime-benchmark requires --static-screen-confirmed on a safe static Android screen")
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
+    run_dir = new_run_directory(args.output_base)
+    capability = capability_report(adb, args.scrcpy, args.ffmpeg)
+    selected_serial = capability.get("adb", {}).get("selected_serial")
+    scrcpy_path = capability.get("scrcpy", {}).get("path")
+    ffmpeg_path = capability.get("ffmpeg", {}).get("path")
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "tool_version": __version__,
+        "generated_at_utc": utc_now(),
+        "command": "realtime-benchmark",
+        "transport_policy": "ADB is the only input transport; no fallback control transport is attempted",
+        "human_prerequisite": "safe static Android screen for concurrent, calibration, and freshness measurements",
+        "capability": capability,
+        "configuration": {
+            "duration_seconds": args.duration_seconds,
+            "gesture_count": args.gesture_count,
+            "gesture_interval_seconds": args.gesture_interval_seconds,
+            "consumer_hz": args.consumer_hz,
+            "calibration_trials": args.calibration_trials,
+            "calibration_spacing_seconds": args.calibration_spacing_seconds,
+            "calibration_timeout_seconds": args.calibration_timeout_seconds,
+            "swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
+            "profile": profile_dict(BASELINE_PROFILE),
+        },
+        "experiment_order": [
+            "1_capability_and_reusable_frame_source",
+            "2_concurrent_stream_and_adb_input",
+            "3_touch_visual_response_calibration",
+            "4_slow_consumer_fresh_frame_benchmark",
+            "5_acceptance_gate",
+        ],
+    }
+    if not selected_serial or not scrcpy_path or not ffmpeg_path:
+        report.update(
+            {
+                "status": "FAIL",
+                "failure_evidence": {
+                    "reason": "required ADB, scrcpy v4.1, or FFmpeg capability unavailable",
+                    "capability_failures": capability.get("failures", []),
+                    "alternative_control_transport_attempted": False,
+                },
+                "concurrent": {"status": "not_run"},
+                "calibration": {"status": "not_run"},
+                "freshness": {"status": "not_run"},
+                "gate": {"status": "FAIL", "criteria": {}},
+            }
+        )
+        _write_realtime_report(run_dir, report)
+        print(f"Report: {run_dir / 'report.json'}")
+        print(f"Summary: {run_dir / 'summary.txt'}")
+        return 2
+
+    server = ensure_scrcpy_server(run_dir, str(args.scrcpy_server) if args.scrcpy_server else None)
+    report["scrcpy_server"] = server
+    if not server.get("available"):
+        report.update(
+            {
+                "status": "FAIL",
+                "failure_evidence": {
+                    "reason": "verified official scrcpy v4.1 server unavailable",
+                    "server": server,
+                    "alternative_control_transport_attempted": False,
+                },
+                "concurrent": {"status": "not_run"},
+                "calibration": {"status": "not_run"},
+                "freshness": {"status": "not_run"},
+                "gate": {"status": "FAIL", "criteria": {}},
+            }
+        )
+        _write_realtime_report(run_dir, report)
+        print(f"Report: {run_dir / 'report.json'}")
+        print(f"Summary: {run_dir / 'summary.txt'}")
+        return 2
+
+    swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
+    concurrent = run_concurrent_stress(
+        adb,
+        ffmpeg_path,
+        server["path"],
+        duration_seconds=max(30.0, args.duration_seconds),
+        gesture_count=max(30, args.gesture_count),
+        gesture_interval_seconds=args.gesture_interval_seconds,
+        swipe=swipe,
+    )
+    report["concurrent"] = concurrent
+    report["calibration"] = run_calibration(
+        adb,
+        ffmpeg_path,
+        server["path"],
+        trials=max(30, args.calibration_trials),
+        spacing_seconds=args.calibration_spacing_seconds,
+        response_timeout_seconds=args.calibration_timeout_seconds,
+        swipe=swipe,
+    )
+    report["freshness"] = run_fresh_frame_benchmark(
+        adb,
+        ffmpeg_path,
+        server["path"],
+        duration_seconds=max(30.0, args.duration_seconds),
+        consumer_hz=args.consumer_hz,
+    )
+    concurrent_source = concurrent.get("source", {})
+    freshness_source = report["freshness"].get("source", {})
+    report["source_contract"] = {
+        "api": ["start", "latest_frame", "metadata", "stop"],
+        "queue_capacity": min(
+            concurrent_source.get("metadata", {}).get("queue_capacity", 99),
+            freshness_source.get("metadata", {}).get("queue_capacity", 99),
+        ),
+        "pixel_history_retained": concurrent_source.get("metadata", {}).get("pixel_history_retained", True),
+        "start_stop_clean": bool(concurrent.get("cleanup", {}).get("cleanup_success")) and bool(report["freshness"].get("cleanup", {}).get("cleanup_success")),
+    }
+    report["gate"] = evaluate_realtime_gate(report)
+    report["status"] = report["gate"]["status"]
+    if report["status"] == "FAIL":
+        report["failure_evidence"] = {
+            "reason": "one or more Issue #5 acceptance gates failed",
+            "failed_criteria": [name for name, passed in report["gate"]["criteria"].items() if not passed],
+            "concurrent_stream": report["concurrent"].get("stream", {}),
+            "gesture_statistics": report["concurrent"].get("gestures", {}).get("statistics", {}),
+            "calibration_statistics": report["calibration"].get("statistics", {}),
+            "freshness_frame_age": report["freshness"].get("source", {}).get("consumed_frame_age_ms", {}),
+            "alternative_control_transport_attempted": False,
+        }
+    _write_realtime_report(run_dir, report)
+    print(f"Report: {run_dir / 'report.json'}")
+    print(f"Summary: {run_dir / 'summary.txt'}")
+    return 0 if report["status"] == "PASS" else 2
+
+
+def _write_realtime_report(run_dir: Path, report: dict[str, Any]) -> None:
+    write_json(run_dir / "report.json", report)
+    write_summary(run_dir / "summary.txt", _realtime_summary(report))
+
+
+def _realtime_summary(report: dict[str, Any]) -> list[str]:
+    lines = [
+        "SMASH Bot Task 003 real-time observe→act benchmark",
+        f"Status: {report.get('status', 'unknown')}",
+        f"Device: {_value(report.get('capability', {}).get('adb'), 'selected_serial')}",
+        f"Transport: {_value(report.get('capability', {}).get('adb'), 'transport')}",
+        "Control transport: ADB only; no alternative attempted",
+        f"Queue capacity: {_value(report.get('source_contract'), 'queue_capacity')}",
+        f"Concurrent: {_value(report.get('concurrent'), 'status')}",
+        f"Calibration: {_value(report.get('calibration'), 'status')}",
+        f"Freshness: {_value(report.get('freshness'), 'status')}",
+        f"Gate: {_value(report.get('gate'), 'status')}",
+    ]
+    concurrent = report.get("concurrent", {})
+    stream = concurrent.get("stream", {})
+    gestures = concurrent.get("gestures", {}).get("statistics", {})
+    if stream:
+        lines.append(
+            "Concurrent stream: "
+            f"FPS={stream.get('effective_produced_fps')}; p95 interval={stream.get('p95_inter_frame_interval_ms')} ms; "
+            f"max gap={stream.get('maximum_inter_frame_interval_ms')} ms; disconnects={stream.get('disconnects')}"
+        )
+    if gestures:
+        lines.append(
+            "Gestures: "
+            f"attempted={gestures.get('attempted')}; failures={gestures.get('failure_count')}; "
+            f"median dispatch={gestures.get('median_latency_ms')} ms; p95={gestures.get('p95_latency_ms')} ms"
+        )
+    calibration = report.get("calibration", {}).get("statistics", {})
+    if calibration:
+        lines.append(
+            "Visible response: "
+            f"valid={calibration.get('valid_trials')}; detected={calibration.get('detected_trials')}; "
+            f"rate={calibration.get('detection_success_rate')}; median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
+        )
+    age = report.get("freshness", {}).get("source", {}).get("consumed_frame_age_ms", {})
+    if age:
+        lines.append(
+            "Fresh-frame age: "
+            f"median={age.get('median')} ms; p95={age.get('p95')} ms; max={age.get('max')} ms; "
+            f"dropped={report.get('freshness', {}).get('source', {}).get('dropped_replaced_stale_frames')}"
+        )
+    if report.get("failure_evidence"):
+        lines.append(f"Failure evidence: {report['failure_evidence']}")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -559,6 +775,8 @@ def main(argv: list[str] | None = None) -> int:
             return _stream_capability(args)
         if args.command == "stream-benchmark":
             return _stream_benchmark(args)
+        if args.command == "realtime-benchmark":
+            return _realtime_benchmark(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2

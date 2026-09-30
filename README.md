@@ -113,6 +113,47 @@ The command writes `artifacts/streaming/<timestamp>/report.json` and `summary.tx
 
 If V4L2 is absent, the documented raw H.264 fallback is selected automatically. Enabling `v4l2loopback` is intentionally not automatic because it may require a persistent package installation or `sudo modprobe`; the capability report records that condition and preserves the fallback path. No long video recordings are generated or committed.
 
+## Task 003: real-time observe→act loop
+
+Task 003 reuses the accepted official scrcpy v4.1 raw H.264 path and adds a
+bounded latest-frame source plus the existing Wireless ADB swipe mechanism.
+It does not implement perception, gameplay policy, scrcpy control, or any
+alternative input transport. If ADB is unavailable or a gesture fails, the
+report is **FAIL** with the command evidence.
+
+Before running the command, leave the phone on a safe static screen away from
+clock/status animations. The command performs, in order, the concurrent
+stream+ADB input test, the developer touch-visualization calibration, and the
+slow-consumer freshness test. It records frame drops, queue depth, decoded
+frame age, gesture command timestamps, and visual-response trials without
+retaining an unbounded pixel history:
+
+```bash
+python3 -m smashbot_diagnostics realtime-benchmark \
+  --adb /path/to/adb \
+  --scrcpy /path/to/scrcpy \
+  --ffmpeg /path/to/ffmpeg \
+  --scrcpy-server /path/to/scrcpy-server \
+  --transport wireless_tcp --serial DEVICE_SERIAL \
+  --duration-seconds 32 --gesture-count 30 \
+  --gesture-interval-seconds 1 --consumer-hz 20 \
+  --static-screen-confirmed
+```
+
+The command writes `artifacts/realtime/<timestamp>/report.json` and
+`summary.txt`. It snapshots `system/show_touches`, enables it only for the
+calibration, and restores the exact original value in cleanup even when a
+trial fails. A PASS requires the complete Task 003 gate, including at least
+30 successful ADB gestures, stream FPS/interval/disconnect limits, dropped
+stale frames with p95 consumed-frame age below 100 ms, 30 valid visual
+response trials, and the latency/detection thresholds from Issue #5.
+
 ## Scope and artifacts
 
-The only device-side actions are `exec-out screencap -p`, explicitly requested `input swipe`, and the official scrcpy video server/CLI used by Task 002. No screenshots or long recordings are committed. No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat bypass, online automation, scrcpy control integration, or custom scrcpy framed protocol is included.
+The device-side actions are the existing `input swipe`, the official scrcpy
+raw H.264 server, and temporary `settings get/put/delete system show_touches`
+operations whose exact original value is restored. Task 002 screenshot
+capture remains unchanged and no screenshots or long recordings are committed.
+No OpenCV, ML/RL framework, gameplay strategy, APK decompilation, anti-cheat
+bypass, online automation, scrcpy control integration, or custom scrcpy framed
+protocol is included.
