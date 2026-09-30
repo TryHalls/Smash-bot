@@ -2358,36 +2358,50 @@ def run_calibration(
             # Task 007 must establish a recent, stable no-touch state before
             # the first ACTION_DOWN.  The first decoded frame is only a
             # collection seed and is never the authoritative baseline.
-            requested_baseline_count = max(2, baseline_frame_count)
+            requested_frame_count = baseline_frame_count
+            minimum_required_frame_count = 2
+            collection_target_count = max(minimum_required_frame_count, requested_frame_count)
             collected_baseline_frames = _collect_distinct_frames(
                 source,
-                required_count=requested_baseline_count + 1,
+                required_count=collection_target_count,
                 timeout_seconds=baseline_timeout_seconds,
                 initial_frames=[first_frame],
             )
             setup["task007"]["pre_touch_baseline"] = {
-                "requested_frame_count": baseline_frame_count,
-                "required_recent_frame_count": requested_baseline_count,
+                "requested_frame_count": requested_frame_count,
+                "collection_target_count": collection_target_count,
+                "collected_frame_count": len(collected_baseline_frames),
                 "timeout_seconds": baseline_timeout_seconds,
                 "collected_frame_indices": [frame.frame_index for frame in collected_baseline_frames],
+                "target_count_reached": len(collected_baseline_frames) >= requested_frame_count,
+                "minimum_required_frame_count": minimum_required_frame_count,
             }
-            if len(collected_baseline_frames) < requested_baseline_count + 1:
+            if len(collected_baseline_frames) < minimum_required_frame_count:
                 setup["task007"]["pre_touch_baseline"].update(
                     {
                         "stable": False,
-                        "failure": "stable no-touch baseline was not available before timeout",
+                        "stability_result": "FAIL",
+                        "failure": "fewer than two distinct no-touch frames were available before timeout",
                     }
                 )
                 raise RealtimeError(
-                    "Task 007 stable no-touch baseline was not available before baseline timeout"
+                    "Task 007 requires at least two distinct no-touch frames before baseline timeout"
                 )
-            baseline_source_frames = collected_baseline_frames[-requested_baseline_count:]
+            baseline_source_frames = collected_baseline_frames[-collection_target_count:]
             shared_baseline, baseline_evidence, baseline_stable = _task007_pre_touch_baseline(
                 detector,
                 baseline_source_frames,
                 visualization_mode=visualization_mode,
             )
             setup["task007"]["pre_touch_baseline"].update(baseline_evidence)
+            setup["task007"]["pre_touch_baseline"].update(
+                {
+                    "collected_frame_count": len(collected_baseline_frames),
+                    "target_count_reached": len(collected_baseline_frames) >= requested_frame_count,
+                    "minimum_required_frame_count": minimum_required_frame_count,
+                    "stability_result": "PASS" if baseline_stable else "FAIL",
+                }
+            )
             setup["shared_no_touch_baseline"] = {
                 key: value for key, value in shared_baseline.items() if key != "pixels"
             }
@@ -2395,7 +2409,7 @@ def run_calibration(
                 {
                     "frame_indices": [frame.frame_index for frame in baseline_source_frames],
                     "baseline_state": "pointer_up_stable_pre_touch",
-                    "pre_dispatch_new_frames_required": requested_baseline_count,
+                    "pre_dispatch_new_frames_required": len(baseline_source_frames),
                     "legacy_baseline_frame_count_argument": baseline_frame_count,
                     "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
                 }

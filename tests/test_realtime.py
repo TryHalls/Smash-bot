@@ -304,6 +304,33 @@ class RealtimeTests(unittest.TestCase):
         self.assertEqual(baseline["pixels"], stable_frames[-1].pixels)
         self.assertEqual(evidence["frame_count"], 5)
 
+    def test_task007_two_recent_frames_are_accepted_when_five_were_requested(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+        recent_frames = [
+            frame(0, 0.0, width=400, height=800),
+            frame(7, 1.0, width=400, height=800),
+        ]
+
+        _, evidence, stable = _task007_pre_touch_baseline(
+            detector,
+            recent_frames,
+            visualization_mode="pointer_location",
+        )
+
+        self.assertTrue(stable)
+        self.assertEqual(evidence["frame_indices"], [0, 7])
+        self.assertEqual(evidence["authoritative_frame_index"], 7)
+
+    def test_task007_single_pre_touch_frame_fails_before_input(self):
+        detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
+
+        with self.assertRaisesRegex(RealtimeError, "at least two"):
+            _task007_pre_touch_baseline(
+                detector,
+                [frame(0, 0.0, width=400, height=800)],
+                visualization_mode="pointer_location",
+            )
+
     def test_task007_unstable_pre_touch_baseline_is_rejected_before_input(self):
         detector = PointerLocationDetector(400, 800, Swipe(200, 400, 200, 400, 450))
         changed = bytearray(400 * 800)
@@ -313,8 +340,7 @@ class RealtimeTests(unittest.TestCase):
             detector,
             [
                 frame(0, 0.0, width=400, height=800),
-                frame(1, 1.0, value=0, width=400, height=800),
-                DecodedFrame(2, 2.0, 400, 800, "gray", bytes(changed)),
+                DecodedFrame(7, 1.0, 400, 800, "gray", bytes(changed)),
             ],
             visualization_mode="pointer_location",
         )
