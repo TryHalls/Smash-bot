@@ -144,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="assert that SMASH is already in an offline continuously moving match; otherwise pause after calibration",
     )
+    realtime.add_argument(
+        "--calibration-only",
+        action="store_true",
+        help="run only the static portrait calibration and do not start the moving-source phases",
+    )
     realtime.add_argument("--output-base", type=Path, default=Path("artifacts/realtime"))
     return parser
 
@@ -672,6 +677,52 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         swipe=stress_swipe,
         calibration_swipe=calibration_swipe,
     )
+    if args.calibration_only:
+        calibration_source = report["calibration"].get("source_diagnostics", {})
+        calibration_stats = report["calibration"].get("statistics", {})
+        calibration_valid = (
+            calibration_stats.get("valid_trials", 0) >= 30
+            and calibration_stats.get("detection_success_rate", 0) >= 0.95
+        )
+        report.update(
+            {
+                "phase": "static_calibration_only",
+                "moving_source_confirmation": {
+                    "confirmed": False,
+                    "method": "--calibration-only",
+                    "prompted": False,
+                    "skipped_by_request": True,
+                },
+                "concurrent": {"status": "not_run", "reason": "calibration-only run"},
+                "freshness": {"status": "not_run", "reason": "calibration-only run"},
+                "source_contract": {
+                    "api": ["start", "latest_frame", "metadata", "stop"],
+                    "queue_capacity": calibration_source.get("metadata", {}).get("queue_capacity", 99),
+                    "pixel_history_retained": calibration_source.get("metadata", {}).get("pixel_history_retained", True),
+                    "start_stop_clean": bool(report["calibration"].get("cleanup", {}).get("cleanup_success")),
+                },
+                "gate": {
+                    "status": "INCONCLUSIVE",
+                    "criteria": {
+                        "static_calibration_completed": report["calibration"].get("status") == "completed",
+                        "calibration_validity_threshold": calibration_valid,
+                        "touch_setting_restored": report["calibration"].get("settings_restoration", {}).get("success") is True,
+                        "moving_phase_not_run_by_request": True,
+                    },
+                    "interpretation": "calibration-only evidence; moving-source gates intentionally unmeasured",
+                },
+                "status": "INCONCLUSIVE",
+                "failure_evidence": {
+                    "reason": "moving-source phases intentionally skipped by --calibration-only",
+                    "calibration_validity": calibration_valid,
+                    "alternative_control_transport_attempted": False,
+                },
+            }
+        )
+        _write_realtime_report(run_dir, report)
+        print(f"Report: {run_dir / 'report.json'}")
+        print(f"Summary: {run_dir / 'summary.txt'}")
+        return 2
     if args.moving_source_confirmed:
         moving_confirmation = {
             "confirmed": True,

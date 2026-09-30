@@ -587,6 +587,29 @@ class Swipe:
         }
 
 
+def calibration_gesture_consistency(
+    requested: Swipe,
+    dispatched_parameters: dict[str, Any] | None,
+    expected_mapped_roi: Swipe,
+    detector_roi: Swipe,
+) -> dict[str, Any]:
+    """Prove that the sent calibration gesture matches the ROI it calibrates."""
+
+    requested_parameters = requested.as_dict()
+    dispatched = dict(dispatched_parameters or {})
+    requested_matches_dispatched = dispatched == requested_parameters
+    roi_matches_mapping = detector_roi.as_dict() == expected_mapped_roi.as_dict()
+    return {
+        "requested_input_swipe": requested_parameters,
+        "dispatched_input_swipe": dispatched,
+        "expected_mapped_frame_roi_swipe": expected_mapped_roi.as_dict(),
+        "detector_mapped_frame_roi_swipe": detector_roi.as_dict(),
+        "requested_matches_dispatched": requested_matches_dispatched,
+        "mapped_roi_matches_mapping": roi_matches_mapping,
+        "consistent": requested_matches_dispatched and roi_matches_mapping,
+    }
+
+
 class AdbGestureController:
     """Minimal ADB-only gesture controller with host dispatch timestamps."""
 
@@ -998,7 +1021,7 @@ def run_calibration(
             result_holder: dict[str, Any] = {}
 
             def dispatch() -> None:
-                result_holder["value"] = controller.dispatch_swipe(swipe, on_started=on_started)
+                result_holder["value"] = controller.dispatch_swipe(calibration_input_swipe, on_started=on_started)
 
             dispatch_thread = threading.Thread(target=dispatch, name=f"calibration-dispatch-{trial_index}")
             dispatch_thread.start()
@@ -1020,6 +1043,12 @@ def run_calibration(
             dispatch_thread.join(timeout=2)
             gesture = result_holder.get("value", {"success": False, "failure": "dispatch thread did not complete"})
             started = started_holder.get("value")
+            consistency = calibration_gesture_consistency(
+                calibration_input_swipe,
+                gesture.get("parameters"),
+                mapped_calibration_swipe,
+                detector.swipe,
+            )
             trial.update(
                 {
                     "gesture": gesture,
@@ -1029,6 +1058,7 @@ def run_calibration(
                     "baseline_frame_indices_for_temporal_noise": [frame.frame_index for frame in no_touch_window],
                     "input_swipe": calibration_input_swipe.as_dict(),
                     "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
+                    "gesture_consistency": consistency,
                     "threshold_rule": detector.threshold_rule,
                     "temporal_noise_frame_count": baseline["temporal_noise_frame_count"],
                     "temporal_noise_sample_count": baseline["temporal_noise_sample_count"],
@@ -1041,7 +1071,9 @@ def run_calibration(
                     "response_frame_timestamp": response_frame.host_receive_decode_monotonic_seconds if response_frame else None,
                 }
             )
-            if gesture.get("success") and started is not None:
+            if not consistency["consistent"]:
+                trial["invalid_reason"] = "calibration gesture/ROI consistency check failed"
+            elif gesture.get("success") and started is not None:
                 trial["valid"] = True
                 if response_frame is not None:
                     trial["detection_succeeded"] = True

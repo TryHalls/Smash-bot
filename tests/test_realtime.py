@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
@@ -45,6 +46,54 @@ class FakeAdb:
         if arguments == ("wm", "size"):
             return FakeResult(self.wm_size)
         raise AssertionError(arguments)
+
+
+class RecordingAdb(FakeAdb):
+    def __init__(self):
+        super().__init__()
+        self.wm_size = "Physical size: 4x8\n"
+        self.swipes = []
+
+    def swipe(self, x1, y1, x2, y2, duration_ms):
+        self.swipes.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2, "duration_ms": duration_ms})
+        return FakeResult()
+
+
+class CalibrationSourceStub:
+    def __init__(self, *args, **kwargs):
+        base = [frame(index, float(index), value=0, width=4, height=8) for index in range(4)]
+        changed = frame(4, 4.0, value=255, width=4, height=8)
+        self.frames = base + [changed]
+        self.stopped = False
+
+    def start(self):
+        return self
+
+    def latest_frame(self, timeout_seconds=None):
+        if not self.frames:
+            return None
+        return self.frames.pop(0)
+
+    def stop(self):
+        self.stopped = True
+        return {"cleanup_success": True, "cleanup_errors": []}
+
+    def stats(self):
+        return {
+            "metadata": {"queue_capacity": 1, "pixel_history_retained": False},
+            "produced_frames": 5,
+            "source_timestamp_count": 5,
+            "disconnect_at_monotonic_seconds": None,
+            "disconnect_reason": None,
+            "decoder_stderr": [],
+            "server_stderr": [],
+            "server_stdout": [],
+            "cleanup_success": True,
+            "cleanup_errors": [],
+        }
+
+    def stream_statistics(self, start, end):
+        return {"produced_frame_count": 5}
 
 
 def frame(index, timestamp, value=0, width=8, height=8):
@@ -108,6 +157,35 @@ class RealtimeTests(unittest.TestCase):
             DisplayCoordinateTransform(2400, 1080, 1920, 864)
         with self.assertRaises(RealtimeError):
             DisplayCoordinateTransform(1080, 2400, 1000, 1920)
+
+    def test_calibration_dispatches_persistent_gesture_and_validates_mapped_roi(self):
+        from smashbot_diagnostics.realtime import run_calibration
+
+        adb = RecordingAdb()
+        stress_swipe = Swipe(0, 4, 3, 4, 120)
+        calibration_swipe = Swipe(1, 4, 1, 4, 500)
+
+        with patch("smashbot_diagnostics.realtime.RawH264FrameSource", CalibrationSourceStub):
+            report = run_calibration(
+                adb,
+                "ffmpeg",
+                "/server",
+                trials=1,
+                spacing_seconds=0,
+                response_timeout_seconds=0.1,
+                swipe=stress_swipe,
+                calibration_swipe=calibration_swipe,
+                baseline_frame_count=2,
+                baseline_timeout_seconds=0.1,
+            )
+
+        trial = report["trials"][0]
+        self.assertEqual(adb.swipes, [calibration_swipe.as_dict()])
+        self.assertNotEqual(adb.swipes[0], stress_swipe.as_dict())
+        self.assertEqual(trial["gesture"]["parameters"], calibration_swipe.as_dict())
+        self.assertTrue(trial["gesture_consistency"]["requested_matches_dispatched"])
+        self.assertTrue(trial["gesture_consistency"]["mapped_roi_matches_mapping"])
+        self.assertEqual(trial["mapped_frame_swipe"], {"x1": 1, "y1": 4, "x2": 1, "y2": 4, "duration_ms": 500})
 
     def test_gesture_statistics_records_failures_without_hiding_them(self):
         records = [
