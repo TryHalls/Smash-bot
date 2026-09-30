@@ -1032,12 +1032,14 @@ class FramedH264FrameSource(RawH264FrameSource):
                     try:
                         self._decoder.stdin.write(packet.payload)
                         self._decoder.stdin.flush()
-                    except (OSError, BrokenPipeError) as exc:
+                    except (OSError, BrokenPipeError, ValueError) as exc:
                         with self._association_lock:
-                            self._association_invariant_failures.append(
-                                f"media packet write failed: {type(exc).__name__}"
-                            )
-                        self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
+                            if not self._stop.is_set():
+                                self._association_invariant_failures.append(
+                                    f"media packet write failed: {type(exc).__name__}"
+                                )
+                        if not self._stop.is_set():
+                            self._disconnect.mark(f"decoder_write_error:{type(exc).__name__}")
                         self._stop.set()
                         return
         except FramedVideoParseError as exc:
@@ -1045,7 +1047,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             if not self._stop.is_set():
                 self._disconnect.mark("framing_error")
                 self._stop.set()
-        except (OSError, BrokenPipeError) as exc:
+        except (OSError, BrokenPipeError, ValueError) as exc:
             if not self._stop.is_set():
                 self._disconnect.mark(f"error:{type(exc).__name__}")
                 self._stop.set()
@@ -1053,7 +1055,7 @@ class FramedH264FrameSource(RawH264FrameSource):
             if self._decoder.stdin is not None:
                 try:
                     self._decoder.stdin.close()
-                except OSError:
+                except (OSError, ValueError):
                     pass
 
     def _produce(self) -> None:
