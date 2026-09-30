@@ -1,4 +1,5 @@
 import json
+import builtins
 import sys
 import threading
 import unittest
@@ -6,6 +7,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from smashbot_diagnostics.cli import build_parser
 from smashbot_diagnostics.perception_annotations import (
@@ -428,8 +430,16 @@ class PerceptionAnnotationTests(unittest.TestCase):
         self.assertNotIn("numpy", sys.modules)
 
     def test_missing_opencv_error_is_actionable_when_requested(self):
-        with self.assertRaises(RuntimeError) as context:
-            require_opencv()
+        real_import = builtins.__import__
+
+        def missing_optional(name, *args, **kwargs):
+            if name in {"cv2", "numpy"}:
+                raise ModuleNotFoundError(name)
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=missing_optional):
+            with self.assertRaises(RuntimeError) as context:
+                require_opencv()
         self.assertIn("optional [perception] extra", str(context.exception))
 
     def test_cli_has_stdlib_subset_and_label_commands(self):

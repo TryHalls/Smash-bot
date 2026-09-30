@@ -9,6 +9,12 @@ description = "Host-side diagnostics for the SMASH Android control and capture p
 requires-python = ">=3.10"
 dependencies = []
 
+[project.optional-dependencies]
+perception = [
+    "numpy==2.4.6",
+    "opencv-python-headless==4.14.0.94",
+]
+
 [project.scripts]
 smashbot-diagnostics = "smashbot_diagnostics.cli:main"
 
