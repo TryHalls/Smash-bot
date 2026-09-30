@@ -7,10 +7,11 @@ class StreamingTests(unittest.TestCase):
     def test_baseline_command_has_required_low_latency_profile(self):
         command = build_scrcpy_command("scrcpy", "DEVICE", BASELINE_PROFILE, 60)
         self.assertIn("--no-audio", command)
-        self.assertIn("--no-video-playback", command)
+        self.assertNotIn("--no-video-playback", command)
         self.assertIn("--video-buffer", command)
         self.assertIn("0", command)
         self.assertIn("--print-fps", command)
+        self.assertNotIn("--time-limit", command)
         self.assertIn("--max-size", command)
         self.assertEqual(profile_dict(BASELINE_PROFILE)["codec"], "h264")
 

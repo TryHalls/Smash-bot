@@ -12,6 +12,7 @@ import hashlib
 import os
 import platform
 import re
+import secrets
 import select
 import shutil
 import socket
@@ -203,14 +204,21 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def build_scrcpy_command(scrcpy: str, serial: str, profile: VideoProfile, duration_seconds: float, *, v4l2_sink: str | None = None) -> list[str]:
+def build_scrcpy_command(
+    scrcpy: str,
+    serial: str,
+    profile: VideoProfile,
+    duration_seconds: float,
+    *,
+    v4l2_sink: str | None = None,
+    playback: bool = True,
+) -> list[str]:
     command = [
         scrcpy,
         "--serial",
         serial,
         "--no-audio",
         "--no-control",
-        "--no-video-playback",
         "--video-codec",
         profile.codec,
         "--max-fps",
@@ -220,13 +228,16 @@ def build_scrcpy_command(scrcpy: str, serial: str, profile: VideoProfile, durati
         "--video-buffer",
         "0",
         "--print-fps",
-        "--time-limit",
-        str(max(1, int(round(duration_seconds)))),
     ]
     if profile.bitrate_bps is not None:
         command.extend(["--video-bit-rate", str(profile.bitrate_bps)])
     if v4l2_sink:
-        command.extend(["--v4l2-sink", v4l2_sink, "--v4l2-buffer", "0"])
+        command.extend(["--no-video-playback", "--v4l2-sink", v4l2_sink, "--v4l2-buffer", "0"])
+    elif not playback:
+        # A headless baseline still needs a video sink. /dev/null prevents a
+        # long recording while keeping scrcpy's continuous video pipeline.
+        command.append("--no-video-playback")
+        command.extend(["--record", "/dev/null", "--record-format", "mkv"])
     return command
 
 
@@ -261,6 +272,12 @@ def _parse_scrcpy_output(lines: Iterable[str]) -> dict[str, Any]:
         fps_match = re.search(r"(?:FPS|fps)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)", line)
         if fps_match:
             fps_samples.append(float(fps_match.group(1)))
+        else:
+            # scrcpy v4.1 prints the periodic counter as e.g. "27 fps
+            # (+33 frames skipped)" rather than using a key/value label.
+            fps_match = re.search(r"(?<![\d.])([0-9]+(?:\.[0-9]+)?)\s+fps\b", line, flags=re.IGNORECASE)
+            if fps_match:
+                fps_samples.append(float(fps_match.group(1)))
         for match in re.finditer(r"(?<!\d)(\d{2,5})x(\d{2,5})(?!\d)", line):
             width, height = int(match.group(1)), int(match.group(2))
             if width >= 100 and height >= 100 and {"width": width, "height": height} not in resolutions:
@@ -287,10 +304,35 @@ def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duratio
     """Run the official scrcpy CLI profile and collect its own observables."""
 
     command = build_scrcpy_command(scrcpy, serial, profile, duration_seconds)
+    process_env = os.environ.copy()
+    environment_overrides: dict[str, str] = {}
+    # The benchmark must keep video playback enabled so scrcpy's own FPS
+    # counter is meaningful. Prefer the host's X11 display when both XWayland
+    # and Wayland are exported: on this host the scrcpy 4.1 Wayland renderer
+    # can terminate with SIGSEGV during a long headless benchmark, while the
+    # same official binary is stable through X11. CI/container hosts commonly
+    # have no display, so use SDL's dummy driver there rather than turning
+    # playback off (which makes --print-fps a no-op).
+    if process_env.get("DISPLAY"):
+        process_env["SDL_VIDEODRIVER"] = "x11"
+        process_env.pop("WAYLAND_DISPLAY", None)
+        environment_overrides["SDL_VIDEODRIVER"] = "x11"
+        environment_overrides["WAYLAND_DISPLAY"] = "unset"
+    elif not process_env.get("WAYLAND_DISPLAY"):
+        process_env["SDL_VIDEODRIVER"] = "dummy"
+        command.extend(["--render-driver", "software"])
+        environment_overrides["SDL_VIDEODRIVER"] = "dummy"
     started_at = time.monotonic()
     wall_started = _utc_now()
     try:
-        process: subprocess.Popen[str] = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        process: subprocess.Popen[str] = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=process_env,
+        )
     except OSError as exc:
         return {
             "status": "unavailable",
@@ -300,10 +342,13 @@ def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duratio
             "benchmark_duration_seconds": 0.0,
             "started_at_utc": wall_started,
             "completed_at_utc": _utc_now(),
+            "environment_overrides": environment_overrides,
         }
+    host_duration_stop = False
     try:
-        process.wait(timeout=max(10.0, duration_seconds + 15.0))
+        process.wait(timeout=max(1.0, duration_seconds))
     except subprocess.TimeoutExpired:
+        host_duration_stop = True
         process.terminate()
         try:
             process.wait(timeout=5)
@@ -315,8 +360,9 @@ def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duratio
     parsed = _parse_scrcpy_output([*stdout_lines, *stderr_lines])
     elapsed = time.monotonic() - started_at
     startup_success = elapsed >= min(1.0, duration_seconds) and process.returncode not in {127}
+    completed_normally = elapsed >= duration_seconds * 0.95 and (process.returncode == 0 or host_duration_stop)
     return {
-        "status": "completed" if startup_success and process.returncode == 0 else "failed",
+        "status": "completed" if startup_success and completed_normally else "failed",
         "command": command,
         "profile": profile_dict(profile),
         "startup_success": startup_success,
@@ -324,12 +370,14 @@ def run_scrcpy_baseline(scrcpy: str, serial: str, profile: VideoProfile, duratio
         "started_at_utc": wall_started,
         "completed_at_utc": completed_at,
         "benchmark_duration_seconds": elapsed,
+        "termination": "host_duration_limit" if host_duration_stop else "scrcpy_exit",
         "encoder_selected": parsed["encoders"][-1] if parsed["encoders"] else profile.codec,
         "encoder_source": "scrcpy_output" if parsed["encoders"] else "requested_codec",
         "output_resolutions": parsed["resolutions"],
         "fps_samples": parsed["fps_samples"],
         "disconnect_reconnect_events": parsed["disconnect_events"],
         "stderr_warnings": parsed["warnings"],
+        "environment_overrides": environment_overrides,
         "stdout_log": stdout_lines,
         "stderr_log": stderr_lines,
     }
@@ -452,6 +500,7 @@ def _decode_frames(
     deadline = decode_started + duration_seconds
     buffer = bytearray()
     incomplete = False
+    decoder_ended_early = False
     while time.monotonic() < deadline:
         if decoder.stdout is None:
             break
@@ -459,6 +508,7 @@ def _decode_frames(
         if frame is None:
             incomplete = incomplete or bool(buffer)
             if decoder.poll() is not None:
+                decoder_ended_early = True
                 break
             continue
         timestamp = time.monotonic()
@@ -484,7 +534,7 @@ def _decode_frames(
     stderr_thread.join(timeout=3)
     intervals_ms = [(right - left) * 1000 for left, right in zip(receive_times, receive_times[1:])]
     decode_failures = sum(1 for line in stderr_lines if re.search(r"(?:decode|error|invalid|corrupt|conceal)", line, flags=re.IGNORECASE))
-    if incomplete:
+    if decoder_ended_early:
         decode_failures += 1
     return {
         "status": "completed" if frames else "failed",
@@ -501,6 +551,7 @@ def _decode_frames(
         "gaps_over_250ms": sum(1 for value in intervals_ms if value > 250),
         "gaps_over_500ms": sum(1 for value in intervals_ms if value > 500),
         "decode_failures": decode_failures,
+        "incomplete_frame_at_controlled_stop": incomplete and not decoder_ended_early,
         "stream_disconnects": 1 if disconnect_event and disconnect_event.is_set() and elapsed < duration_seconds * 0.95 else 0,
         "per_frame_adb_subprocesses": False,
         "stderr": stderr_lines,
@@ -518,7 +569,23 @@ def _median(values: list[float]) -> float | None:
 
 
 def _start_decoder(ffmpeg: str, input_args: list[str]) -> subprocess.Popen[bytes]:
-    command = [ffmpeg, "-hide_banner", "-loglevel", "info", *input_args, "-an", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "info",
+        "-probesize",
+        "1M",
+        "-analyzeduration",
+        "100000",
+        *input_args,
+        "-an",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "gray",
+        "pipe:1",
+    ]
     return subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -553,11 +620,15 @@ def run_raw_h264_frame_benchmark(
     if not adb.executable or not adb.serial:
         return {"status": "unavailable", "path": "raw_h264", "error": "ADB device is not selected"}
     port = _free_tcp_port()
+    # A unique documented scid keeps this run independent from a server or
+    # LocalServerSocket left behind by an interrupted earlier experiment.
+    scid = secrets.randbits(31)
+    socket_name = f"scrcpy_{scid:08x}"
     remote_server = f"/data/local/tmp/smashbot-scrcpy-server-v{SCRCPY_VERSION}"
     push = _adb_command(adb, ["push", server_path, remote_server])
     if not push["success"]:
         return {"status": "failed", "path": "raw_h264", "stage": "adb_push", "push": push}
-    forward = _adb_command(adb, ["forward", f"tcp:{port}", "localabstract:scrcpy"])
+    forward = _adb_command(adb, ["forward", f"tcp:{port}", f"localabstract:{socket_name}"])
     if not forward["success"]:
         return {"status": "failed", "path": "raw_h264", "stage": "adb_forward", "forward": forward}
     server_command = [
@@ -570,10 +641,11 @@ def run_raw_h264_frame_benchmark(
         "/",
         "com.genymobile.scrcpy.Server",
         SCRCPY_VERSION,
+        f"scid={scid:08x}",
         "tunnel_forward=true",
         "audio=false",
         "control=false",
-        "cleanup=false",
+        "cleanup=true",
         "raw_stream=true",
         f"max_size={profile.max_size}",
         f"max_fps={profile.max_fps}",
@@ -582,10 +654,41 @@ def run_raw_h264_frame_benchmark(
     if profile.bitrate_bps is not None:
         server_command.append(f"video_bit_rate={profile.bitrate_bps}")
     server_process = subprocess.Popen(server_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    server_stdout: list[str] = []
+    server_stderr: list[str] = []
+    server_ready = threading.Event()
+
+    def read_server_pipe(pipe: Any, target: list[str]) -> None:
+        if pipe is None:
+            return
+        for raw_line in pipe:
+            line = raw_line.decode("utf-8", errors="replace").rstrip("\n")
+            target.append(line)
+            if "Device:" in line:
+                server_ready.set()
+
+    server_log_threads = [
+        threading.Thread(target=read_server_pipe, args=(server_process.stdout, server_stdout), daemon=True),
+        threading.Thread(target=read_server_pipe, args=(server_process.stderr, server_stderr), daemon=True),
+    ]
+    for thread in server_log_threads:
+        thread.start()
     relay_disconnect = threading.Event()
     try:
         connection: socket.socket | None = None
         deadline = time.monotonic() + 15
+        # adb forward accepts a local TCP connection before the Android
+        # LocalServerSocket necessarily exists. Waiting for the documented
+        # server startup line prevents binding that early connection and
+        # losing the stream before the encoder is ready.
+        while not server_ready.is_set() and server_process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if server_ready.is_set() and server_process.poll() is None:
+            # The INFO line is emitted before MediaCodec has produced its
+            # first access unit. Give the encoder a bounded startup interval
+            # before opening the forwarded socket; this does not enter the
+            # timed receive/decode window.
+            time.sleep(1.0)
         while connection is None and time.monotonic() < deadline:
             try:
                 connection = socket.create_connection(("127.0.0.1", port), timeout=1)
@@ -593,7 +696,14 @@ def run_raw_h264_frame_benchmark(
                 if server_process.poll() is not None:
                     break
         if connection is None:
-            return {"status": "failed", "path": "raw_h264", "stage": "socket_connect", "server_command": server_command}
+            return {
+                "status": "failed",
+                "path": "raw_h264",
+                "stage": "socket_connect",
+                "server_command": server_command,
+                "server_stdout": server_stdout,
+                "server_stderr": server_stderr,
+            }
         decoder = _start_decoder(ffmpeg, ["-f", "h264", "-i", "pipe:0"])
 
         def relay() -> None:
@@ -634,8 +744,11 @@ def run_raw_h264_frame_benchmark(
                 "profile": profile_dict(profile),
                 "server_command": server_command,
                 "server_path": server_path,
-                "adb_forward": f"tcp:{port} -> localabstract:scrcpy",
+                "adb_forward": f"tcp:{port} -> localabstract:{socket_name}",
+                "scid": f"{scid:08x}",
                 "server_version": SCRCPY_VERSION,
+                "server_stdout": server_stdout,
+                "server_stderr": server_stderr,
             }
         )
         return result
@@ -647,7 +760,10 @@ def run_raw_h264_frame_benchmark(
         except subprocess.TimeoutExpired:
             server_process.kill()
             server_process.wait()
+        for thread in server_log_threads:
+            thread.join(timeout=2)
         _adb_command(adb, ["forward", "--remove", f"tcp:{port}"], timeout=10)
+        _adb_command(adb, ["shell", "rm", "-f", remote_server], timeout=10)
 
 
 def evaluate_gate(frame_result: dict[str, Any], required_duration_seconds: float = 60.0) -> dict[str, Any]:
