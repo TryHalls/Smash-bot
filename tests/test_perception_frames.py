@@ -39,6 +39,17 @@ class FakeProcess:
         self.running = False
 
 
+class StubbornProcess(FakeProcess):
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        if self.running and timeout is not None:
+            raise subprocess.TimeoutExpired("fake", timeout)
+        self.running = False
+        return self.returncode
+
+
 def _metadata(count=3):
     return [FrameMetadata("run", index, 1000 + index * 10, 2, 2) for index in range(count)]
 
@@ -119,6 +130,76 @@ class PerceptionFrameStreamTests(unittest.TestCase):
                     stream.close()
             self.assertTrue(process.terminated or process.killed)
 
+    def test_repeated_open_close_is_bounded_and_cleanup_is_idempotent(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            for _ in range(20):
+                process = FakeProcess(b"x" * 12)
+                with patch("smashbot_diagnostics.perception_frames.subprocess.Popen", return_value=process):
+                    stream = FFmpegFrameStream(source, _metadata(1))
+                    self.assertEqual(len(list(stream.iter_sequential())), 1)
+                    stream.close()
+                    stream.close()
+
+    def test_consumer_exception_terminates_child(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            process = FakeProcess(b"x" * 24)
+            with patch("smashbot_diagnostics.perception_frames.subprocess.Popen", return_value=process):
+                with self.assertRaises(RuntimeError):
+                    with FFmpegFrameStream(source, _metadata(2)) as stream:
+                        next(stream.iter_sequential())
+                        raise RuntimeError("consumer failed")
+            self.assertTrue(process.terminated or process.killed)
+
+    def test_terminate_escalates_to_kill(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            process = StubbornProcess(b"x" * 12)
+            with patch("smashbot_diagnostics.perception_frames.subprocess.Popen", return_value=process):
+                stream = FFmpegFrameStream(source, _metadata(1))
+                iterator = stream.iter_sequential()
+                next(iterator)
+                iterator.close()
+                stream.close()
+            self.assertTrue(process.killed)
+
+    def test_large_stderr_is_drained_with_bounded_tail(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            process = FakeProcess(b"x" * 12, returncode=3, stderr=b"e" * (256 * 1024))
+            with patch("smashbot_diagnostics.perception_frames.subprocess.Popen", return_value=process):
+                with FFmpegFrameStream(source, _metadata(1)) as stream:
+                    with self.assertRaisesRegex(FrameStreamError, "FFmpeg exited"):
+                        list(stream.iter_sequential())
+
+    def test_selected_indices_reject_empty_duplicate_unsorted_negative_and_unknown(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            stream = FFmpegFrameStream(source, _metadata(3))
+            for selection in ([], [1, 1], [2, 1], [-1], [3]):
+                with self.assertRaises(FrameStreamError):
+                    stream._resolve_indices(selection)
+            with self.assertRaises(FrameStreamError):
+                stream.iter_range(2, 1)
+
+    def test_long_metadata_does_not_retain_frame_payload_history(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "capture.h264"
+            source.write_bytes(b"h264")
+            metadata = _metadata(10_000)
+            self.assertEqual(len(metadata), 10_000)
+            process = FakeProcess(b"x" * 12)
+            with patch("smashbot_diagnostics.perception_frames.subprocess.Popen", return_value=process):
+                with FFmpegFrameStream(source, metadata) as stream:
+                    frame = list(stream.iter_selected([0]))[0]
+            self.assertEqual(frame.byte_size, 12)
+
     def test_metadata_loader_uses_authoritative_pts_and_rejects_duplicates(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "packets.json"
@@ -131,6 +212,12 @@ class PerceptionFrameStreamTests(unittest.TestCase):
             path.write_text(json.dumps({"media_packets": [
                 {"is_config": False, "media_frame_index": 0, "scrcpy_pts_us": 1},
                 {"is_config": False, "media_frame_index": 0, "scrcpy_pts_us": 2},
+            ]}), encoding="utf-8")
+            with self.assertRaises(FrameStreamError):
+                load_frame_metadata(path, source_run="run", width=2, height=2)
+            path.write_text(json.dumps({"media_packets": [
+                {"is_config": False, "media_frame_index": 0, "scrcpy_pts_us": 2},
+                {"is_config": False, "media_frame_index": 1, "scrcpy_pts_us": 1},
             ]}), encoding="utf-8")
             with self.assertRaises(FrameStreamError):
                 load_frame_metadata(path, source_run="run", width=2, height=2)

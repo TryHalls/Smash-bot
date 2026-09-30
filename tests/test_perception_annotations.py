@@ -17,6 +17,7 @@ from smashbot_diagnostics.perception_annotations import (
     build_candidate_records,
     build_ground_truth_subset,
     css_to_image_coordinates,
+    _html,
     load_json_with_recovery,
     require_opencv,
     validate_annotation_record,
@@ -83,7 +84,7 @@ class PerceptionAnnotationTests(unittest.TestCase):
         self.assertEqual(sum(record["candidate_kind"] == "active_burst" for record in first), 126)
         self.assertEqual(sum(record["candidate_kind"] == "negative_context_candidate" for record in first), 10)
 
-        document = {"schema_version": 1, "records": first}
+        document = {"schema_version": 1, "width": 864, "height": 1920, "records": first}
         validate_candidate_manifest(document)
 
     def test_active_bursts_are_consecutive_and_split_without_overlap(self):
@@ -189,6 +190,15 @@ class PerceptionAnnotationTests(unittest.TestCase):
             path.with_name("annotations.json.lock").write_text("lock", encoding="utf-8")
             with self.assertRaises(AnnotationError):
                 atomic_write_json(path, {"version": 2})
+            with self.assertRaises(AnnotationError):
+                load_json_with_recovery(path)
+
+    def test_writer_refuses_to_overwrite_existing_temporary_file(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "annotations.json"
+            path.with_name("annotations.json.tmp").write_text("{}", encoding="utf-8")
+            with self.assertRaises(AnnotationError):
+                atomic_write_json(path, {"version": 1})
 
     def test_unlabeled_schema_requires_null_centers_and_boolean_flags(self):
         active, negative = _synthetic_sources()
@@ -278,7 +288,7 @@ class PerceptionAnnotationTests(unittest.TestCase):
                 "schema_version": 1,
                 "width": 864,
                 "height": 1920,
-                "records": [{"record_id": "record", "image_path": "images/record.png"}],
+                "records": [{"record_id": "record", "image_path": "images/record.png", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 0, "pts_us": 1}],
             }
             annotations = {
                 "schema_version": 1,
@@ -308,6 +318,7 @@ class PerceptionAnnotationTests(unittest.TestCase):
                 self.assertEqual(server.image_for("record").read_bytes(), b"png")
                 with self.assertRaises(KeyError):
                     server.image_for("../record")
+                self.assertEqual(server.state()["progress"]["unlabeled"], 1)
                 thread = threading.Thread(target=server.serve_forever, daemon=True)
                 thread.start()
                 base = f"http://127.0.0.1:{server.server_address[1]}"
@@ -320,13 +331,39 @@ class PerceptionAnnotationTests(unittest.TestCase):
             finally:
                 server.server_close()
 
+    def test_read_only_and_declared_path_boundary(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = root / "images"
+            images.mkdir()
+            (root / "outside.png").write_bytes(b"outside")
+            manifest = {
+                "schema_version": 1,
+                "width": 864,
+                "height": 1920,
+                "records": [{"record_id": "record", "image_path": "images/../outside.png", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 0, "pts_us": 1}],
+            }
+            annotation = _annotation({"record_id": "record", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 0, "pts_us": 1})
+            manifest_path = root / "subset.json"
+            annotation_path = root / "annotations.json"
+            atomic_write_json(manifest_path, manifest)
+            atomic_write_json(annotation_path, {"schema_version": 1, "records": [annotation]})
+            server = AnnotationHTTPServer(manifest_path, annotation_path, read_only=True)
+            try:
+                with self.assertRaises(OSError):
+                    server.image_for("record")
+                with self.assertRaises(AnnotationError):
+                    server.apply({"active_rally": True})
+            finally:
+                server.server_close()
+
     def test_ui_can_mark_invisible_without_leaving_stale_center(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             image = root / "images" / "record.png"
             image.parent.mkdir()
             image.write_bytes(b"png")
-            subset = {"schema_version": 1, "width": 864, "height": 1920, "records": [{"record_id": "record", "image_path": "images/record.png"}]}
+            subset = {"schema_version": 1, "width": 864, "height": 1920, "records": [{"record_id": "record", "image_path": "images/record.png", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 0, "pts_us": 1}]}
             annotations = {"schema_version": 1, "records": [_annotation({
                 "record_id": "record", "split": "dev", "clip": "A", "source_run": "run",
                 "burst_id": "A_01", "frame_index": 0, "pts_us": 1,
@@ -357,6 +394,9 @@ class PerceptionAnnotationTests(unittest.TestCase):
         self.assertTrue(subset.no_extract)
         label = build_parser().parse_args(["perception-label", "--manifest", "subset.json", "--annotations", "annotations.json"])
         self.assertEqual(label.port, 0)
+        self.assertTrue("Shortcuts" in _html())
+        self.assertTrue("window.alert" in _html())
+        self.assertTrue("disabled" in _html(read_only=True))
 
 
 if __name__ == "__main__":

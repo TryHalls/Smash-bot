@@ -19,8 +19,10 @@ from threading import Thread
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
+from .perception_schemas import SCHEMA_VERSION as CONTRACT_SCHEMA_VERSION, SchemaError, require_finite_number, require_schema_version
 
-SCHEMA_VERSION = 1
+
+SCHEMA_VERSION = CONTRACT_SCHEMA_VERSION
 FRAME_WIDTH = 864
 FRAME_HEIGHT = 1920
 ACTIVE_BURST_IDS = ("A_01", "A_02", "B_01", "B_02", "C_01", "C_02")
@@ -56,6 +58,9 @@ def atomic_write_json(path: Path, value: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + ".lock")
+    temporary = path.with_name(path.name + ".tmp")
+    if temporary.exists():
+        raise AnnotationError(f"annotation temporary file requires review before writing: {temporary}")
     try:
         lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
@@ -68,7 +73,6 @@ def atomic_write_json(path: Path, value: Any) -> None:
         except OSError:
             pass
         raise
-    temporary = path.with_name(path.name + ".tmp")
     try:
         with temporary.open("w", encoding="utf-8") as handle:
             handle.write(_json_dump(value))
@@ -96,6 +100,9 @@ def load_json_with_recovery(path: Path) -> Any:
 
     path = Path(path)
     temporary = path.with_name(path.name + ".tmp")
+    lock_path = path.with_name(path.name + ".lock")
+    if lock_path.exists():
+        raise AnnotationError(f"annotation write lock requires review before reading: {lock_path}")
     if path.exists() and temporary.exists():
         raise AnnotationError(f"stale annotation temporary file requires review: {temporary}")
     if not path.exists() and temporary.exists():
@@ -106,8 +113,11 @@ def load_json_with_recovery(path: Path) -> Any:
             raise AnnotationError(f"annotation recovery temporary file is invalid: {temporary}") from exc
         os.replace(temporary, path)
         return recovered
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise AnnotationError(f"annotation JSON is corrupt: {path}") from exc
 
 
 def css_to_image_coordinates(
@@ -124,6 +134,8 @@ def css_to_image_coordinates(
         raise AnnotationError("display dimensions must be positive")
     if natural_width <= 0 or natural_height <= 0:
         raise AnnotationError("natural image dimensions must be positive")
+    for value, field in ((click_x, "click_x"), (click_y, "click_y"), (display_width, "display_width"), (display_height, "display_height")):
+        require_finite_number(value, field=field)
     if not (0 <= float(click_x) < float(display_width) and 0 <= float(click_y) < float(display_height)):
         raise AnnotationError("click is outside the displayed image")
     x = float(click_x) * natural_width / float(display_width)
@@ -157,8 +169,10 @@ def validate_annotation_record(
     missing = sorted(required - record.keys())
     if missing:
         raise AnnotationError(f"record missing fields: {', '.join(missing)}")
-    if record["schema_version"] != SCHEMA_VERSION:
-        raise AnnotationError("unsupported annotation schema_version")
+    try:
+        require_schema_version(record, kind="annotation record")
+    except SchemaError as exc:
+        raise AnnotationError(str(exc)) from exc
     if record["split"] not in {"dev", "holdout"}:
         raise AnnotationError("split must be dev or holdout")
     if record["clip"] not in {"A", "B", "C"}:
@@ -169,7 +183,7 @@ def validate_annotation_record(
         raise AnnotationError("burst_id must be non-empty")
     if not isinstance(record["frame_index"], int) or record["frame_index"] < 0:
         raise AnnotationError("frame_index must be a non-negative integer")
-    if not isinstance(record["pts_us"], int):
+    if not isinstance(record["pts_us"], int) or isinstance(record["pts_us"], bool):
         raise AnnotationError("pts_us must be an integer")
     shuttle = record["shuttle"]
     if not isinstance(shuttle, dict):
@@ -214,8 +228,11 @@ def validate_annotation_record(
         if not shuttle["ambiguous"]:
             raise AnnotationError("visible non-ambiguous shuttle requires a center")
         return
-    if not _is_number(center_x) or not _is_number(center_y):
-        raise AnnotationError("center coordinates must be numbers or null")
+    try:
+        require_finite_number(center_x, field="center_x")
+        require_finite_number(center_y, field="center_y")
+    except SchemaError as exc:
+        raise AnnotationError("center coordinates must be numbers or null") from exc
     if not (0 <= float(center_x) < width and 0 <= float(center_y) < height):
         raise AnnotationError("center coordinates are outside the full-resolution frame")
 
@@ -227,12 +244,18 @@ def validate_annotations_document(
     height: int = FRAME_HEIGHT,
     allow_unlabeled: bool = False,
 ) -> None:
-    if document.get("schema_version") != SCHEMA_VERSION:
-        raise AnnotationError("unsupported annotations document schema_version")
+    try:
+        require_schema_version(document, kind="annotations")
+    except SchemaError as exc:
+        raise AnnotationError(str(exc)) from exc
     records = document.get("records")
     if not isinstance(records, list):
         raise AnnotationError("annotations document records must be a list")
+    if document.get("record_count") is not None and document["record_count"] != len(records):
+        raise AnnotationError("annotations record_count does not match records")
     seen: set[str] = set()
+    seen_source_frames: set[tuple[str, int]] = set()
+    last_pts: dict[tuple[str, str, str], int] = {}
     for record in records:
         if not isinstance(record, dict):
             raise AnnotationError("annotation records must be objects")
@@ -243,6 +266,15 @@ def validate_annotations_document(
             raise AnnotationError(f"duplicate annotation record_id: {record_id}")
         seen.add(record_id)
         validate_annotation_record(record, width=width, height=height, allow_unlabeled=allow_unlabeled)
+        identity = (record["source_run"], record["frame_index"])
+        if identity in seen_source_frames:
+            raise AnnotationError(f"duplicate annotation source frame: {identity}")
+        seen_source_frames.add(identity)
+        burst = (record["source_run"], record["clip"], record["burst_id"])
+        previous_pts = last_pts.get(burst)
+        if previous_pts is not None and record["pts_us"] <= previous_pts:
+            raise AnnotationError(f"annotation PTS is not strictly increasing within burst: {burst}")
+        last_pts[burst] = record["pts_us"]
 
 
 def _record_id(clip: str, burst_id: str, frame_index: int) -> str:
@@ -316,16 +348,39 @@ def build_candidate_records(
 
 def validate_candidate_manifest(document: dict[str, Any]) -> None:
     records = document.get("records")
-    if document.get("schema_version") != SCHEMA_VERSION or not isinstance(records, list):
+    try:
+        require_schema_version(document, kind="subset")
+    except SchemaError as exc:
+        raise AnnotationError(str(exc)) from exc
+    if not isinstance(records, list):
         raise AnnotationError("invalid subset manifest envelope")
     if len(records) != 136:
         raise AnnotationError("subset manifest must contain exactly 136 records")
+    if document.get("record_count") is not None and document["record_count"] != len(records):
+        raise AnnotationError("subset record_count does not match records")
+    if document.get("width") != FRAME_WIDTH or document.get("height") != FRAME_HEIGHT:
+        raise AnnotationError("subset dimensions must be 864x1920")
+    record_ids: set[str] = set()
+    identities: set[tuple[str, int]] = set()
     active = [r for r in records if r.get("candidate_kind") == "active_burst"]
     negatives = [r for r in records if r.get("candidate_kind") == "negative_context_candidate"]
     if len(active) != 126 or len(negatives) != 10:
         raise AnnotationError("subset must contain 126 active and 10 negative candidates")
     by_burst: dict[str, list[dict[str, Any]]] = {}
     for record in active:
+        if record.get("schema_version") != SCHEMA_VERSION:
+            raise AnnotationError("subset record has incompatible schema_version")
+        record_id = record.get("record_id")
+        if not isinstance(record_id, str) or record_id in record_ids:
+            raise AnnotationError("subset contains duplicate or invalid record_id")
+        record_ids.add(record_id)
+        frame_index = record.get("frame_index")
+        identity = (record.get("source_run"), frame_index)
+        if not isinstance(frame_index, int) or frame_index < 0 or identity in identities:
+            raise AnnotationError("subset contains invalid or duplicate source frame identity")
+        identities.add(identity)
+        if record.get("width") != FRAME_WIDTH or record.get("height") != FRAME_HEIGHT:
+            raise AnnotationError("subset record dimensions do not match manifest")
         by_burst.setdefault(record["burst_id"], []).append(record)
     if set(by_burst) != set(ACTIVE_BURST_IDS):
         raise AnnotationError("active burst set does not match frozen A/B/C split")
@@ -333,6 +388,11 @@ def validate_candidate_manifest(document: dict[str, Any]) -> None:
         indices = [r["frame_index"] for r in burst_records]
         if indices != list(range(indices[0], indices[0] + 21)):
             raise AnnotationError(f"burst {burst_id} is not consecutive")
+        pts = [r["pts_us"] for r in burst_records]
+        if any(not isinstance(value, int) or isinstance(value, bool) for value in pts) or any(
+            current <= previous for previous, current in zip(pts, pts[1:])
+        ):
+            raise AnnotationError(f"burst {burst_id} PTS must be strictly increasing")
         expected_split = "dev" if burst_id.endswith("01") else "holdout"
         if {r["split"] for r in burst_records} != {expected_split}:
             raise AnnotationError(f"burst {burst_id} has incorrect split")
@@ -342,7 +402,21 @@ def validate_candidate_manifest(document: dict[str, Any]) -> None:
         raise AnnotationError("odd negative candidates must be dev")
     if {r["split"] for r in negatives if int(r["burst_id"][-2:]) % 2 == 0} != {"holdout"}:
         raise AnnotationError("even negative candidates must be holdout")
-    if len({(r["source_run"], r["frame_index"]) for r in records}) != 136:
+    for record in negatives:
+        if record.get("schema_version") != SCHEMA_VERSION:
+            raise AnnotationError("negative record has incompatible schema_version")
+        record_id = record.get("record_id")
+        if not isinstance(record_id, str) or record_id in record_ids:
+            raise AnnotationError("subset contains duplicate or invalid negative record_id")
+        record_ids.add(record_id)
+        frame_index = record.get("frame_index")
+        identity = (record.get("source_run"), frame_index)
+        if not isinstance(frame_index, int) or frame_index < 0 or identity in identities:
+            raise AnnotationError("subset contains invalid or duplicate negative identity")
+        identities.add(identity)
+        if record.get("width") != FRAME_WIDTH or record.get("height") != FRAME_HEIGHT:
+            raise AnnotationError("negative record dimensions do not match manifest")
+    if len(identities) != 136:
         raise AnnotationError("subset contains overlapping source frame identities")
 
 
@@ -562,29 +636,33 @@ def build_ground_truth_subset(
     return subset
 
 
-def _html() -> str:
-    return """<!doctype html>
+def _html(*, read_only: bool = False) -> str:
+    save_disabled = " disabled" if read_only else ""
+    readonly_literal = "true" if read_only else "false"
+    return f"""<!doctype html>
 <meta charset="utf-8"><title>Task 009 annotation</title>
-<style>body{font-family:sans-serif;margin:1rem}#frame{max-width:80vw;max-height:78vh;cursor:crosshair}button{margin:.2rem}#meta{white-space:pre;font-family:monospace}</style>
+<style>body{{font-family:sans-serif;margin:1rem}}#frame{{max-width:80vw;max-height:78vh;cursor:crosshair}}button{{margin:.2rem}}#meta{{white-space:pre;font-family:monospace}}</style>
 <h1>Task 009 annotation</h1><div id="meta"></div>
 <img id="frame" alt="frame"><div>
-<button onclick="move(-1)">Previous</button><button onclick="move(1)">Next</button>
-<button onclick="setActive(true)">Active rally yes</button><button onclick="setActive(false)">Active rally no</button>
-<button onclick="setVisible(true)">Visible</button><button onclick="setVisible(false)">Invisible</button>
-<button onclick="setFlag('ambiguous')">Toggle ambiguous</button><button onclick="setFlag('occluded')">Toggle occluded</button>
-<input id="tags" placeholder="tags comma-separated"><button onclick="setTags()">Save tags</button>
-</div><p>Click the shuttle head/body, never the cyan trail. Labels save after every change.</p>
+<button onclick="move(-1)">Previous</button><button onclick="move(1)">Next</button><button onclick="nextUnlabeled()">Next unlabeled</button>
+<button onclick="setActive(true)"{save_disabled}>Active rally yes</button><button onclick="setActive(false)"{save_disabled}>Active rally no</button>
+<button onclick="setVisible(true)"{save_disabled}>Visible</button><button onclick="setVisible(false)"{save_disabled}>Invisible</button>
+<button onclick="setFlag('ambiguous')"{save_disabled}>Toggle ambiguous</button><button onclick="setFlag('occluded')"{save_disabled}>Toggle occluded</button>
+<input id="tags" placeholder="tags comma-separated"{save_disabled}><button onclick="setTags()"{save_disabled}>Save tags</button>
+</div><p>Shortcuts: ←/→ previous/next, V visible, N invisible, A active, O occluded, M ambiguous, U next unlabeled.</p><p>Click the shuttle head/body, never the cyan trail. Labels save after every change.</p>
 <script>
 let state=null;
-async function load(){state=await (await fetch('/state')).json(); render();}
-function render(){document.getElementById('meta').textContent=JSON.stringify(state.record,null,2);let image=document.getElementById('frame');image.src='/frame/'+encodeURIComponent(state.record.record_id)+'.png';}
-async function save(patch){state=await (await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)})).json();render();}
-function move(delta){return save({move:delta});}
-function setActive(value){return save({active_rally:value});}
-function setVisible(value){return save({'shuttle.visible':value});}
-function setFlag(name){return save({[name]:!state.record.shuttle[name]});}
-function setTags(){return save({tags:document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean)});}
-document.getElementById('frame').addEventListener('click',e=>{let r=e.currentTarget.getBoundingClientRect();let x=(e.clientX-r.left)*e.currentTarget.naturalWidth/r.width;let y=(e.clientY-r.top)*e.currentTarget.naturalHeight/r.height;save({'shuttle.visible':true,'shuttle.center_x':x,'shuttle.center_y':y});});
+async function load(url='/state'){{state=await (await fetch(url)).json(); render();}}
+function render(){{document.getElementById('meta').textContent=JSON.stringify({{position:(state.index+1)+' / '+state.count,split:state.record.split,progress:state.progress,record:state.record}},null,2);let image=document.getElementById('frame');image.src='/frame/'+encodeURIComponent(state.record.record_id)+'.png';}}
+async function save(patch){{if({readonly_literal})return;let response=await fetch('/save',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(patch)}});let payload=await response.json();if(!response.ok){{window.alert(payload.error||'annotation save failed');return;}}state=payload;render();}}
+function move(delta){{return fetch('/state?move='+delta).then(r=>r.json()).then(s=>{{state=s;render();}});}}
+function nextUnlabeled(){{return fetch('/state?next_unlabeled=1').then(r=>r.json()).then(s=>{{state=s;render();}});}}
+function setActive(value){{return save({{active_rally:value}});}}
+function setVisible(value){{return save({{'shuttle.visible':value}});}}
+function setFlag(name){{return save({{[name]:!state.record.shuttle[name]}});}}
+function setTags(){{return save({{tags:document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean)}});}}
+document.getElementById('frame').addEventListener('click',e=>{{if({readonly_literal})return;let r=e.currentTarget.getBoundingClientRect();let x=(e.clientX-r.left)*e.currentTarget.naturalWidth/r.width;let y=(e.clientY-r.top)*e.currentTarget.naturalHeight/r.height;save({{'shuttle.visible':true,'shuttle.center_x':x,'shuttle.center_y':y}});}});
+document.addEventListener('keydown',e=>{{if(e.target.tagName==='INPUT')return;let key=e.key.toLowerCase();if(e.key==='ArrowLeft')move(-1);else if(e.key==='ArrowRight')move(1);else if(key==='v')setVisible(true);else if(key==='n')setVisible(false);else if(key==='a')setActive(!state.record.active_rally);else if(key==='o')setFlag('occluded');else if(key==='m')setFlag('ambiguous');else if(key==='u')nextUnlabeled();}});
 load();
 </script>"""
 
@@ -603,7 +681,7 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            payload = _html().encode("utf-8")
+            payload = _html(read_only=self.server.read_only).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -611,7 +689,15 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
             return
         if parsed.path == "/state":
-            self._send_json(self.server.state())
+            query = parsed.query
+            move = 0
+            if query.startswith("move="):
+                try:
+                    move = int(query.split("=", 1)[1])
+                except ValueError:
+                    self._send_json({"error": "invalid move"}, status=400)
+                    return
+            self._send_json(self.server.state(move=move, next_unlabeled=query == "next_unlabeled=1"))
             return
         if parsed.path.startswith("/frame/") and parsed.path.endswith(".png"):
             record_id = unquote(parsed.path[len("/frame/") : -len(".png")])
@@ -633,6 +719,9 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/save":
             self.send_error(404)
             return
+        if self.server.read_only:
+            self._send_json({"error": "annotation UI is read-only"}, status=403)
+            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length < 0 or length > 64 * 1024:
@@ -649,11 +738,20 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
 class AnnotationHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
-    def __init__(self, manifest_path: Path, annotations_path: Path, host: str = "127.0.0.1", port: int = 0):
+    def __init__(
+        self,
+        manifest_path: Path,
+        annotations_path: Path,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        read_only: bool = False,
+    ):
         if host != "127.0.0.1":
             raise AnnotationError("annotation UI must bind exclusively to 127.0.0.1")
         self.manifest_path = Path(manifest_path).resolve()
         self.annotations_path = Path(annotations_path).resolve()
+        self.read_only = read_only
         self.manifest = load_json_with_recovery(self.manifest_path)
         self.width = int(self.manifest.get("width", FRAME_WIDTH))
         self.height = int(self.manifest.get("height", FRAME_HEIGHT))
@@ -661,13 +759,47 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         self._by_id = {record["record_id"]: record for record in self.records}
         self.annotations = load_json_with_recovery(self.annotations_path)
         validate_annotations_document(self.annotations, width=self.width, height=self.height, allow_unlabeled=True)
+        annotation_by_id = {record["record_id"]: record for record in self.annotations["records"]}
+        if set(annotation_by_id) != set(self._by_id):
+            raise AnnotationError("annotations and subset record identities differ")
+        for record_id, manifest_record in self._by_id.items():
+            annotation_record = annotation_by_id[record_id]
+            for field in ("split", "clip", "source_run", "burst_id", "frame_index", "pts_us"):
+                if annotation_record.get(field) != manifest_record.get(field):
+                    raise AnnotationError(f"annotation/subset identity mismatch for {record_id}: {field}")
         self._cursor = 0
-        self._annotation_by_id = {record["record_id"]: record for record in self.annotations["records"]}
+        self._annotation_by_id = annotation_by_id
         super().__init__((host, port), _AnnotationHandler)
 
-    def state(self) -> dict[str, Any]:
+    def state(self, *, move: int = 0, next_unlabeled: bool = False) -> dict[str, Any]:
+        if move not in {-1, 0, 1}:
+            raise AnnotationError("move must be -1, 0, or 1")
+        if move:
+            self._cursor = max(0, min(len(self.records) - 1, self._cursor + move))
+        elif next_unlabeled:
+            for offset in range(1, len(self.records) + 1):
+                candidate = self._annotation_by_id[self.records[(self._cursor + offset) % len(self.records)]["record_id"]]
+                if candidate["active_rally"] is None or candidate["shuttle"]["visible"] is None:
+                    self._cursor = (self._cursor + offset) % len(self.records)
+                    break
         record = self._annotation_by_id[self.records[self._cursor]["record_id"]]
-        return {"index": self._cursor, "count": len(self.records), "record": record}
+        labeled = [
+            item
+            for item in self._annotation_by_id.values()
+            if item["active_rally"] is not None and item["shuttle"]["visible"] is not None
+        ]
+        return {
+            "index": self._cursor,
+            "count": len(self.records),
+            "record": record,
+            "progress": {
+                "labeled": len(labeled),
+                "unlabeled": len(self.records) - len(labeled),
+                "ambiguous": sum(item["shuttle"]["ambiguous"] is True for item in self._annotation_by_id.values()),
+                "visible": sum(item["shuttle"]["visible"] is True for item in self._annotation_by_id.values()),
+                "invisible": sum(item["shuttle"]["visible"] is False for item in self._annotation_by_id.values()),
+            },
+        }
 
     def image_for(self, record_id: str) -> Path:
         record = self._by_id[record_id]
@@ -682,13 +814,15 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         return path
 
     def apply(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if self.read_only:
+            raise AnnotationError("annotation UI is read-only")
         if not isinstance(patch, dict):
             raise AnnotationError("annotation patch must be an object")
         allowed = {"move", "active_rally", "ambiguous", "occluded", "shuttle.visible", "shuttle.center_x", "shuttle.center_y", "tags"}
         unknown = set(patch) - allowed
         if unknown:
             raise AnnotationError(f"unknown annotation patch fields: {', '.join(sorted(unknown))}")
-        if "move" in patch and (isinstance(patch["move"], bool) or int(patch["move"]) not in {-1, 1}):
+        if "move" in patch and (not isinstance(patch["move"], int) or isinstance(patch["move"], bool) or patch["move"] not in {-1, 1}):
             raise AnnotationError("move must be -1 or 1")
         for key in ("active_rally", "ambiguous", "occluded"):
             if key in patch and not isinstance(patch[key], bool):
@@ -740,8 +874,8 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         return self.state()
 
 
-def run_annotation_ui(manifest_path: Path, annotations_path: Path, *, port: int = 0) -> None:
-    server = AnnotationHTTPServer(manifest_path, annotations_path, host="127.0.0.1", port=port)
+def run_annotation_ui(manifest_path: Path, annotations_path: Path, *, port: int = 0, read_only: bool = False) -> None:
+    server = AnnotationHTTPServer(manifest_path, annotations_path, host="127.0.0.1", port=port, read_only=read_only)
     print(f"Annotation UI: http://127.0.0.1:{server.server_address[1]}/", flush=True)
     try:
         server.serve_forever()

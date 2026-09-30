@@ -6,6 +6,8 @@ import math
 from collections import defaultdict
 from typing import Any, Iterable
 
+from .perception_schemas import METRICS_SCHEMA_VERSION, SchemaError, require_finite_number
+
 
 class MetricsError(ValueError):
     """Raised when ground truth/prediction identity or split contracts fail."""
@@ -14,11 +16,17 @@ class MetricsError(ValueError):
 def percentile(values: Iterable[float], percentile_value: float) -> float | None:
     """Inclusive linear percentile: index=(n-1)*p/100, with interpolation."""
 
-    numbers = sorted(float(value) for value in values)
-    if not numbers:
-        return None
     if not 0 <= percentile_value <= 100:
         raise MetricsError("percentile must be between 0 and 100")
+    numbers = []
+    for value in values:
+        try:
+            numbers.append(require_finite_number(value, field="percentile value"))
+        except SchemaError as exc:
+            raise MetricsError(str(exc)) from exc
+    numbers.sort()
+    if not numbers:
+        return None
     if len(numbers) == 1:
         return numbers[0]
     position = (len(numbers) - 1) * percentile_value / 100.0
@@ -43,6 +51,7 @@ def validate_split_partition(records: Iterable[dict[str, Any]]) -> None:
 
     identities: set[tuple[str, int]] = set()
     burst_splits: dict[tuple[str, str, str], str] = {}
+    last_pts: dict[tuple[str, str, str], int] = {}
     for record in records:
         identity = _identity(record)
         if identity in identities:
@@ -55,6 +64,13 @@ def validate_split_partition(records: Iterable[dict[str, Any]]) -> None:
         previous = burst_splits.setdefault(burst_key, split)
         if previous != split:
             raise MetricsError(f"burst appears in both splits: {burst_key}")
+        if "pts_us" in record:
+            pts_us = record["pts_us"]
+            if not isinstance(pts_us, int) or isinstance(pts_us, bool):
+                raise MetricsError("pts_us must be an integer")
+            if burst_key in last_pts and pts_us <= last_pts[burst_key]:
+                raise MetricsError(f"PTS is not strictly increasing within burst: {burst_key}")
+            last_pts[burst_key] = pts_us
 
 
 def tuning_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -68,12 +84,18 @@ def tuning_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _summary(values: Iterable[float]) -> dict[str, Any]:
-    numbers = [float(value) for value in values]
+    numbers = []
+    for value in values:
+        try:
+            numbers.append(require_finite_number(value, field="metric value"))
+        except SchemaError as exc:
+            raise MetricsError(str(exc)) from exc
     return {
         "count": len(numbers),
         "mean": (sum(numbers) / len(numbers)) if numbers else None,
         "p50": percentile(numbers, 50),
         "p95": percentile(numbers, 95),
+        "min": min(numbers) if numbers else None,
         "max": max(numbers) if numbers else None,
     }
 
@@ -94,6 +116,8 @@ def _prediction_values(predictions: Iterable[dict[str, Any]]) -> dict[tuple[str,
             or not math.isfinite(float(prediction["y"]))
         ):
             raise MetricsError("observations require finite numeric x/y")
+        if not isinstance(prediction.get("pts_us"), int) or isinstance(prediction.get("pts_us"), bool):
+            raise MetricsError("predictions require integer pts_us")
         grouped[identity].append(prediction)
     return grouped
 
@@ -175,6 +199,8 @@ def aggregate_registration(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
     durations = [float(item["processing_ms"]) for item in values if item.get("processing_ms") is not None]
     valid = [item for item in values if item.get("success") is True]
     return {
+        "schema_version": 1,
+        "registration_schema_version": 1,
         "eligible_transitions": len(values),
         "valid_transforms": len(valid),
         "failures": len(values) - len(valid),
@@ -185,7 +211,15 @@ def aggregate_registration(results: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
 
 def aggregate_latency(values: Iterable[float]) -> dict[str, Any]:
-    numbers = [float(value) for value in values]
+    numbers = []
+    for value in values:
+        try:
+            number = require_finite_number(value, field="latency")
+        except SchemaError as exc:
+            raise MetricsError(str(exc)) from exc
+        if number < 0:
+            raise MetricsError("latency must be non-negative")
+        numbers.append(number)
     result = _summary(numbers)
     result["effective_fps"] = (len(numbers) / (sum(numbers) / 1000.0)) if numbers and sum(numbers) > 0 else None
     return result
@@ -240,6 +274,8 @@ def compute_metrics(
         negative_prediction_count += len(observations)
         negative_frame_fp_count += bool(observations)
     report = {
+        "schema_version": 1,
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "split": split or "all",
         "recall_at_radius_px": recall,
         "localization_match_radius_px": localization_match_radius_px,

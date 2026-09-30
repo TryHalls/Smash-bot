@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 
 from smashbot_diagnostics.cli import build_parser
 from smashbot_diagnostics.perception_benchmark import benchmark_report, write_benchmark_report
+from smashbot_diagnostics.perception_compare import BenchmarkComparisonError, compare_benchmark_reports
 from smashbot_diagnostics.perception_metrics import (
     MetricsError,
     aggregate_latency,
@@ -35,6 +36,7 @@ def _truth(frame_index, *, visible=True, active=True, split="dev", burst="A_01",
             "ambiguous": False,
             "occluded": False,
         },
+        "tags": [],
     }
 
 
@@ -50,9 +52,9 @@ class PerceptionMetricsTests(unittest.TestCase):
     def test_metrics_recall_localization_negative_and_episode_contracts(self):
         truth = [_truth(0), _truth(1), _truth(2), _truth(3, visible=False, active=False)]
         predictions = [
-            {"source_run": "run", "frame_index": 0, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 0, "y": 0, "track_id": "t"},
-            {"source_run": "run", "frame_index": 2, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 5, "y": 5, "track_id": "t", "algorithm_latency_ms": 2, "end_to_end_latency_ms": 10},
-            {"source_run": "run", "frame_index": 3, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 9, "y": 9, "track_id": "t"},
+            {"source_run": "run", "frame_index": 0, "pts_us": 0, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 0, "y": 0, "track_id": "t"},
+            {"source_run": "run", "frame_index": 2, "pts_us": 20_000, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 5, "y": 5, "track_id": "t", "algorithm_latency_ms": 2, "end_to_end_latency_ms": 10},
+            {"source_run": "run", "frame_index": 3, "pts_us": 30_000, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 9, "y": 9, "track_id": "t"},
         ]
         report = compute_metrics(truth, predictions)
         self.assertEqual(report["recall_at_radius_px"]["5px"]["matched"], 2)
@@ -82,7 +84,7 @@ class PerceptionMetricsTests(unittest.TestCase):
 
     def test_metrics_reject_unknown_prediction_and_invalid_radius(self):
         truth = [_truth(0)]
-        unknown = [{"source_run": "run", "frame_index": 99, "split": "dev", "x": 0, "y": 0}]
+        unknown = [{"source_run": "run", "frame_index": 99, "pts_us": 99_000, "split": "dev", "x": 0, "y": 0}]
         with self.assertRaises(MetricsError):
             compute_metrics(truth, unknown)
         with self.assertRaises(MetricsError):
@@ -142,6 +144,65 @@ class PerceptionMetricsTests(unittest.TestCase):
     def test_benchmark_cli_contract(self):
         args = build_parser().parse_args(["perception-benchmark", "--annotations", "annotations.json", "--split", "dev"])
         self.assertEqual(args.split, "dev")
+        compare = build_parser().parse_args(["perception-compare", "--baseline", "a.json", "--candidate", "b.json"])
+        self.assertEqual(compare.output.name, "compare.json")
+
+    def test_benchmark_completed_report_has_reproducibility_metadata(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            annotations = {"schema_version": 1, "width": 2, "height": 2, "record_count": 2, "records": [_truth(0), _truth(1, visible=False, active=False, split="holdout", burst="B_01")]}
+            annotations_path = root / "annotations.json"
+            annotations_path.write_text(json.dumps(annotations), encoding="utf-8")
+            predictions = {
+                "schema_version": 1,
+                "record_count": 2,
+                "records": [
+                    {"source_run": "run", "frame_index": 0, "pts_us": 0, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 0, "y": 0},
+                    {"source_run": "run", "frame_index": 1, "pts_us": 10_000, "split": "holdout", "clip": "A", "burst_id": "B_01", "x": 0, "y": 0},
+                ],
+            }
+            predictions_path = root / "predictions.json"
+            predictions_path.write_text(json.dumps(predictions), encoding="utf-8")
+            report = benchmark_report(annotations_path, predictions_path, split="dev")
+            self.assertEqual(report["status"], "COMPLETED")
+            self.assertEqual(report["reproducibility"]["annotations_counts"]["records"], 1)
+            self.assertEqual(report["metrics"]["metrics_schema_version"], 1)
+            self.assertEqual(report, benchmark_report(annotations_path, predictions_path, split="dev"))
+
+    def test_benchmark_reports_validation_error_for_unknown_prediction_schema(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            annotations = {"schema_version": 1, "width": 2, "height": 2, "records": [_truth(0)]}
+            annotations_path = root / "annotations.json"
+            annotations_path.write_text(json.dumps(annotations), encoding="utf-8")
+            predictions_path = root / "predictions.json"
+            predictions_path.write_text(json.dumps({"schema_version": 99, "records": []}), encoding="utf-8")
+            report = benchmark_report(annotations_path, predictions_path)
+            self.assertEqual(report["status"], "VALIDATION_ERROR")
+
+    def test_compare_reports_is_delta_only_and_rejects_incompatible_inputs(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            annotations = {"schema_version": 1, "width": 2, "height": 2, "record_count": 2, "records": [_truth(0), _truth(1, visible=False, active=False)]}
+            annotations_path = root / "annotations.json"
+            annotations_path.write_text(json.dumps(annotations), encoding="utf-8")
+            def make_prediction(path, x):
+                path.write_text(json.dumps({"schema_version": 1, "records": [
+                    {"source_run": "run", "frame_index": 0, "pts_us": 0, "split": "dev", "clip": "A", "burst_id": "A_01", "x": x, "y": 0},
+                    {"source_run": "run", "frame_index": 1, "pts_us": 10_000, "split": "dev", "clip": "A", "burst_id": "A_01", "x": 0, "y": 0},
+                ]}), encoding="utf-8")
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            make_prediction(baseline_path, 0)
+            make_prediction(candidate_path, 1)
+            baseline = benchmark_report(annotations_path, baseline_path, split="dev")
+            candidate = benchmark_report(annotations_path, candidate_path, split="dev")
+            comparison = compare_benchmark_reports(baseline, candidate)
+            self.assertIsNone(comparison["winner"])
+            self.assertTrue(any(item["metric"] == "recall@20" for item in comparison["deltas"]))
+            candidate["reproducibility"]["split"] = "holdout"
+            with self.assertRaises(BenchmarkComparisonError):
+                compare_benchmark_reports(baseline, candidate)
 
 
 if __name__ == "__main__":

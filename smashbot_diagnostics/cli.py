@@ -23,6 +23,7 @@ from .perception import (
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
 from .perception_benchmark import benchmark_report, write_benchmark_report
+from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -251,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("--manifest", type=Path, required=True)
     label.add_argument("--annotations", type=Path, required=True)
     label.add_argument("--port", type=_nonnegative_int, default=0)
+    label.add_argument("--read-only", action="store_true", help="serve labels without enabling save endpoints")
 
     benchmark = subparsers.add_parser(
         "perception-benchmark",
@@ -260,6 +262,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--predictions", type=Path)
     benchmark.add_argument("--split", choices=("all", "dev", "holdout"), default="all")
     benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/benchmark"))
+    compare = subparsers.add_parser(
+        "perception-compare",
+        help="compare two completed Task 009 reports without choosing a winner",
+    )
+    compare.add_argument("--baseline", type=Path, required=True)
+    compare.add_argument("--candidate", type=Path, required=True)
+    compare.add_argument("--output", type=Path, default=Path("artifacts/task009/compare.json"))
     return parser
 
 
@@ -1341,7 +1350,7 @@ def _perception_subset(args: argparse.Namespace) -> int:
 
 
 def _perception_label(args: argparse.Namespace) -> int:
-    run_annotation_ui(args.manifest, args.annotations, port=args.port)
+    run_annotation_ui(args.manifest, args.annotations, port=args.port, read_only=args.read_only)
     return 0
 
 
@@ -1356,6 +1365,19 @@ def _perception_benchmark(args: argparse.Namespace) -> int:
     print(f"Summary: {summary_path}")
     print(f"Status: {report['status']}")
     return 0 if report["status"] == "COMPLETED" else 2
+
+
+def _perception_compare(args: argparse.Namespace) -> int:
+    try:
+        report = compare_report_files(args.baseline, args.candidate)
+    except BenchmarkComparisonError as exc:
+        print(f"Comparison validation error: {exc}")
+        return 2
+    output = write_comparison_report(report, args.output)
+    print(f"Comparison: {output}")
+    for delta in report["deltas"]:
+        print(f"{delta['metric']}: {delta['delta']:+.6g}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1384,6 +1406,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_label(args)
         if args.command == "perception-benchmark":
             return _perception_benchmark(args)
+        if args.command == "perception-compare":
+            return _perception_compare(args)
     except (AdbError, AdbUnavailable, ValueError) as exc:
         parser.error(str(exc))
     return 2
