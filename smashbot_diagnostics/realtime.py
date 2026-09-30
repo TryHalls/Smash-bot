@@ -19,11 +19,12 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from statistics import fmean, pstdev
+from statistics import fmean, median
 from typing import Any, Callable
 
 from .adb import AdbClient, AdbError
 from .metrics import percentile, summarize_latencies
+from .parsing import parse_display_sizes
 from .streaming import (
     BASELINE_PROFILE,
     SCRCPY_VERSION,
@@ -50,6 +51,85 @@ class DecodedFrame:
     height: int
     pixel_format: str
     pixels: bytes
+
+
+@dataclass(frozen=True)
+class DisplayCoordinateTransform:
+    """Verified portrait mapping from Android input coordinates to decoded pixels."""
+
+    input_width: int
+    input_height: int
+    frame_width: int
+    frame_height: int
+
+    def __post_init__(self) -> None:
+        if min(self.input_width, self.input_height, self.frame_width, self.frame_height) <= 0:
+            raise RealtimeError("display and frame dimensions must be positive")
+        if self.input_width >= self.input_height or self.frame_width >= self.frame_height:
+            raise RealtimeError(
+                "touch calibration requires verified portrait input and portrait decoded frame dimensions"
+            )
+        input_ratio = self.input_width / self.input_height
+        frame_ratio = self.frame_width / self.frame_height
+        if abs(input_ratio - frame_ratio) > 0.01:
+            raise RealtimeError(
+                "Android input and decoded-frame aspect ratios cannot be reconciled without guessing"
+            )
+
+    def map_point(self, x: int, y: int) -> tuple[int, int]:
+        if not (0 <= x < self.input_width and 0 <= y < self.input_height):
+            raise RealtimeError(
+                f"input coordinate ({x}, {y}) is outside active Android display "
+                f"{self.input_width}x{self.input_height}"
+            )
+        mapped_x = min(self.frame_width - 1, max(0, round(x * self.frame_width / self.input_width)))
+        mapped_y = min(self.frame_height - 1, max(0, round(y * self.frame_height / self.input_height)))
+        return mapped_x, mapped_y
+
+    def map_swipe(self, swipe: "Swipe") -> "Swipe":
+        x1, y1 = self.map_point(swipe.x1, swipe.y1)
+        x2, y2 = self.map_point(swipe.x2, swipe.y2)
+        return Swipe(x1, y1, x2, y2, swipe.duration_ms)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "input_space": "active Android wm size used by ADB input",
+            "input_size": {"width": self.input_width, "height": self.input_height},
+            "frame_size": {"width": self.frame_width, "height": self.frame_height},
+            "orientation": "portrait",
+            "scale_x": self.frame_width / self.input_width,
+            "scale_y": self.frame_height / self.input_height,
+            "aspect_ratio_delta": abs(
+                (self.input_width / self.input_height) - (self.frame_width / self.frame_height)
+            ),
+        }
+
+
+def query_display_coordinate_transform(
+    adb: AdbClient,
+    frame_width: int,
+    frame_height: int,
+) -> tuple[DisplayCoordinateTransform, dict[str, Any]]:
+    """Read effective ``wm size`` and reject unverified orientation/aspect mappings."""
+
+    result = adb.shell("wm", "size")
+    sizes = parse_display_sizes(result.stdout_text)
+    effective = sizes.get("override") or sizes.get("physical")
+    if effective is None:
+        raise RealtimeError(f"unable to parse active Android input/display size from wm size: {result.stdout_text!r}")
+    transform = DisplayCoordinateTransform(
+        effective["width"],
+        effective["height"],
+        frame_width,
+        frame_height,
+    )
+    return transform, {
+        "command": ["wm", "size"],
+        "raw_output": result.stdout_text,
+        "parsed_sizes": sizes,
+        "effective_size": effective,
+        "transform": transform.as_dict(),
+    }
 
 
 class LatestFrameBuffer:
@@ -602,7 +682,7 @@ class TouchVisualizationSettings:
 
 
 class TouchResponseDetector:
-    """Detect a touch marker in a configured swipe corridor, not game objects."""
+    """Detect a touch marker using temporal no-touch noise, not spatial texture."""
 
     def __init__(self, width: int, height: int, swipe: Swipe, radius: int = 24):
         self.width = width
@@ -611,8 +691,9 @@ class TouchResponseDetector:
         self.radius = radius
         self.indices = self._corridor_indices()
         self.threshold_rule = (
-            "pixel change > max(12, 6 * baseline population stddev), "
-            "with at least 1% of the expected touch corridor changed and mean change >= half that threshold"
+            "threshold = clamp(max(8, temporal no-touch p99 absolute delta "
+            "+ 3 * max(1, temporal MAD)), 0, 255), fixed before dispatch; "
+            "detect when at least 1% of the mapped touch ROI changes and mean change >= half the threshold"
         )
 
     def _corridor_indices(self) -> tuple[int, ...]:
@@ -629,17 +710,34 @@ class TouchResponseDetector:
                         indices.add(y * self.width + x)
         return tuple(indices)
 
-    def baseline(self, pixels: bytes) -> dict[str, Any]:
-        values = [pixels[index] for index in self.indices if index < len(pixels)]
-        standard_deviation = pstdev(values) if len(values) > 1 else 0.0
-        threshold = max(12.0, 6.0 * standard_deviation)
+    def baseline(self, no_touch_frames: list[bytes]) -> dict[str, Any]:
+        """Build a fixed trial/window threshold from adjacent no-touch frame noise."""
+
+        if len(no_touch_frames) < 2:
+            raise RealtimeError("temporal no-touch baseline requires at least two decoded frames")
+        noise: list[float] = []
+        for previous, current in zip(no_touch_frames, no_touch_frames[1:]):
+            noise.extend(
+                abs(int(current[index]) - int(previous[index]))
+                for index in self.indices
+                if index < len(previous) and index < len(current)
+            )
+        if not noise:
+            raise RealtimeError("temporal no-touch baseline contains no pixels in the mapped ROI")
+        noise_median = median(noise)
+        noise_mad = median([abs(value - noise_median) for value in noise])
+        noise_p99 = percentile(noise, 99) or 0.0
+        # Fixed before dispatch: robust temporal p99 plus a MAD margin, clamped to 8-bit deltas.
+        threshold = min(255.0, max(8.0, noise_p99 + 3.0 * max(1.0, noise_mad)))
         return {
-            "pixel_count": len(values),
-            "mean": fmean(values) if values else 0.0,
-            "population_stddev": standard_deviation,
+            "pixels": no_touch_frames[-1],
+            "temporal_noise_frame_count": len(no_touch_frames),
+            "temporal_noise_sample_count": len(noise),
+            "temporal_noise_median_abs_delta": noise_median,
+            "temporal_noise_mad": noise_mad,
+            "temporal_noise_p99_abs_delta": noise_p99,
             "absolute_change_threshold": threshold,
             "threshold_rule": self.threshold_rule,
-            "pixels": pixels,
         }
 
     def score(self, baseline: dict[str, Any], pixels: bytes) -> dict[str, Any]:
@@ -769,41 +867,129 @@ def run_fresh_frame_benchmark(
     }
 
 
+def _collect_distinct_frames(
+    source: RawH264FrameSource,
+    *,
+    required_count: int,
+    timeout_seconds: float,
+    initial_frames: list[DecodedFrame] | None = None,
+) -> list[DecodedFrame]:
+    frames = list(initial_frames or [])
+    seen_indices = {frame.frame_index for frame in frames}
+    deadline = time.monotonic() + timeout_seconds
+    while len(frames) < required_count and time.monotonic() < deadline:
+        frame = source.latest_frame(timeout_seconds=min(0.25, max(0.0, deadline - time.monotonic())))
+        if frame is None or frame.frame_index in seen_indices:
+            continue
+        seen_indices.add(frame.frame_index)
+        frames.append(frame)
+    return frames
+
+
+def _inconclusive_latency_summary() -> dict[str, Any]:
+    return {
+        "sample_count": 0,
+        "mean_latency_ms": None,
+        "median_latency_ms": None,
+        "p95_latency_ms": None,
+        "min_latency_ms": None,
+        "max_latency_ms": None,
+        "effective_operations_per_second": None,
+    }
+
+
 def run_calibration(
     adb: AdbClient,
     ffmpeg: str,
     server_path: str,
     *,
     trials: int = 30,
-    spacing_seconds: float = 0.35,
+    spacing_seconds: float = 1.0,
     response_timeout_seconds: float = 0.8,
     swipe: Swipe = Swipe(160, 1200, 700, 1200, 120),
+    calibration_swipe: Swipe | None = None,
+    baseline_frame_count: int = 5,
+    baseline_timeout_seconds: float = 2.0,
 ) -> dict[str, Any]:
     settings = TouchVisualizationSettings(adb)
     controller = AdbGestureController(adb)
     source: RawH264FrameSource | None = None
     trials_report: list[dict[str, Any]] = []
     setup: dict[str, Any] = {"status": "not_started"}
+    source_started: float | None = None
+    source_finished: float | None = None
+    coordinate_transform: DisplayCoordinateTransform | None = None
+    display_report: dict[str, Any] | None = None
+    baseline_window: list[DecodedFrame] = []
+    calibration_input_swipe = calibration_swipe or Swipe(swipe.x1, swipe.y1, swipe.x1, swipe.y1, 500)
+    status = "INCONCLUSIVE"
     try:
         setup = settings.enable()
         source = RawH264FrameSource(adb, ffmpeg, server_path, buffer_capacity=1)
         source.start()
+        source_started = time.monotonic()
         setup["status"] = "ready"
+        first_frame = source.latest_frame(timeout_seconds=5.0)
+        if first_frame is None:
+            raise RealtimeError("calibration source produced no decoded baseline frame")
+        coordinate_transform, display_report = query_display_coordinate_transform(
+            adb,
+            first_frame.width,
+            first_frame.height,
+        )
+        setup["display_coordinates"] = display_report
+        mapped_calibration_swipe = coordinate_transform.map_swipe(calibration_input_swipe)
+        setup["input_swipe"] = calibration_input_swipe.as_dict()
+        setup["mapped_frame_swipe"] = mapped_calibration_swipe.as_dict()
+        baseline_window = _collect_distinct_frames(
+            source,
+            required_count=max(2, baseline_frame_count),
+            timeout_seconds=baseline_timeout_seconds,
+            initial_frames=[first_frame],
+        )
+        setup["shared_no_touch_baseline"] = {
+            "required_frame_count": max(2, baseline_frame_count),
+            "frame_indices": [frame.frame_index for frame in baseline_window],
+            "collected_frame_count": len(baseline_window),
+            "timeout_seconds": baseline_timeout_seconds,
+        }
+        if len(baseline_window) < 2:
+            raise RealtimeError(
+                "calibration requires at least two no-touch decoded frames to estimate temporal noise"
+            )
         for trial_index in range(1, trials + 1):
             time.sleep(spacing_seconds)
-            baseline_frame = source.latest_frame(timeout_seconds=1.0)
             trial: dict[str, Any] = {
                 "trial": trial_index,
                 "valid": False,
                 "detection_succeeded": False,
                 "invalid_reason": None,
             }
-            if baseline_frame is None:
-                trial["invalid_reason"] = "no baseline decoded frame"
+            no_touch_window = _collect_distinct_frames(
+                source,
+                required_count=max(2, baseline_frame_count),
+                timeout_seconds=baseline_timeout_seconds,
+            )
+            if len(no_touch_window) < 2:
+                trial["invalid_reason"] = "insufficient fresh no-touch decoded frames"
                 trials_report.append(trial)
                 continue
-            detector = TouchResponseDetector(baseline_frame.width, baseline_frame.height, swipe)
-            baseline = detector.baseline(baseline_frame.pixels)
+            baseline_frame = no_touch_window[-1]
+            if (baseline_frame.width, baseline_frame.height) != (first_frame.width, first_frame.height):
+                trial["invalid_reason"] = "decoded frame dimensions changed during calibration"
+                trials_report.append(trial)
+                continue
+            detector = TouchResponseDetector(
+                baseline_frame.width,
+                baseline_frame.height,
+                mapped_calibration_swipe,
+            )
+            try:
+                baseline = detector.baseline([frame.pixels for frame in no_touch_window])
+            except RealtimeError as exc:
+                trial["invalid_reason"] = str(exc)
+                trials_report.append(trial)
+                continue
             started_holder: dict[str, float] = {}
 
             def on_started(value: float) -> None:
@@ -840,8 +1026,16 @@ def run_calibration(
                     "dispatch_start_monotonic_seconds": started,
                     "command_completion_monotonic_seconds": gesture.get("host_completion_monotonic_seconds"),
                     "baseline_frame_index": baseline_frame.frame_index,
+                    "baseline_frame_indices_for_temporal_noise": [frame.frame_index for frame in no_touch_window],
+                    "input_swipe": calibration_input_swipe.as_dict(),
+                    "mapped_frame_swipe": mapped_calibration_swipe.as_dict(),
                     "threshold_rule": detector.threshold_rule,
-                    "baseline_population_stddev": baseline["population_stddev"],
+                    "temporal_noise_frame_count": baseline["temporal_noise_frame_count"],
+                    "temporal_noise_sample_count": baseline["temporal_noise_sample_count"],
+                    "temporal_noise_median_abs_delta": baseline["temporal_noise_median_abs_delta"],
+                    "temporal_noise_mad": baseline["temporal_noise_mad"],
+                    "temporal_noise_p99_abs_delta": baseline["temporal_noise_p99_abs_delta"],
+                    "absolute_change_threshold": baseline["absolute_change_threshold"],
                     "detection_score": response_score,
                     "response_frame_index": response_frame.frame_index if response_frame else None,
                     "response_frame_timestamp": response_frame.host_receive_decode_monotonic_seconds if response_frame else None,
@@ -859,14 +1053,28 @@ def run_calibration(
             trials_report.append(trial)
         status = "completed"
     except (AdbError, RealtimeError) as exc:
-        status = "FAIL"
+        status = "INCONCLUSIVE"
         setup["error"] = str(exc)
     finally:
+        source_finished = time.monotonic()
         cleanup = source.stop() if source is not None else {"cleanup_success": True, "cleanup_errors": []}
+        source_diagnostics = source.stats() if source is not None else {"status": "not_started"}
+        source_stream = (
+            source.stream_statistics(source_started, source_finished)
+            if source is not None and source_started is not None
+            else None
+        )
         restoration = settings.restore()
     valid = [trial for trial in trials_report if trial.get("valid")]
     detected = [trial for trial in valid if trial.get("detection_succeeded")]
-    latencies = [float(trial["dispatch_start_to_first_visible_response_ms"]) / 1000 for trial in detected]
+    latency_samples_ms = [float(trial["dispatch_start_to_first_visible_response_ms"]) for trial in detected]
+    detection_success_rate = len(detected) / len(valid) if valid else 0.0
+    latency_evaluable = len(valid) >= 30 and detection_success_rate >= 0.95
+    latency_summary = (
+        summarize_latencies([value / 1000 for value in latency_samples_ms])
+        if latency_evaluable
+        else _inconclusive_latency_summary()
+    )
     return {
         "status": status,
         "configuration": {
@@ -874,20 +1082,32 @@ def run_calibration(
             "trials_requested": trials,
             "spacing_seconds": spacing_seconds,
             "response_timeout_seconds": response_timeout_seconds,
-            "swipe": swipe.as_dict(),
+            "stress_swipe": swipe.as_dict(),
+            "calibration_swipe": calibration_input_swipe.as_dict(),
+            "baseline_frame_count": baseline_frame_count,
+            "baseline_timeout_seconds": baseline_timeout_seconds,
             "detector": {
-                "roi": "corridor around configured swipe trajectory",
-                "threshold_rule": TouchResponseDetector(1, 1, Swipe(0, 0, 0, 0, 0)).threshold_rule,
+                "roi": "corridor around mapped persistent calibration press point",
+                "threshold_rule": TouchResponseDetector(1, 2, Swipe(0, 0, 0, 0, 500)).threshold_rule,
             },
         },
         "setup": setup,
         "trials": trials_report,
         "statistics": {
-            **summarize_latencies(latencies),
+            **latency_summary,
             "valid_trials": len(valid),
             "detected_trials": len(detected),
-            "detection_success_rate": len(detected) / len(valid) if valid else 0.0,
+            "detection_success_rate": detection_success_rate,
+            "latency_evaluable": latency_evaluable,
+            "latency_evaluation": "evaluable" if latency_evaluable else "INCONCLUSIVE",
+            "latency_inconclusive_reason": None
+            if latency_evaluable
+            else "requires >=30 valid trials and >=95% automatic detection",
+            "raw_detected_latency_samples_ms": latency_samples_ms,
         },
+        "coordinate_mapping": display_report,
+        "source_diagnostics": source_diagnostics,
+        "source_stream": source_stream,
         "settings_restoration": restoration,
         "cleanup": cleanup,
     }
@@ -902,6 +1122,10 @@ def evaluate_realtime_gate(report: dict[str, Any]) -> dict[str, Any]:
     age = freshness_source.get("consumed_frame_age_ms", {})
     calibration = report.get("calibration", {})
     calibration_stats = calibration.get("statistics", {})
+    calibration_evaluable = (
+        calibration_stats.get("valid_trials", 0) >= 30
+        and calibration_stats.get("detection_success_rate", 0) >= 0.95
+    )
     criteria = {
         "frame_source_starts_and_stops_cleanly": bool(report.get("source_contract", {}).get("start_stop_clean")),
         "bounded_buffer_at_most_two": report.get("source_contract", {}).get("queue_capacity", 99) <= 2,
@@ -915,9 +1139,39 @@ def evaluate_realtime_gate(report: dict[str, Any]) -> dict[str, Any]:
         "concurrent_no_gap_over_500ms": stream.get("gaps_over_500ms") == 0,
         "concurrent_no_disconnect": stream.get("disconnects") == 0,
         "at_least_30_valid_calibration_trials": calibration_stats.get("valid_trials", 0) >= 30,
-        "calibration_detection_over_95_percent": calibration_stats.get("detection_success_rate", 0) > 0.95,
+        "calibration_detection_at_least_95_percent": calibration_stats.get("detection_success_rate", 0) >= 0.95,
         "calibration_median_under_150ms": calibration_stats.get("median_latency_ms") is not None and calibration_stats["median_latency_ms"] < 150,
         "calibration_p95_under_250ms": calibration_stats.get("p95_latency_ms") is not None and calibration_stats["p95_latency_ms"] < 250,
+        "calibration_latency_evaluable": calibration_evaluable,
         "touch_setting_restored": calibration.get("settings_restoration", {}).get("success") is True,
     }
-    return {"status": "PASS" if all(criteria.values()) else "FAIL", "criteria": criteria}
+    structural_names = {
+        "frame_source_starts_and_stops_cleanly",
+        "bounded_buffer_at_most_two",
+        "no_unbounded_pixel_history",
+        "freshness_drops_stale_frames",
+        "freshness_p95_age_under_100ms",
+        "at_least_30_gestures",
+        "gesture_failure_rate_zero",
+        "concurrent_effective_fps_over_45",
+        "concurrent_p95_interval_under_100ms",
+        "concurrent_no_gap_over_500ms",
+        "concurrent_no_disconnect",
+        "touch_setting_restored",
+    }
+    structural_pass = all(criteria[name] for name in structural_names)
+    if not structural_pass:
+        status = "FAIL"
+    elif not calibration_evaluable:
+        status = "INCONCLUSIVE"
+    else:
+        status = "PASS" if criteria["calibration_median_under_150ms"] and criteria["calibration_p95_under_250ms"] else "FAIL"
+    return {
+        "status": status,
+        "criteria": criteria,
+        "interpretation": (
+            "input-visible latency is INCONCLUSIVE until calibration has >=30 valid trials and >=95% detection"
+            if not calibration_evaluable
+            else "input-visible latency gate is evaluable"
+        ),
+    }

@@ -127,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument("--gesture-interval-seconds", type=_positive_float, default=1.0)
     realtime.add_argument("--consumer-hz", type=_positive_float, default=20.0)
     realtime.add_argument("--calibration-trials", type=_positive_int, default=30)
-    realtime.add_argument("--calibration-spacing-seconds", type=_positive_float, default=0.35)
-    realtime.add_argument("--calibration-timeout-seconds", type=_positive_float, default=0.8)
+    realtime.add_argument("--calibration-spacing-seconds", type=_positive_float, default=1.0)
+    realtime.add_argument("--calibration-timeout-seconds", type=_positive_float, default=1.0)
     realtime.add_argument("--x1", type=_nonnegative_int, default=160)
     realtime.add_argument("--y1", type=_nonnegative_int, default=1200)
     realtime.add_argument("--x2", type=_nonnegative_int, default=700)
@@ -137,7 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument(
         "--static-screen-confirmed",
         action="store_true",
-        help="confirm that the phone is on a safe static screen for all Task 003 measurements",
+        help="confirm that the phone is on a safe static portrait screen for calibration",
+    )
+    realtime.add_argument(
+        "--moving-source-confirmed",
+        action="store_true",
+        help="assert that SMASH is already in an offline continuously moving match; otherwise pause after calibration",
     )
     realtime.add_argument("--output-base", type=Path, default=Path("artifacts/realtime"))
     return parser
@@ -588,7 +593,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         "generated_at_utc": utc_now(),
         "command": "realtime-benchmark",
         "transport_policy": "ADB is the only input transport; no fallback control transport is attempted",
-        "human_prerequisite": "safe static Android screen for concurrent, calibration, and freshness measurements",
+        "human_prerequisite": "safe static portrait Android launcher for calibration, then offline/bot SMASH match with continuous movement",
         "capability": capability,
         "configuration": {
             "duration_seconds": args.duration_seconds,
@@ -598,15 +603,17 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_trials": args.calibration_trials,
             "calibration_spacing_seconds": args.calibration_spacing_seconds,
             "calibration_timeout_seconds": args.calibration_timeout_seconds,
-            "swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
+            "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
+            "calibration_swipe": Swipe(args.x1, args.y1, args.x1, args.y1, 500).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
         },
         "experiment_order": [
             "1_capability_and_reusable_frame_source",
-            "2_concurrent_stream_and_adb_input",
-            "3_touch_visual_response_calibration",
-            "4_slow_consumer_fresh_frame_benchmark",
-            "5_acceptance_gate",
+            "2_static_portrait_touch_visual_response_calibration",
+            "3_human_switch_to_offline_moving_smash_source",
+            "4_moving_source_concurrent_stream_and_adb_input",
+            "5_moving_source_slow_consumer_fresh_frame_benchmark",
+            "6_acceptance_gate",
         ],
     }
     if not selected_serial or not scrcpy_path or not ffmpeg_path:
@@ -651,17 +658,10 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         print(f"Summary: {run_dir / 'summary.txt'}")
         return 2
 
-    swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
-    concurrent = run_concurrent_stress(
-        adb,
-        ffmpeg_path,
-        server["path"],
-        duration_seconds=max(30.0, args.duration_seconds),
-        gesture_count=max(30, args.gesture_count),
-        gesture_interval_seconds=args.gesture_interval_seconds,
-        swipe=swipe,
-    )
-    report["concurrent"] = concurrent
+    stress_swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
+    calibration_swipe = Swipe(args.x1, args.y1, args.x1, args.y1, 500)
+    # Static calibration is intentionally completed before the human changes the
+    # captured surface. Throughput/freshness metrics are only valid on movement.
     report["calibration"] = run_calibration(
         adb,
         ffmpeg_path,
@@ -669,8 +669,66 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         trials=max(30, args.calibration_trials),
         spacing_seconds=args.calibration_spacing_seconds,
         response_timeout_seconds=args.calibration_timeout_seconds,
-        swipe=swipe,
+        swipe=stress_swipe,
+        calibration_swipe=calibration_swipe,
     )
+    if args.moving_source_confirmed:
+        moving_confirmation = {
+            "confirmed": True,
+            "method": "--moving-source-confirmed",
+            "prompted": False,
+        }
+    elif sys.stdin.isatty():
+        print(
+            "Static calibration is complete. Switch SMASH to an offline match against a bot "
+            "with continuous movement, then press Enter to start throughput/freshness benchmarks.",
+            flush=True,
+        )
+        try:
+            input()
+            moving_confirmation = {"confirmed": True, "method": "interactive_enter", "prompted": True}
+        except EOFError:
+            moving_confirmation = {"confirmed": False, "method": "interactive_eof", "prompted": True}
+    else:
+        moving_confirmation = {
+            "confirmed": False,
+            "method": "non_interactive_stdin",
+            "prompted": False,
+            "reason": "moving source confirmation is required after static calibration",
+        }
+    report["moving_source_confirmation"] = moving_confirmation
+    if not moving_confirmation["confirmed"]:
+        report.update(
+            {
+                "status": "INCONCLUSIVE",
+                "failure_evidence": {
+                    "reason": "moving offline/bot SMASH source was not confirmed; throughput/freshness not run",
+                    "alternative_control_transport_attempted": False,
+                },
+                "concurrent": {"status": "not_run", "source_phase": "moving_smash_required"},
+                "freshness": {"status": "not_run", "source_phase": "moving_smash_required"},
+                "gate": {
+                    "status": "INCONCLUSIVE",
+                    "criteria": {"moving_source_confirmed": False},
+                    "interpretation": "static calibration completed; moving-source gates remain unmeasured",
+                },
+            }
+        )
+        _write_realtime_report(run_dir, report)
+        print(f"Report: {run_dir / 'report.json'}")
+        print(f"Summary: {run_dir / 'summary.txt'}")
+        return 2
+
+    concurrent = run_concurrent_stress(
+        adb,
+        ffmpeg_path,
+        server["path"],
+        duration_seconds=max(30.0, args.duration_seconds),
+        gesture_count=max(30, args.gesture_count),
+        gesture_interval_seconds=args.gesture_interval_seconds,
+        swipe=stress_swipe,
+    )
+    report["concurrent"] = concurrent
     report["freshness"] = run_fresh_frame_benchmark(
         adb,
         ffmpeg_path,
@@ -691,9 +749,13 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
     }
     report["gate"] = evaluate_realtime_gate(report)
     report["status"] = report["gate"]["status"]
-    if report["status"] == "FAIL":
+    if report["status"] in {"FAIL", "INCONCLUSIVE"}:
         report["failure_evidence"] = {
-            "reason": "one or more Issue #5 acceptance gates failed",
+            "reason": (
+                "one or more Issue #5 acceptance gates failed"
+                if report["status"] == "FAIL"
+                else "calibration validity threshold was not reached; input-visible latency is INCONCLUSIVE"
+            ),
             "failed_criteria": [name for name, passed in report["gate"]["criteria"].items() if not passed],
             "concurrent_stream": report["concurrent"].get("stream", {}),
             "gesture_statistics": report["concurrent"].get("gestures", {}).get("statistics", {}),
@@ -719,6 +781,7 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
         f"Device: {_value(report.get('capability', {}).get('adb'), 'selected_serial')}",
         f"Transport: {_value(report.get('capability', {}).get('adb'), 'transport')}",
         "Control transport: ADB only; no alternative attempted",
+        f"Moving source confirmed: {_value(report.get('moving_source_confirmation'), 'confirmed')}",
         f"Queue capacity: {_value(report.get('source_contract'), 'queue_capacity')}",
         f"Concurrent: {_value(report.get('concurrent'), 'status')}",
         f"Calibration: {_value(report.get('calibration'), 'status')}",
@@ -745,7 +808,8 @@ def _realtime_summary(report: dict[str, Any]) -> list[str]:
         lines.append(
             "Visible response: "
             f"valid={calibration.get('valid_trials')}; detected={calibration.get('detected_trials')}; "
-            f"rate={calibration.get('detection_success_rate')}; median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
+            f"rate={calibration.get('detection_success_rate')}; evaluation={calibration.get('latency_evaluation')}; "
+            f"median={calibration.get('median_latency_ms')} ms; p95={calibration.get('p95_latency_ms')} ms"
         )
     age = report.get("freshness", {}).get("source", {}).get("consumed_frame_age_ms", {})
     if age:

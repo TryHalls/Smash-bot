@@ -121,10 +121,12 @@ It does not implement perception, gameplay policy, scrcpy control, or any
 alternative input transport. If ADB is unavailable or a gesture fails, the
 report is **FAIL** with the command evidence.
 
-Before running the command, leave the phone on a safe static screen away from
-clock/status animations. The command performs, in order, the concurrent
-stream+ADB input test, the developer touch-visualization calibration, and the
-slow-consumer freshness test. It records frame drops, queue depth, decoded
+Before running the command, leave the phone in portrait on a safe static
+launcher screen away from clock/status animations. The command first performs
+touch-visualization calibration there. It then pauses and explicitly asks for
+SMASH to be switched to an offline match against a bot with continuous
+movement; only after that confirmation does it run the throughput and
+slow-consumer freshness tests. It records frame drops, queue depth, decoded
 frame age, gesture command timestamps, and visual-response trials without
 retaining an unbounded pixel history:
 
@@ -143,10 +145,16 @@ python3 -m smashbot_diagnostics realtime-benchmark \
 The command writes `artifacts/realtime/<timestamp>/report.json` and
 `summary.txt`. It snapshots `system/show_touches`, enables it only for the
 calibration, and restores the exact original value in cleanup even when a
-trial fails. A PASS requires the complete Task 003 gate, including at least
-30 successful ADB gestures, stream FPS/interval/disconnect limits, dropped
-stale frames with p95 consumed-frame age below 100 ms, 30 valid visual
-response trials, and the latency/detection thresholds from Issue #5.
+trial fails. Calibration records the effective `wm size`, explicitly maps
+Android input coordinates into the decoded portrait frame, uses a persistent
+500 ms zero-distance press, and derives its detection threshold from temporal
+no-touch noise. A PASS requires the complete Task 003 gate, including at
+least 30 successful ADB gestures, moving-source FPS/interval/disconnect
+limits, dropped stale frames with p95 consumed-frame age below 100 ms, 30
+valid visual-response trials, and the latency/detection thresholds from Issue
+#5. If calibration validity is below 30 valid trials and 95% detection, the
+input-visible latency result is **INCONCLUSIVE**, not evidence that ADB is
+slow. The >=45 FPS and frame-gap gates apply only to the moving SMASH phase.
 
 ## Scope and artifacts
 
