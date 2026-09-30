@@ -140,6 +140,15 @@ class CleanupFailSource(FakeFramedSource):
         return {"cleanup_success": False, "cleanup_errors": ["adb forward cleanup failed"]}
 
 
+class UndrainedTerminalSource(FakeFramedSource):
+    def health_snapshot(self):
+        snapshot = super().health_snapshot()
+        if self.media_count:
+            snapshot["associated_frame_count"] = self.media_count - 1
+            snapshot["pending_media_packets"] = 1
+        return snapshot
+
+
 class PerceptionCaptureTests(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -271,6 +280,35 @@ else:
         self.assertFalse(report["dataset_valid"])
         self.assertEqual(report["cleanup"]["cleanup_success"], False)
         self.assertEqual(report["stages"]["stage_a"]["status"], "FAIL")
+
+    def test_stage_a_pass_requires_terminal_association_and_drain(self):
+        report = self._run(source_class=FakeFramedSource)
+        source = FakeFramedSource.instances[-1]
+        self.assertEqual(report["stages"]["stage_a"]["status"], "PASS")
+        self.assertTrue(report["capture"]["completed"])
+        self.assertEqual(report["capture"]["media_packet_count"], 6)
+        self.assertEqual(source.media_count, 6)
+        self.assertEqual(source.associated, source.media_count)
+        self.assertEqual(source.health_snapshot()["associated_frame_count"], source.media_count)
+        self.assertEqual(source.health_snapshot()["pending_media_packets"], 0)
+        self.assertEqual(source.health_snapshot()["overflow_count"], 0)
+        self.assertEqual(source.health_snapshot()["invariant_failure_count"], 0)
+        self.assertEqual(source.health_snapshot()["decoder_error_count"], 0)
+        final_association = report["source_diagnostics"]["frame_association"]
+        self.assertEqual(final_association["associated_frame_count"], source.media_count)
+        self.assertEqual(final_association["pending_media_packets"], 0)
+        self.assertEqual(final_association["invariant_failures"], [])
+        self.assertTrue(report["cleanup"]["cleanup_success"])
+
+    def test_stage_a_fails_when_terminal_au_remains_pending(self):
+        with patch.multiple(
+            "smashbot_diagnostics.perception",
+            FRAMED_CAPTURE_DRAIN_TIMEOUT_OVERRIDE_SECONDS=0.001,
+        ):
+            report = self._run(source_class=UndrainedTerminalSource)
+        self.assertEqual(report["stages"]["stage_a"]["status"], "FAIL")
+        self.assertFalse(report["dataset_valid"])
+        self.assertIn("did not drain", " ".join(report["failure_reasons"]))
 
     def test_watchdog_expiry_fails_closed_without_source_history_polling(self):
         with patch.multiple(

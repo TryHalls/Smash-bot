@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from smashbot_diagnostics.framed_video import H264PacketMerger, PACKET_FLAG_CONFIG
-from smashbot_diagnostics.perception import _FramedCaptureRecorder
+from smashbot_diagnostics.perception import _FramedCaptureRecorder, _parse_framed_capture
 from smashbot_diagnostics.realtime import (
     DecodedFrame,
     DisplayCoordinateTransform,
@@ -945,7 +945,8 @@ class RealtimeTests(unittest.TestCase):
             return struct.pack(">QI", flags, len(payload)) + payload
 
         with TemporaryDirectory() as directory:
-            recorder = _FramedCaptureRecorder(Path(directory) / "capture.framed", 1)
+            capture_path = Path(directory) / "capture.framed"
+            recorder = _FramedCaptureRecorder(capture_path, 1)
             observed = []
 
             def observe(packet):
@@ -968,11 +969,28 @@ class RealtimeTests(unittest.TestCase):
             recorder.close()
             self.assertEqual([packet.payload for packet in observed], [b"cfg", b"media0", b"media1"])
             self.assertEqual(stdin.writes, [b"cfgmedia0", b"media1"])
+            captured = _parse_framed_capture(capture_path)
+            self.assertEqual([packet.payload for packet in captured], [b"cfg", b"media0", b"media1"])
             self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 2)
             self.assertTrue(source._relay_completed)
             self.assertEqual(source._connection.calls, 1)
-            self.assertIsNotNone(source._associate_decoded_frame(0, 2.0))
-            self.assertEqual(source.association_diagnostics()["associated_frame_count"], 1)
+            pre_terminal = source._associate_decoded_frame(0, 2.0)
+            terminal = source._associate_decoded_frame(1, 3.0)
+            self.assertEqual(pre_terminal["packet_sequence_index"], 1)
+            self.assertEqual(pre_terminal["scrcpy_pts_us"], 0)
+            self.assertEqual(pre_terminal["decoded_frame_index"], 0)
+            self.assertEqual(terminal["packet_sequence_index"], 2)
+            self.assertEqual(terminal["scrcpy_pts_us"], 1)
+            self.assertEqual(terminal["decoded_frame_index"], 1)
+            self.assertEqual(source.pending_media_snapshot()["pending_au_count"], 0)
+            diagnostics = source.association_diagnostics()
+            self.assertEqual(diagnostics["associated_frame_count"], 2)
+            self.assertEqual(diagnostics["decoded_frames_without_packet"], 0)
+            self.assertEqual(diagnostics["overflow_count"], 0)
+            self.assertEqual(diagnostics["invariant_failures"], [])
+            self.assertEqual(len(source._frame_associations), 2)
+            self.assertNotIn(b"next", capture_path.read_bytes())
+            self.assertNotIn(b"next", b"".join(stdin.writes))
 
     def test_live_config_packet_is_not_written_or_queued(self):
         from smashbot_diagnostics.framed_video import FramedVideoParser, PACKET_FLAG_CONFIG

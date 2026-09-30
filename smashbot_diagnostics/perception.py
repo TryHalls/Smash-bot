@@ -44,6 +44,7 @@ MIN_FREE_BYTES = 500 * 1024 * 1024
 SAMPLE_COUNT = 12
 FRAMED_CAPTURE_WATCHDOG_SECONDS = 30.0
 FRAMED_CAPTURE_WATCHDOG_MULTIPLIER = 3.0
+FRAMED_CAPTURE_DRAIN_TIMEOUT_OVERRIDE_SECONDS: float | None = None
 
 
 class PerceptionCaptureError(ValueError):
@@ -684,7 +685,10 @@ def run_perception_capture(
             if not recorder.complete and not report["failure_reasons"]:
                 report["failure_reasons"].append("framed capture watchdog expired before requested PTS span")
             if recorder.complete and not report["failure_reasons"]:
-                drain_deadline = time.monotonic() + max(10.0, duration)
+                drain_timeout = max(10.0, duration)
+                if FRAMED_CAPTURE_DRAIN_TIMEOUT_OVERRIDE_SECONDS is not None:
+                    drain_timeout = FRAMED_CAPTURE_DRAIN_TIMEOUT_OVERRIDE_SECONDS
+                drain_deadline = time.monotonic() + drain_timeout
                 while time.monotonic() < drain_deadline:
                     health = source.health_snapshot()
                     if health.get("associated_frame_count") == recorder.media_count and health.get("pending_media_packets") == 0:
