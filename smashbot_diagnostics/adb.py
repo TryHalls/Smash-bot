@@ -17,6 +17,7 @@ from .parsing import (
     parse_package_info,
     parse_refresh_rates,
     parse_density_output,
+    transport_info,
 )
 
 
@@ -59,11 +60,19 @@ def resolve_adb(adb: str = "adb") -> str | None:
 
 
 class AdbClient:
-    def __init__(self, executable: str = "adb", serial: str | None = None, timeout: float = 15.0):
+    def __init__(
+        self,
+        executable: str = "adb",
+        serial: str | None = None,
+        timeout: float = 15.0,
+        transport: str = "auto",
+    ):
         self.requested_executable = executable
         self.executable = resolve_adb(executable)
         self.serial = serial
         self.timeout = timeout
+        self.transport_preference = transport
+        self.selected_device: dict[str, object] | None = None
 
     def _run(self, arguments: Sequence[str], *, timeout: float | None = None) -> CommandResult:
         if self.executable is None:
@@ -106,6 +115,8 @@ class AdbClient:
                 raise AdbError(
                     f"requested device {self.serial} is not ready (state: {selected.get('state')})"
                 )
+            self.selected_device = selected
+            self._validate_transport()
             return self.serial
         ready = [str(device["serial"]) for device in devices if device.get("state") == "device"]
         if not ready:
@@ -113,7 +124,39 @@ class AdbClient:
         if len(ready) > 1:
             raise AdbError("multiple ADB devices are ready; pass --serial explicitly")
         self.serial = ready[0]
+        self.selected_device = next(device for device in devices if device.get("serial") == self.serial)
+        self._validate_transport()
         return self.serial
+
+    def _validate_transport(self) -> None:
+        detected = self.transport_info()["detected"]
+        if self.transport_preference != "auto" and detected not in {self.transport_preference, "unknown"}:
+            raise AdbError(
+                f"transport mismatch for {self.serial}: requested {self.transport_preference}, detected {detected}"
+            )
+
+    def transport_info(self) -> dict[str, object]:
+        """Return requested and detected transport metadata for the selected device."""
+
+        if not self.serial:
+            return {
+                "requested": self.transport_preference,
+                "detected": "unknown",
+                "effective": "unknown",
+                "evidence": "no device selected",
+                "network_endpoint": False,
+            }
+        detected = transport_info(self.serial)
+        result: dict[str, object] = {
+            "requested": self.transport_preference,
+            **detected,
+        }
+        if self.transport_preference != "auto" and detected["detected"] == "unknown":
+            result["effective"] = self.transport_preference
+            result["evidence"] = "explicit CLI transport preference; ADB serial did not identify the medium"
+        else:
+            result["effective"] = detected["detected"]
+        return result
 
     def _device_args(self, *arguments: str) -> list[str]:
         if not self.serial:

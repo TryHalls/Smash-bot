@@ -13,6 +13,7 @@ _REFRESH_RE = re.compile(
     r"(?:refreshRate|refresh_rate|fps|frameRate|mRefreshRate)\s*[=:]\s*(?P<rate>\d+(?:\.\d+)?)"
     r"|(?P<standalone>\d+(?:\.\d+)?)\s*(?:Hz|hz|fps)"
 )
+_NETWORK_SERIAL_RE = re.compile(r"^(?:\[[0-9a-fA-F:]+\]|[^:\s]+):\d+$")
 
 
 def parse_adb_version(output: str) -> str | None:
@@ -42,8 +43,44 @@ def parse_devices(output: str) -> list[dict[str, Any]]:
             if ":" in field:
                 key, value = field.split(":", 1)
                 details[key] = value
-        devices.append({"serial": serial, "state": state, "details": details, "raw": line})
+        devices.append(
+            {
+                "serial": serial,
+                "state": state,
+                "details": details,
+                "transport": transport_info(serial),
+                "raw": line,
+            }
+        )
     return devices
+
+
+def transport_info(serial: str) -> dict[str, str | bool]:
+    """Classify a device using only evidence available from ``adb devices``.
+
+    ADB does not expose the physical link medium in ``devices -l``. A
+    ``host:port`` serial is therefore reported as wireless TCP based on its
+    network-endpoint form; other serials remain ``unknown`` instead of being
+    silently labelled USB.
+    """
+
+    if serial.startswith("emulator-"):
+        return {
+            "detected": "emulator",
+            "evidence": "serial uses emulator-NNNN form",
+            "network_endpoint": False,
+        }
+    if _NETWORK_SERIAL_RE.fullmatch(serial):
+        return {
+            "detected": "wireless_tcp",
+            "evidence": "serial uses host:port network-endpoint form",
+            "network_endpoint": True,
+        }
+    return {
+        "detected": "unknown",
+        "evidence": "ADB devices output does not identify the physical transport for this serial",
+        "network_endpoint": False,
+    }
 
 
 def parse_getprop(output: str) -> dict[str, str]:

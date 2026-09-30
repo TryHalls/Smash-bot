@@ -94,6 +94,7 @@ def benchmark_screenshots(
     return {
         "status": "completed" if failed_count == 0 else "completed_with_failures",
         "method": "adb exec-out screencap -p",
+        "transport": adb.transport_info(),
         "attempts": records,
         "statistics": stats,
         "sample_screenshots": saved_samples,
@@ -109,6 +110,7 @@ def execute_swipe(adb: AdbClient, parameters: dict[str, int], execute: bool) -> 
 
     record: dict[str, Any] = {
         "target_serial": adb.serial,
+        "transport": adb.transport_info(),
         "parameters": parameters,
         "execute_requested": execute,
         "measurement": {
@@ -188,6 +190,7 @@ def benchmark_input(
     return {
         "status": "preview" if not execute else ("completed" if len(latencies) == iterations else "completed_with_failures"),
         "target_serial": adb.serial,
+        "transport": adb.transport_info(),
         "parameters": parameters,
         "iterations": iterations,
         "execute_requested": execute,

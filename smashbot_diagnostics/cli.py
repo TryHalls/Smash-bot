@@ -79,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
 def _add_connection_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--adb", default="adb", help="ADB executable or path")
     parser.add_argument("--serial", help="device serial; required when multiple devices are ready")
+    parser.add_argument(
+        "--transport",
+        choices=("auto", "wireless_tcp", "usb", "other"),
+        default="auto",
+        help="transport expectation; auto detects host:port wireless serials",
+    )
     parser.add_argument("--timeout", type=_positive_int, default=15, help="ADB command timeout in seconds")
 
 
@@ -114,6 +120,7 @@ def _connection_snapshot(adb: AdbClient, failures: list[dict[str, str]]) -> tupl
     adb_report: dict[str, Any] = {
         "requested_executable": adb.requested_executable,
         "path": adb.executable,
+        "transport": adb.transport_info(),
         "version": _safe_probe("adb.version", adb.version, failures),
         "devices": _safe_probe("adb.devices", adb.list_devices, failures),
     }
@@ -125,11 +132,12 @@ def _connection_snapshot(adb: AdbClient, failures: list[dict[str, str]]) -> tupl
         failures.append({"field": "device.selection", "error": str(exc)})
         adb_report["device_selection_error"] = str(exc)
     adb_report["selected_serial"] = selected_serial
+    adb_report["transport"] = adb.transport_info()
     return adb_report, selected_serial
 
 
 def _diagnose(args: argparse.Namespace) -> int:
-    adb = AdbClient(args.adb, args.serial, args.timeout)
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
     failures: list[dict[str, str]] = []
     run_dir = new_run_directory(args.output_base)
     adb_report, selected_serial = _connection_snapshot(adb, failures)
@@ -161,6 +169,7 @@ def _diagnose(args: argparse.Namespace) -> int:
         "command": "diagnose",
         "configuration": {
             "target_package": args.package,
+            "transport_preference": args.transport,
             "screenshot_attempts": args.captures,
             "sample_screenshots": args.samples,
             "report_directory": str(run_dir),
@@ -196,6 +205,7 @@ def _diagnostic_summary(report: dict[str, Any]) -> list[str]:
         f"Host: {report['host']['os']} {report['host']['architecture']} / Python {report['host']['python_version']}",
         f"ADB: {adb.get('path') or 'unavailable'}",
         f"Selected device: {adb.get('selected_serial') or 'none'}",
+        f"Transport: {_value(adb.get('transport'), 'effective')} ({_value(adb.get('transport'), 'evidence')})",
         f"Android/device: {_value(device, 'android_version')} / {_value(device, 'manufacturer')} {_value(device, 'model')}",
         f"SMASH package {report['configuration']['target_package']}: {_value(package, 'installed')}",
         f"Screenshot benchmark: {_value(screenshots, 'status')}",
@@ -226,7 +236,7 @@ def _select_device_or_report_error(adb: AdbClient) -> None:
 
 
 def _screenshot(args: argparse.Namespace) -> int:
-    adb = AdbClient(args.adb, args.serial, args.timeout)
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
     _select_device_or_report_error(adb)
     run_dir = new_run_directory(args.output_base)
     result = benchmark_screenshots(adb, args.captures, args.samples, run_dir)
@@ -236,6 +246,7 @@ def _screenshot(args: argparse.Namespace) -> int:
         "generated_at_utc": utc_now(),
         "command": "screenshot",
         "target_serial": adb.serial,
+        "transport": adb.transport_info(),
         "screenshot_benchmark": result,
     }
     write_json(run_dir / "report.json", report)
@@ -250,6 +261,7 @@ def _screenshot_summary(serial: str | None, result: dict[str, Any]) -> list[str]
     return [
         "SMASH Bot screenshot benchmark",
         f"Device: {serial}",
+        f"Transport: {_value(result.get('transport'), 'effective')} ({_value(result.get('transport'), 'evidence')})",
         f"Method: {result['method']}",
         f"Attempts: {stats['attempt_count']}; successes: {stats['successful_count']}; failures: {stats['failure_count']}",
         f"Latency (ms): mean={stats['mean_latency_ms']}; median={stats['median_latency_ms']}; p95={stats['p95_latency_ms']}; min={stats['min_latency_ms']}; max={stats['max_latency_ms']}",
@@ -260,10 +272,11 @@ def _screenshot_summary(serial: str | None, result: dict[str, Any]) -> list[str]
 
 
 def _input_command(args: argparse.Namespace, benchmark: bool) -> int:
-    adb = AdbClient(args.adb, args.serial, args.timeout)
+    adb = AdbClient(args.adb, args.serial, args.timeout, args.transport)
     _select_device_or_report_error(adb)
     parameters = swipe_parameters(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
     print(f"Target device: {adb.serial}")
+    print("Transport: " + json.dumps(adb.transport_info(), sort_keys=True))
     print("Gesture: " + json.dumps(parameters, sort_keys=True))
     if benchmark:
         print(f"Iterations: {args.iterations}; execute: {args.execute}")
@@ -281,6 +294,7 @@ def _input_command(args: argparse.Namespace, benchmark: bool) -> int:
         "tool_version": __version__,
         "generated_at_utc": utc_now(),
         "command": "input-benchmark" if benchmark else "swipe",
+        "transport": adb.transport_info(),
         "input": result,
     }
     write_json(run_dir / filename, report)
@@ -297,6 +311,7 @@ def _input_summary(result: dict[str, Any]) -> list[str]:
     lines = [
         "SMASH Bot input/gesture measurement",
         f"Device: {result.get('target_serial')}",
+        f"Transport: {_value(result.get('transport'), 'effective')} ({_value(result.get('transport'), 'evidence')})",
         f"Parameters: {json.dumps(result.get('parameters'), sort_keys=True)}",
         f"Status: {result.get('status')}",
         "Measurement: host-observed ADB command latency only",

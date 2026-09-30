@@ -8,6 +8,7 @@ from smashbot_diagnostics.parsing import (
     parse_package_info,
     parse_refresh_rates,
     parse_density_output,
+    transport_info,
 )
 
 
@@ -21,7 +22,14 @@ class ParsingTests(unittest.TestCase):
         )
         self.assertEqual(devices[0]["state"], "device")
         self.assertEqual(devices[0]["details"]["model"], "sdk_gphone_x86")
+        self.assertEqual(devices[0]["transport"]["detected"], "emulator")
         self.assertEqual(devices[1]["state"], "unauthorized")
+
+    def test_wireless_transport_is_detected_from_network_serial(self):
+        info = transport_info("192.168.1.42:37123")
+        self.assertEqual(info["detected"], "wireless_tcp")
+        self.assertTrue(info["network_endpoint"])
+        self.assertEqual(transport_info("SERIAL123")["detected"], "unknown")
 
     def test_device_property_parsers(self):
         self.assertEqual(parse_adb_version("Android Debug Bridge version 35.0.1\n"), "Android Debug Bridge version 35.0.1")

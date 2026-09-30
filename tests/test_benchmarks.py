@@ -12,6 +12,15 @@ class FakeAdb(AdbClient):
         super().__init__(executable="/bin/true", serial="TEST123")
         self.calls = 0
 
+    def transport_info(self):
+        return {
+            "requested": "wireless_tcp",
+            "detected": "wireless_tcp",
+            "effective": "wireless_tcp",
+            "evidence": "test network endpoint",
+            "network_endpoint": True,
+        }
+
     def capture_screenshot(self, timeout=None):
         self.calls += 1
         return CommandResult(("fake",), 0, b"PNG", b"", 0.01)
@@ -27,6 +36,7 @@ class BenchmarkTests(unittest.TestCase):
             result = benchmark_screenshots(FakeAdb(), attempts=3, sample_count=2, output_dir=Path(directory))
             self.assertEqual(result["statistics"]["attempt_count"], 3)
             self.assertEqual(result["statistics"]["failure_count"], 0)
+            self.assertEqual(result["transport"]["effective"], "wireless_tcp")
             self.assertEqual(len(result["sample_screenshots"]), 2)
             self.assertEqual((Path(directory) / "screenshot-01.png").read_bytes(), b"PNG")
 
@@ -34,6 +44,7 @@ class BenchmarkTests(unittest.TestCase):
         adb = FakeAdb()
         result = execute_swipe(adb, swipe_parameters(1, 2, 3, 4, 50), execute=False)
         self.assertEqual(result["status"], "preview")
+        self.assertEqual(result["transport"]["effective"], "wireless_tcp")
         self.assertEqual(adb.calls, 0)
 
     def test_input_benchmark_preview_does_not_dispatch(self):
