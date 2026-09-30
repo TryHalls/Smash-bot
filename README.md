@@ -331,6 +331,53 @@ architecturally by causal A/B/C target identity for the next experiment. This
 does not rewrite either physical run or change its formal `INCONCLUSIVE`
 status.
 
+## Task 006: pre-host packet latency
+
+Task 006 keeps the accepted scrcpy v4.1 framed H.264 path, `scrcpy_low_delay`
+decoder, persistent scrcpy control socket, Wireless ADB, Pointer Location,
+causal A/B/C targets, 450 ms stationary gesture, detector, ROI, thresholds,
+and raw-H.264 production path unchanged. The completed Stage A pilot is
+recorded at `artifacts/task006/20260930T133121Z/report.json`; its raw JSON and
+formal classifier outputs are preserved unchanged.
+
+Stage A evidence:
+
+- 10/10 gesture writes succeeded.
+- 10/10 current-target crosshairs were detected.
+- 10/10 trials were causally structurally valid.
+- The real H.264 capability check passed with `has_b_frames=0`.
+- There were 0 packet/frame invariant failures, 0 FIFO overflows, and 0
+  decoded frames without a packet.
+- There were 0 video/control disconnects and 0 write, scheduling, decode, or
+  framing errors.
+- Pointer-up recovery was 10/10 and the masked launcher background was stable
+  in 10/10 trials.
+- `pointer_location` and `show_touches` were restored exactly to their
+  original values (`null` and `0` in this run).
+
+Descriptive medians from the ten valid trials were:
+
+| Interval | Median |
+| --- | ---: |
+| Control write (`C0→C1`) | 0.172 ms |
+| `C0→V0` | 150.082 ms |
+| `V0→V1` | 0.0 ms in 10/10 trials |
+| `V1→V2` | 104.129 ms |
+| Total visible (`C0→V2`) | 241.186 ms |
+
+`V0→V1 = 0` does **not** mean that Wireless ADB or Wi-Fi has zero latency.
+It means only that the relevant packet was observed complete inside one
+userspace `recv()` result, so this host-only instrumentation cannot separate
+transport time within `C0→V0`. A packet spanning multiple `recv()` results
+would produce a non-zero observed receive span.
+
+Stale previous-target frames were retained as backlog diagnostics. They did
+not invalidate the trials because causal A/B/C identity and the current-target
+associated packet remained authoritative. No decoder, threshold, parser,
+control, transport, codec, resolution/FPS setting, or classifier was changed
+for this documentation update. No further physical tests were run, and Task
+007 has not started.
+
 ## Scope and artifacts
 
 The device-side actions are the existing `input swipe`, the official scrcpy
