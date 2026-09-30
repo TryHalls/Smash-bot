@@ -142,6 +142,13 @@ python3 -m smashbot_diagnostics realtime-benchmark \
   --static-screen-confirmed
 ```
 
+The default calibration press is the empty central wallpaper point
+`540,1200` with a 450 ms duration, just below the launcher's long-press
+threshold so it does not open home customization. Override it with
+`--calibration-x` and `--calibration-y` if the device layout requires another
+non-interactive point. These coordinates are independent of the stress swipe
+coordinates.
+
 The command writes `artifacts/realtime/<timestamp>/report.json` and
 `summary.txt`. It snapshots `system/show_touches`, enables it only for the
 calibration, and restores the exact original value in cleanup even when a

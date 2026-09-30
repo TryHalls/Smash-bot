@@ -134,6 +134,8 @@ def build_parser() -> argparse.ArgumentParser:
     realtime.add_argument("--x2", type=_nonnegative_int, default=700)
     realtime.add_argument("--y2", type=_nonnegative_int, default=1200)
     realtime.add_argument("--duration-ms", type=_nonnegative_int, default=120)
+    realtime.add_argument("--calibration-x", type=_nonnegative_int, default=540)
+    realtime.add_argument("--calibration-y", type=_nonnegative_int, default=1200)
     realtime.add_argument(
         "--static-screen-confirmed",
         action="store_true",
@@ -609,7 +611,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
             "calibration_spacing_seconds": args.calibration_spacing_seconds,
             "calibration_timeout_seconds": args.calibration_timeout_seconds,
             "stress_swipe": Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms).as_dict(),
-            "calibration_swipe": Swipe(args.x1, args.y1, args.x1, args.y1, 500).as_dict(),
+            "calibration_swipe": Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450).as_dict(),
             "profile": profile_dict(BASELINE_PROFILE),
         },
         "experiment_order": [
@@ -664,7 +666,7 @@ def _realtime_benchmark(args: argparse.Namespace) -> int:
         return 2
 
     stress_swipe = Swipe(args.x1, args.y1, args.x2, args.y2, args.duration_ms)
-    calibration_swipe = Swipe(args.x1, args.y1, args.x1, args.y1, 500)
+    calibration_swipe = Swipe(args.calibration_x, args.calibration_y, args.calibration_x, args.calibration_y, 450)
     # Static calibration is intentionally completed before the human changes the
     # captured surface. Throughput/freshness metrics are only valid on movement.
     report["calibration"] = run_calibration(
