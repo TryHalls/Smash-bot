@@ -13,11 +13,15 @@ from smashbot_diagnostics.realtime import (
     RawH264FrameSource,
     RealtimeError,
     Swipe,
+    Task007FramedH264FrameSource,
     TouchResponseDetector,
     TouchVisualizationSettings,
     evaluate_realtime_gate,
+    frame_source_class_for_video_path,
     gesture_statistics,
     query_display_coordinate_transform,
+    task007_device_timing_metrics,
+    validate_task007_response_association,
 )
 
 
@@ -428,9 +432,12 @@ class RealtimeTests(unittest.TestCase):
     def test_framed_source_is_isolated_and_has_bounded_cleanup(self):
         raw = RawH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
         framed = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
+        task007 = Task007FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
 
         self.assertEqual(raw.metadata()["path"], "raw_h264")
         self.assertEqual(framed.metadata()["path"], "framed_h264")
+        self.assertEqual(task007.metadata()["path"], "task007_framed_h264")
+        self.assertTrue(task007.metadata()["task007_telemetry"]["sidecar_stripped_before_decoder"])
         self.assertFalse(framed.metadata()["framed_video"]["raw_stream"])
         self.assertTrue(framed.metadata()["framed_video"]["send_frame_meta"])
         self.assertEqual(framed.metadata()["framed_video"]["header_size_bytes"], 12)
@@ -438,6 +445,88 @@ class RealtimeTests(unittest.TestCase):
         self.assertFalse(raw.metadata()["path"] == framed.metadata()["path"])
         self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
         self.assertEqual(framed.stop(), {"cleanup_success": True, "cleanup_errors": []})
+
+    def test_video_source_factory_keeps_previous_paths_and_isolates_task007(self):
+        self.assertIs(frame_source_class_for_video_path("raw_h264"), RawH264FrameSource)
+        self.assertIs(frame_source_class_for_video_path("framed_h264"), FramedH264FrameSource)
+        self.assertIs(frame_source_class_for_video_path("task007_framed_h264"), Task007FramedH264FrameSource)
+
+    def test_task007_association_validates_exact_packet_telemetry_sequence_xy_pts_and_order(self):
+        association = {
+            "task007_telemetry": {"version": 1},
+            "inject_success": True,
+            "action_sequence": 2,
+            "action_x": 432,
+            "action_y": 960,
+            "d0_nanos": 100,
+            "d1_nanos": 200,
+            "d2_nanos": 300,
+            "scrcpy_pts_us": 1234,
+            "associated_packet_pts_us": 1234,
+            "packet_start_observed_monotonic_seconds": 2.0,
+            "packet_complete_monotonic_seconds": 2.1,
+        }
+        validation = validate_task007_response_association(
+            association,
+            expected_action_sequence=2,
+            expected_target=Swipe(432, 960, 432, 960, 450),
+            c0=1.0,
+            c1=1.1,
+            v2=2.2,
+        )
+        self.assertTrue(validation["valid"])
+        self.assertEqual(validation["response_frame_pts_us"], 1234)
+        self.assertTrue(validation["host_order_valid"])
+
+        association["action_sequence"] = 1
+        invalid = validate_task007_response_association(
+            association,
+            expected_action_sequence=2,
+            expected_target=Swipe(432, 960, 432, 960, 450),
+            c0=1.0,
+            c1=1.1,
+            v2=2.2,
+        )
+        self.assertFalse(invalid["valid"])
+        self.assertTrue(any("discontinuity" in error for error in invalid["errors"]))
+
+        absent = validate_task007_response_association(
+            None,
+            expected_action_sequence=2,
+            expected_target=Swipe(432, 960, 432, 960, 450),
+            c0=1.0,
+            c1=1.1,
+            v2=2.2,
+        )
+        self.assertFalse(absent["valid"])
+        self.assertIn("exact packet association", absent["errors"][0])
+
+    def test_task007_device_metrics_preserve_negative_residual(self):
+        metrics = task007_device_timing_metrics(
+            {"d0_nanos": 100, "d1_nanos": 200, "d2_nanos": 500},
+            {"pre_packet_start_observation_ms": 0.0002},
+        )
+        self.assertEqual(metrics["device_inject_call_ms"], 0.0001)
+        self.assertEqual(metrics["device_post_inject_to_encoded_output_ms"], 0.0003)
+        self.assertEqual(metrics["device_control_receive_to_encoded_output_ms"], 0.0004)
+        self.assertEqual(metrics["combined_transport_boundary_residual_ms"], -0.0002)
+
+    def test_task007_calibration_requires_scrcpy_control_and_no_b_frames(self):
+        from smashbot_diagnostics.realtime import run_calibration
+
+        with self.assertRaisesRegex(ValueError, "requires control_transport=scrcpy_v4_1"):
+            run_calibration(
+                FakeAdb(), "ffmpeg", "/server", video_path="task007_framed_h264", control_transport="adb"
+            )
+        with self.assertRaisesRegex(ValueError, "has_b_frames=0"):
+            run_calibration(
+                FakeAdb(),
+                "ffmpeg",
+                "/server",
+                video_path="task007_framed_h264",
+                control_transport="scrcpy_v4_1",
+                framed_h264_capability={"verified": False},
+            )
 
     def test_framed_quiescent_baseline_is_bounded_and_explicit(self):
         source = FramedH264FrameSource(FakeAdb(), "ffmpeg", "/missing/server")
