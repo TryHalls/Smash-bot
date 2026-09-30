@@ -1111,9 +1111,10 @@ def run_calibration(
             ],
             "capture": warmup_capture,
         }
-        setup["shared_no_touch_baseline"] = detector.baseline(
-            [first_frame.pixels, post_warmup_frame.pixels]
-        )
+        shared_baseline = detector.baseline([first_frame.pixels, post_warmup_frame.pixels])
+        setup["shared_no_touch_baseline"] = {
+            key: value for key, value in shared_baseline.items() if key != "pixels"
+        }
         setup["shared_no_touch_baseline"].update(
             {
                 "frame_indices": [first_frame.frame_index, post_warmup_frame.frame_index],
@@ -1122,9 +1123,9 @@ def run_calibration(
                 "legacy_baseline_timeout_seconds_argument": baseline_timeout_seconds,
             }
         )
-        warmup_scores = [detector.score(setup["shared_no_touch_baseline"], frame.pixels) for frame in warmup_frames]
+        warmup_scores = [detector.score(shared_baseline, frame.pixels) for frame in warmup_frames]
         warmup_marker_on = any(score["detected"] for score in warmup_scores)
-        warmup_off_score = detector.score(setup["shared_no_touch_baseline"], post_warmup_frame.pixels)
+        warmup_off_score = detector.score(shared_baseline, post_warmup_frame.pixels)
         warmup_static_match = _static_baseline_matches(post_warmup_difference)
         setup["warmup"].update(
             {
@@ -1159,7 +1160,7 @@ def run_calibration(
                 "detection_failure_reason": None,
                 "state_trace": ["baseline_marker_off", "dispatch"],
             }
-            baseline = dict(setup["shared_no_touch_baseline"])
+            baseline = dict(shared_baseline)
             baseline["pixels"] = baseline_frame.pixels
             gesture, trial_frames, started, capture = _dispatch_capture_window(
                 controller,
