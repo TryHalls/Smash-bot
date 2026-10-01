@@ -8,6 +8,7 @@ from smashbot_diagnostics.perception_candidate_runtime import (
     MODEL_LOGIT_TOLERANCE,
     WARMUPS,
     _blob_from_patches,
+    _blob_from_patches_preallocated,
     _padding,
     _rank_indices,
     fast_canonical_patches_v2,
@@ -63,6 +64,17 @@ class Task010CandidateRuntimeTests(unittest.TestCase):
         self.assertEqual(blob.shape, (3, 3, 64, 64))
         self.assertEqual(blob.dtype, numpy.float32)
         self.assertTrue(blob.flags["C_CONTIGUOUS"])
+
+    def test_preallocated_blob_is_numerically_identical(self) -> None:
+        try:
+            import numpy
+        except ImportError:
+            self.skipTest("NumPy is unavailable")
+        patches = [numpy.arange(64 * 64 * 3, dtype=numpy.uint8).reshape((64, 64, 3)) for _ in range(3)]
+        reference = _blob_from_patches(patches)
+        output = numpy.empty(reference.shape, dtype=numpy.float32)
+        optimized = _blob_from_patches_preallocated(patches, output)
+        self.assertTrue(numpy.array_equal(reference, optimized))
 
     def test_rank_tie_uses_candidate_index(self) -> None:
         rows = [{"candidate_index": 3}, {"candidate_index": 1}, {"candidate_index": 2}]

@@ -296,6 +296,21 @@ def _blob_from_patches(patches: list[Any]) -> Any:
     return numpy.ascontiguousarray(blob, dtype=numpy.float32)
 
 
+def _blob_from_patches_preallocated(patches: list[Any], output: Any | None = None) -> Any:
+    """Preallocated NCHW normalization with the frozen arithmetic contract."""
+
+    numpy = _numpy()
+    array = numpy.asarray(patches, dtype=numpy.uint8)
+    expected_shape = (len(patches), 3, PATCH_OUTPUT_SIZE, PATCH_OUTPUT_SIZE)
+    if output is None or getattr(output, "shape", None) != expected_shape or output.dtype != numpy.float32:
+        output = numpy.empty(expected_shape, dtype=numpy.float32)
+    output[...] = numpy.transpose(array.astype(numpy.float32, copy=False), (0, 3, 1, 2))
+    output /= numpy.float32(255.0)
+    output -= numpy.float32(0.5)
+    output /= numpy.float32(0.5)
+    return numpy.ascontiguousarray(output, dtype=numpy.float32)
+
+
 def _rank_indices(scores: Any, rows: list[dict[str, Any]]) -> list[int]:
     return [
         index
