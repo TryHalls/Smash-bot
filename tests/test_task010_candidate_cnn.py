@@ -13,6 +13,7 @@ from smashbot_diagnostics.perception_candidate_cnn import (
     SEED,
     TOP_K,
     _first_pair,
+    _assert_fold_counts,
     _ranked_frames,
     _topk,
 )
@@ -28,6 +29,35 @@ class Task010CandidateCNNTests(unittest.TestCase):
         self.assertEqual(TOP_K, (1, 3, 8, 16, 32))
         self.assertEqual(EXPECTED_PARAMETER_COUNT, 54089)
         self.assertEqual(MAX_PATCH_CACHE_BYTES, 200 * 1024 * 1024)
+
+    def test_exact_fold_counts_are_not_tautological(self) -> None:
+        fit_rows = (
+            [{"label": "positive", "burst_id": "B_01"}] * 40
+            + [{"label": "positive", "burst_id": "C_01"}] * 63
+            + [{"label": "negative", "burst_id": "B_01"}] * 2194
+            + [{"label": "negative", "burst_id": "C_01"}] * 5734
+        )
+        validation_rows = [{"label": "positive", "burst_id": "A_01"}] * 20
+        self.assertEqual(_assert_fold_counts("fold_A", fit_rows, validation_rows, FOLDS["fold_A"]), {"positive": 103, "negative": 7928})
+        with self.assertRaises(RuntimeError):
+            _assert_fold_counts("fold_A", fit_rows[:-1], validation_rows, FOLDS["fold_A"])
+
+    def test_membership_rules_reject_negative_check_and_held_group(self) -> None:
+        fit_rows = (
+            [{"label": "positive", "burst_id": "B_01"}] * 40
+            + [{"label": "positive", "burst_id": "C_01"}] * 63
+            + [{"label": "negative", "burst_id": "B_01"}] * 2194
+            + [{"label": "negative", "burst_id": "C_01"}] * 5734
+        )
+        validation_rows = [{"label": "positive", "burst_id": "A_01"}] * 20
+        negative_check = list(fit_rows)
+        negative_check[0] = {"label": "positive", "burst_id": "C_NEG_01"}
+        with self.assertRaises(RuntimeError):
+            _assert_fold_counts("fold_A", negative_check, validation_rows, FOLDS["fold_A"])
+        held_group = list(fit_rows)
+        held_group[0] = {"label": "positive", "burst_id": "B_01", "train_group": "A"}
+        with self.assertRaises(RuntimeError):
+            _assert_fold_counts("fold_A", held_group, validation_rows, FOLDS["fold_A"])
 
     def test_folds_are_indivisible_and_exclude_same_train_group(self) -> None:
         self.assertEqual(FOLDS["fold_A"], {"dev_train": ("B_01", "C_01"), "train_groups": ("B", "C"), "validate": "A_01"})
@@ -61,6 +91,9 @@ class Task010CandidateCNNTests(unittest.TestCase):
         self.assertIn("def _torch", source)
         self.assertIn('"holdout_used": False', source)
         self.assertIn("_materialize_patch_store", source)
+        self.assertIn("shuffle_generator", source)
+        self.assertIn("randperm", source)
+        self.assertIn('"shuffle": True', source)
 
     def test_parameter_count_when_training_target_is_available(self) -> None:
         try:

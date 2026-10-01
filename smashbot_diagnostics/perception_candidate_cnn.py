@@ -13,6 +13,7 @@ import json
 import math
 import os
 import random
+import subprocess
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -34,6 +35,13 @@ MAX_PATCH_CACHE_BYTES = 200 * 1024 * 1024
 EXPECTED_DEV_SHA256 = "d8dc160113cd09660c0ed84263fc24d404d2e3e09d4b05c4aae3db6bc51b7335"
 EXPECTED_TRAIN_SHA256 = "3a0e1d205a03feddb8f8293d1122fa8b5b2a7e24837e887a3c02c16a58bc6138"
 EXPECTED_PARAMETER_COUNT = 54089
+TRAIN_GROUND_TRUTH_SHA256 = "d2f74c51117a7c496859c85a628fb64eba3f8428a5d4d9079a3e18028f94cd72"
+EXPECTED_FIT_COUNTS = {
+    "fold_A": {"positive": 103, "negative": 7928},
+    "fold_B": {"positive": 107, "negative": 8491},
+    "fold_C": {"positive": 106, "negative": 8663},
+}
+EXPECTED_VALIDATION_POSITIVES = {"fold_A": 20, "fold_B": 21, "fold_C": 19}
 
 FOLDS = {
     "fold_A": {"dev_train": ("B_01", "C_01"), "train_groups": ("B", "C"), "validate": "A_01"},
@@ -47,6 +55,21 @@ TRAIN_GROUP_BURSTS = {"A": "TRAIN_A", "B": "TRAIN_B", "C": "TRAIN_C"}
 
 class CandidateCNNError(RuntimeError):
     """Raised when the frozen C2d1 contract cannot be satisfied."""
+
+
+def _git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unavailable"
+    value = result.stdout.strip()
+    return value if value and "/" not in value and "\\" not in value else "unavailable"
 
 
 def _numpy() -> Any:
@@ -242,6 +265,27 @@ def _fit_rows(dev: dict[str, Any], train: dict[str, Any], fold: dict[str, Any]) 
     return combined
 
 
+def _assert_fold_counts(fold_name: str, fit_rows: list[dict[str, Any]], validation_rows: list[dict[str, Any]], fold: dict[str, Any]) -> dict[str, int]:
+    """Fail closed on the frozen fold counts and membership rules."""
+
+    counts = _parameter_rows(fit_rows)
+    expected = EXPECTED_FIT_COUNTS[fold_name]
+    if counts != expected:
+        raise CandidateCNNError(f"{fold_name} fit counts changed: expected {expected}, got {counts}")
+    validation_positive_count = sum(row.get("label") == "positive" for row in validation_rows)
+    expected_validation = EXPECTED_VALIDATION_POSITIVES[fold_name]
+    if validation_positive_count != expected_validation:
+        raise CandidateCNNError(
+            f"{fold_name} validation positive count changed: expected {expected_validation}, got {validation_positive_count}"
+        )
+    if any(row.get("burst_id") in NEGATIVE_BURSTS for row in fit_rows):
+        raise CandidateCNNError(f"{fold_name} includes DEV negative-check fitting rows")
+    held_groups = set(TRAIN_GROUP_BURSTS) - set(fold["train_groups"])
+    if any(row.get("train_group") in held_groups for row in fit_rows):
+        raise CandidateCNNError(f"{fold_name} includes held TRAIN group fitting rows")
+    return counts
+
+
 def _validation_rows(dev: dict[str, Any], burst: str) -> list[dict[str, Any]]:
     rows = [row for row in dev["candidates"] if row.get("burst_id") == burst]
     if not rows:
@@ -290,6 +334,7 @@ def _patch_tensor(torch: Any, numpy: Any, patches: Any) -> Any:
 
 
 def _train_model(torch: Any, nn: Any, numpy: Any, rows: list[dict[str, Any]], store: PatchStore) -> tuple[Any, float, float]:
+    code_commit = _git_commit()
     _freeze_seeds(torch)
     model = _make_model(torch, nn)
     model.train()
@@ -300,14 +345,17 @@ def _train_model(torch: Any, nn: Any, numpy: Any, rows: list[dict[str, Any]], st
     pos_weight = float(negatives) / float(positives)
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight], dtype=torch.float32))
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    shuffle_generator = torch.Generator(device="cpu")
+    shuffle_generator.manual_seed(SEED)
     labels = numpy.asarray([1.0 if row["label"] == "positive" else 0.0 for row in rows], dtype=numpy.float32)
     for _epoch in range(EPOCHS):
         model.train()
+        epoch_order = torch.randperm(len(rows), generator=shuffle_generator, device="cpu").tolist()
         for start in range(0, len(rows), BATCH_SIZE):
-            batch_rows = rows[start : start + BATCH_SIZE]
+            batch_rows = [rows[index] for index in epoch_order[start : start + BATCH_SIZE]]
             patches = numpy.stack([store.get(row["candidate_id"]) for row in batch_rows], axis=0)
             inputs = _patch_tensor(torch, numpy, patches)
-            target = torch.from_numpy(labels[start : start + len(batch_rows)]).reshape(-1, 1)
+            target = torch.from_numpy(numpy.asarray([1.0 if row["label"] == "positive" else 0.0 for row in batch_rows], dtype=numpy.float32)).reshape(-1, 1)
             optimizer.zero_grad(set_to_none=True)
             loss = criterion(model(inputs), target)
             loss.backward()
@@ -454,9 +502,7 @@ def _fold_report(
 ) -> tuple[dict[str, Any], Any]:
     fit_rows = _fit_rows(dev, train, fold)
     validation_rows = _validation_rows(dev, str(fold["validate"]))
-    fit_counts = _parameter_rows(fit_rows)
-    if fit_counts != {"positive": fit_counts["positive"], "negative": fit_counts["negative"]}:
-        raise CandidateCNNError("invalid fit counts")
+    fit_counts = _assert_fold_counts(fold_name, fit_rows, validation_rows, fold)
     first_model, first_loss, pos_weight = _train_model(torch, nn, numpy, fit_rows, store)
     first_hash = _state_hash(first_model)
     second_model, second_loss, second_weight = _train_model(torch, nn, numpy, fit_rows, store)
@@ -552,8 +598,8 @@ def run_candidate_cnn(
         "status": "PASS_CNN_LOBO" if semantics and determinism and runtime_pass else ("PASS_SEMANTICS_RUNTIME_PENDING_EXPORT" if semantics and determinism else "FAIL_CNN_SEMANTICS" if determinism else "STOP_DETERMINISM"),
         "gate": "C2d1",
         "holdout_used": False,
-        "config": {"input": "64x64 RGB", "normalization": "(pixel/255 - 0.5)/0.5", "architecture": "Conv3->8, Conv8->16, Conv16->24; each 3x3 pad1 ReLU MaxPool2; Linear1536->32 ReLU Linear32->1", "parameter_count": EXPECTED_PARAMETER_COUNT, "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "optimizer": "Adam", "lr": LEARNING_RATE, "weight_decay": WEIGHT_DECAY, "loss": "BCEWithLogitsLoss", "num_workers": 0, "threads": 1, "shuffle": False, "augmentation": False, "pretrained": False},
-        "provenance": {"dev_manifest": "data/task010/candidate_manifest_dev.json", "dev_manifest_sha256": EXPECTED_DEV_SHA256, "train_manifest": "data/task010/candidate_manifest_train.json", "train_manifest_sha256": EXPECTED_TRAIN_SHA256, "ffmpeg": Path(ffmpeg).name, "holdout_loaded": False},
+        "config": {"input": "64x64 RGB", "normalization": "(pixel/255 - 0.5)/0.5", "architecture": "Conv3->8, Conv8->16, Conv16->24; each 3x3 pad1 ReLU MaxPool2; Linear1536->32 ReLU Linear32->1", "parameter_count": EXPECTED_PARAMETER_COUNT, "seed": SEED, "epochs": EPOCHS, "batch_size": BATCH_SIZE, "optimizer": "Adam", "lr": LEARNING_RATE, "weight_decay": WEIGHT_DECAY, "loss": "BCEWithLogitsLoss", "num_workers": 0, "threads": 1, "shuffle": True, "shuffle_seed": SEED, "augmentation": False, "pretrained": False},
+        "provenance": {"dev_manifest": "data/task010/candidate_manifest_dev.json", "dev_manifest_sha256": EXPECTED_DEV_SHA256, "train_manifest": "data/task010/candidate_manifest_train.json", "train_manifest_sha256": EXPECTED_TRAIN_SHA256, "train_ground_truth_sha256": TRAIN_GROUND_TRUTH_SHA256, "ffmpeg": Path(ffmpeg).name, "torch_version": str(torch.__version__), "code_commit_used_for_training": code_commit, "holdout_loaded": False},
         "dataset_cache": {"uint8_patch_cache_bytes": store.bytes_used, "uint8_patch_cache_limit_bytes": MAX_PATCH_CACHE_BYTES, "float32_patch_cache": False, "persistent_png_patches": False},
         "folds": fold_reports,
         "global": {"positive_topk": topk_global, "positive_rank": _summary(positive_ranks), "mrr": sum(1.0 / rank for rank in positive_ranks) / max(1, len(positive_ranks)), "first_acquisition_pairs": first_pairs, "first_pair_gate": first_pair_gate, "top8_by_burst": top8_by_burst, "semantic_gates_pass": semantics, "runtime_p95_ms": runtime_p95, "runtime_gate_pass": runtime_pass},
@@ -566,4 +612,5 @@ def run_candidate_cnn(
     output.mkdir(parents=True, exist_ok=True)
     (output / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (output / "summary.txt").write_text("\n".join(["Task 010 Gate C2d1 frozen tiny-CNN", f"Verdict: {report['status']}", f"Semantic gates: {semantics}", f"Runtime p95 ms: {runtime_p95}", f"Determinism: {determinism}", "HOLDOUT used: false"]) + "\n", encoding="utf-8")
+    Path("data/task010/cnn_lobo_report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return report
