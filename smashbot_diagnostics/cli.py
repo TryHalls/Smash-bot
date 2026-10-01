@@ -30,6 +30,7 @@ from .perception_component_topology import ComponentTopologyError, run_component
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
+from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -327,6 +328,14 @@ def build_parser() -> argparse.ArgumentParser:
     multi_hypothesis.add_argument("--ffmpeg", default="ffmpeg")
     multi_hypothesis.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
     multi_hypothesis.add_argument("--output-base", type=Path, default=Path("artifacts/task009/multi_hypothesis_feasibility"))
+    v2_beam = subparsers.add_parser(
+        "perception-v2-beam-feasibility",
+        help="reconstruct raw-yellow beam feasibility from existing reports only",
+    )
+    v2_beam.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
+    v2_beam.add_argument("--area-report", type=Path, default=Path("artifacts/task009/multi_hypothesis_feasibility/report.json"))
+    v2_beam.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    v2_beam.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v2_beam_feasibility"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1533,6 +1542,20 @@ def _perception_multi_hypothesis(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_v2_beam(args: argparse.Namespace) -> int:
+    report = run_v2_beam_feasibility(
+        v1_report_path=args.v1_report,
+        area_report_path=args.area_report,
+        snapshot_path=args.snapshot,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Selected rule: {report['decision']['selected_rule']}")
+    print(f"Recommended beam width: {report['decision']['recommended_beam_width']}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1586,8 +1609,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_v1_baseline(args)
         if args.command == "perception-multi-hypothesis-feasibility":
             return _perception_multi_hypothesis(args)
+        if args.command == "perception-v2-beam-feasibility":
+            return _perception_v2_beam(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, ValueError) as exc:
         parser.error(str(exc))
     return 2
