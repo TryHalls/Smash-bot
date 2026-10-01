@@ -27,6 +27,7 @@ from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .perception_component_topology import ComponentTopologyError, run_component_topology
+from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -290,6 +291,15 @@ def build_parser() -> argparse.ArgumentParser:
     topology.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     topology.add_argument("--ffmpeg", default="ffmpeg")
     topology.add_argument("--output-base", type=Path, default=Path("artifacts/task009/component_topology"))
+    feasibility = subparsers.add_parser(
+        "perception-candidate-feasibility",
+        help="evaluate fixed candidate families on the frozen DEV split only",
+    )
+    feasibility.add_argument("--snapshot", type=Path, required=True)
+    feasibility.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    feasibility.add_argument("--ffmpeg", default="ffmpeg")
+    feasibility.add_argument("--topology-report", type=Path, default=Path("artifacts/task009/component_topology/report.json"))
+    feasibility.add_argument("--output-base", type=Path, default=Path("artifacts/task009/candidate_feasibility"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1447,6 +1457,22 @@ def _perception_component_topology(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_feasibility(args: argparse.Namespace) -> int:
+    report = run_candidate_feasibility(
+        args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        topology_report=args.topology_report,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Families CSV: {args.output_base / 'families.csv'}")
+    print(f"Ranking CSV: {args.output_base / 'ranking.csv'}")
+    print(f"Gate families >=95% @20: {report['decision_gate']['families_reaching_target']}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1492,8 +1518,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_dev_diagnose(args)
         if args.command == "perception-component-topology":
             return _perception_component_topology(args)
+        if args.command == "perception-candidate-feasibility":
+            return _perception_candidate_feasibility(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, ValueError) as exc:
         parser.error(str(exc))
     return 2
