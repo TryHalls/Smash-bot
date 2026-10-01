@@ -31,6 +31,7 @@ from .perception_candidate_feasibility import CandidateFeasibilityError, run_can
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
+from .perception_appearance_geometry import AppearanceGeometryError, run_appearance_geometry
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -336,6 +337,16 @@ def build_parser() -> argparse.ArgumentParser:
     v2_beam.add_argument("--area-report", type=Path, default=Path("artifacts/task009/multi_hypothesis_feasibility/report.json"))
     v2_beam.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
     v2_beam.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v2_beam_feasibility"))
+    appearance = subparsers.add_parser(
+        "perception-appearance-geometry",
+        help="evaluate candidate-centric appearance geometry on DEV A/B/C only",
+    )
+    appearance.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    appearance.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    appearance.add_argument("--ffmpeg", default="ffmpeg")
+    appearance.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
+    appearance.add_argument("--v2-report", type=Path, default=Path("artifacts/task009/v2_beam_feasibility/report.json"))
+    appearance.add_argument("--output-base", type=Path, default=Path("artifacts/task009/appearance_geometry"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1556,6 +1567,23 @@ def _perception_v2_beam(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_appearance_geometry(args: argparse.Namespace) -> int:
+    report = run_appearance_geometry(
+        snapshot_path=args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        v1_report_path=args.v1_report,
+        v2_report_path=args.v2_report,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Appearance geometry gate: {report['decision']['status']}")
+    print(f"Selected rule: {report['decision']['selected_rule']}")
+    print(f"Recommended beam: {report['decision']['recommended_beam']}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1611,8 +1639,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_multi_hypothesis(args)
         if args.command == "perception-v2-beam-feasibility":
             return _perception_v2_beam(args)
+        if args.command == "perception-appearance-geometry":
+            return _perception_appearance_geometry(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
         parser.error(str(exc))
     return 2
