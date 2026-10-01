@@ -66,6 +66,7 @@ def _summary(values: Iterable[float]) -> dict[str, Any]:
         "count": len(data),
         "mean": sum(data) / len(data) if data else None,
         "p50": percentile(data, 50),
+        "p75": percentile(data, 75),
         "p95": percentile(data, 95),
         "min": min(data) if data else None,
         "max": max(data) if data else None,
