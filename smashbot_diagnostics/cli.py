@@ -22,6 +22,7 @@ from .perception import (
     validate_capture_duration,
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
+from .perception_train_subset import TrainSubsetError, build_train_subset
 from .perception_benchmark import benchmark_report, write_benchmark_report
 from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
@@ -263,6 +264,18 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("--annotations", type=Path, required=True)
     label.add_argument("--port", type=_nonnegative_int, default=0)
     label.add_argument("--read-only", action="store_true", help="serve labels without enabling save endpoints")
+    label.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"), help="Task 008 root for TRAIN on-demand cache")
+    label.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable for TRAIN on-demand cache")
+    label.add_argument("--cache-dir", type=Path, default=Path("artifacts/task010/train_annotation/cache"), help="disposable one-source TRAIN cache")
+
+    train_subset = subparsers.add_parser(
+        "perception-train-subset",
+        help="generate the deterministic Task 010 TRAIN subset and unlabeled annotation skeleton",
+    )
+    train_subset.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    train_subset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    train_subset.add_argument("--output", type=Path, default=Path("data/task010/train_subset.json"))
+    train_subset.add_argument("--annotations-output", type=Path, default=Path("artifacts/task010/train_annotation/annotations.json"))
 
     benchmark = subparsers.add_parser(
         "perception-benchmark",
@@ -1461,7 +1474,33 @@ def _perception_subset(args: argparse.Namespace) -> int:
 
 
 def _perception_label(args: argparse.Namespace) -> int:
-    run_annotation_ui(args.manifest, args.annotations, port=args.port, read_only=args.read_only)
+    run_annotation_ui(
+        args.manifest,
+        args.annotations,
+        port=args.port,
+        read_only=args.read_only,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        cache_dir=args.cache_dir,
+    )
+    return 0
+
+
+def _perception_train_subset(args: argparse.Namespace) -> int:
+    try:
+        manifest = build_train_subset(
+            repo_root=Path.cwd(),
+            snapshot_path=args.snapshot,
+            task008_root=args.task008_root,
+            output_path=args.output,
+            annotations_path=args.annotations_output,
+        )
+    except TrainSubsetError as exc:
+        print(f"TRAIN subset error: {exc}")
+        return 2
+    print(f"Subset: {args.output}")
+    print(f"Annotations: {args.annotations_output}")
+    print(f"Records: {len(manifest['records'])}")
     return 0
 
 
@@ -1686,6 +1725,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_subset(args)
         if args.command == "perception-label":
             return _perception_label(args)
+        if args.command == "perception-train-subset":
+            return _perception_train_subset(args)
         if args.command == "perception-benchmark":
             return _perception_benchmark(args)
         if args.command == "perception-dev-baseline":

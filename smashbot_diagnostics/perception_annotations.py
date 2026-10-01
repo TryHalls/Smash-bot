@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from copy import deepcopy
@@ -173,8 +174,8 @@ def validate_annotation_record(
         require_schema_version(record, kind="annotation record")
     except SchemaError as exc:
         raise AnnotationError(str(exc)) from exc
-    if record["split"] not in {"dev", "holdout"}:
-        raise AnnotationError("split must be dev or holdout")
+    if record["split"] not in {"dev", "holdout", "train"}:
+        raise AnnotationError("split must be dev, holdout, or train")
     if record["clip"] not in {"A", "B", "C"}:
         raise AnnotationError("clip must be A, B, or C")
     if not isinstance(record["source_run"], str) or not record["source_run"]:
@@ -532,6 +533,50 @@ def _extract_source_frames(
         return commands
 
 
+class TrainSourceCache:
+    """Materialize at most one TRAIN source in a disposable PNG cache."""
+
+    def __init__(self, cache_dir: Path, task008_root: Path, ffmpeg: str = "ffmpeg"):
+        self.cache_dir = Path(cache_dir).resolve()
+        self.task008_root = Path(task008_root).resolve()
+        self.ffmpeg = ffmpeg
+        self.current_source: str | None = None
+        self._paths: dict[str, Path] = {}
+
+    def clear(self) -> None:
+        if self.cache_dir.exists():
+            shutil.rmtree(self.cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.current_source = None
+        self._paths = {}
+
+    def ensure(self, source_run: str, records: list[dict[str, Any]]) -> None:
+        if len(records) > 60:
+            raise AnnotationError("TRAIN source cache may contain at most 60 images")
+        expected = {record["record_id"] for record in records}
+        if self.current_source == source_run and set(self._paths) == expected and all(path.is_file() for path in self._paths.values()):
+            return
+        self.clear()
+        run_dir = self.task008_root / source_run
+        source_h264 = run_dir / "capture.h264"
+        if not source_h264.is_file():
+            raise AnnotationError(f"missing TRAIN source capture: {source_h264}")
+        cache_records = [dict(record, image_path=f"images/{record['record_id']}.png") for record in records]
+        _extract_source_frames(self.ffmpeg, source_h264, cache_records, self.cache_dir / "images")
+        paths = {record["record_id"]: self.cache_dir / "images" / f"{record['record_id']}.png" for record in records}
+        if len(paths) != len(records) or not all(path.is_file() for path in paths.values()):
+            raise AnnotationError("TRAIN source cache extraction is incomplete")
+        self.current_source = source_run
+        self._paths = paths
+
+    def path_for(self, source_run: str, record_id: str, records: list[dict[str, Any]]) -> Path:
+        self.ensure(source_run, records)
+        try:
+            return self._paths[record_id]
+        except KeyError as exc:
+            raise AnnotationError(f"record is absent from TRAIN source cache: {record_id}") from exc
+
+
 def build_ground_truth_subset(
     *,
     repo_root: Path,
@@ -647,13 +692,13 @@ def build_ground_truth_subset(
     return subset
 
 
-def _html(*, read_only: bool = False) -> str:
+def _html(*, read_only: bool = False, dataset_role: str | None = None) -> str:
     """Return the explicit, dependency-free local annotation workspace."""
 
     template = """<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Task 009 — Ground Truth</title>
+<title>__TITLE__</title>
 <style>
 :root{color-scheme:light;--ink:#18212b;--muted:#64748b;--line:#d7dee8;--blue:#155eef;--green:#087443;--amber:#a15c00;--red:#b42318}
 *{box-sizing:border-box}body{margin:0;padding:18px;color:var(--ink);background:#f7f9fc;font:15px/1.4 system-ui,sans-serif}
@@ -684,7 +729,7 @@ progress{width:min(500px,65vw);height:13px}.progress-text{font-weight:700}.layou
 .temporal{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;color:var(--muted);font-size:.84rem}.temporal strong{display:block;color:var(--ink)}
 @media(max-width:850px){body{padding:10px}.layout{grid-template-columns:1fr}.panel{position:static}#frame{max-height:65vh}}
 </style></head><body><main class="app">
-<header class="header"><div class="eyebrow">TASK 009 — Ground Truth</div>
+<header class="header"><div class="eyebrow">__EYEBROW__</div>
 <div class="frame-line"><span id="frame-number">Frame — / —</span><span id="context-line"></span><span id="label-badge" class="badge pending">UNLABELED</span></div>
 <div class="progress-wrap"><progress id="progress" max="1" value="0"></progress><span id="progress-text">0 / 0 labeled</span></div>
 <div id="warning" class="warning">This frame is incomplete.<button onclick="stayHere()">Stay</button><button onclick="skipAnyway()">Skip anyway</button></div></header>
@@ -714,7 +759,13 @@ document.getElementById('frame').addEventListener('click',event=>{if(READ_ONLY)r
 function hideWarning(){document.getElementById('warning').style.display='none';pendingNavigation=null;}function stayHere(){hideWarning();}function skipAnyway(){const delta=pendingNavigation;hideWarning();if(delta)doMove(delta);}function requestMove(delta){if(delta>0&&needsNavigationWarning(state.record)){pendingNavigation=delta;document.getElementById('warning').style.display='block';return;}doMove(delta);}function doMove(delta){return fetch('/state?move='+delta).then(r=>r.json()).then(s=>{state=s;render();});}function nextUnlabeled(){return fetch('/state?next_unlabeled=1').then(r=>r.json()).then(s=>{state=s;render();});}
 document.addEventListener('keydown',event=>{if(event.target.tagName==='INPUT'||event.target.tagName==='TEXTAREA')return;const key=event.key.toLowerCase();if(event.key==='ArrowLeft')requestMove(-1);else if(event.key==='ArrowRight')requestMove(1);else if(key==='v')setVisible(true);else if(key==='n')setVisible(false);else if(key==='a')setActive(state.record.active_rally===null?true:!state.record.active_rally);else if(key==='o')setFlag('occluded');else if(key==='m')setFlag('ambiguous');else if(key==='u')nextUnlabeled();});load();
 </script></body></html>"""
-    return template.replace("__DISABLED__", " disabled" if read_only else "").replace("__READONLY__", "true" if read_only else "false")
+    title = "TASK 010 — TRAIN Labels" if dataset_role == "train" else "TASK 009 — Ground Truth"
+    return (
+        template.replace("__DISABLED__", " disabled" if read_only else "")
+        .replace("__READONLY__", "true" if read_only else "false")
+        .replace("__TITLE__", title.title() if dataset_role == "train" else title)
+        .replace("__EYEBROW__", title)
+    )
 
 
 class _AnnotationHandler(BaseHTTPRequestHandler):
@@ -796,6 +847,9 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         port: int = 0,
         *,
         read_only: bool = False,
+        task008_root: Path | None = None,
+        ffmpeg: str = "ffmpeg",
+        cache_dir: Path | None = None,
     ):
         if host != "127.0.0.1":
             raise AnnotationError("annotation UI must bind exclusively to 127.0.0.1")
@@ -803,6 +857,7 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         self.annotations_path = Path(annotations_path).resolve()
         self.read_only = read_only
         self.manifest = load_json_with_recovery(self.manifest_path)
+        self.dataset_role = self.manifest.get("dataset_role")
         self.width = int(self.manifest.get("width", FRAME_WIDTH))
         self.height = int(self.manifest.get("height", FRAME_HEIGHT))
         self.records = list(self.manifest["records"])
@@ -817,7 +872,15 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             for field in ("split", "clip", "source_run", "burst_id", "frame_index", "pts_us"):
                 if annotation_record.get(field) != manifest_record.get(field):
                     raise AnnotationError(f"annotation/subset identity mismatch for {record_id}: {field}")
+            for field in ("dataset_role", "train_group"):
+                if field in manifest_record and annotation_record.get(field) != manifest_record.get(field):
+                    raise AnnotationError(f"annotation/subset identity mismatch for {record_id}: {field}")
         self._annotation_by_id = annotation_by_id
+        self._train_cache: TrainSourceCache | None = None
+        if self.dataset_role == "train":
+            if task008_root is None or cache_dir is None:
+                raise AnnotationError("TRAIN annotation UI requires --task008-root and --cache-dir")
+            self._train_cache = TrainSourceCache(cache_dir, task008_root, ffmpeg)
         self._cursor = next(
             (
                 index
@@ -894,6 +957,13 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
 
     def image_for(self, record_id: str) -> Path:
         record = self._by_id[record_id]
+        if self.dataset_role == "train":
+            if self._train_cache is None:
+                raise AnnotationError("TRAIN source cache is not configured")
+            source_records = [item for item in self.records if item.get("source_run") == record.get("source_run")]
+            return self._train_cache.path_for(record["source_run"], record_id, source_records)
+        if "image_path" not in record:
+            raise OSError("manifest record has no image_path")
         path = (self.manifest_path.parent / record["image_path"]).resolve()
         images_root = (self.manifest_path.parent / "images").resolve()
         try:
@@ -968,8 +1038,26 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         return self.state()
 
 
-def run_annotation_ui(manifest_path: Path, annotations_path: Path, *, port: int = 0, read_only: bool = False) -> None:
-    server = AnnotationHTTPServer(manifest_path, annotations_path, host="127.0.0.1", port=port, read_only=read_only)
+def run_annotation_ui(
+    manifest_path: Path,
+    annotations_path: Path,
+    *,
+    port: int = 0,
+    read_only: bool = False,
+    task008_root: Path | None = None,
+    ffmpeg: str = "ffmpeg",
+    cache_dir: Path | None = None,
+) -> None:
+    server = AnnotationHTTPServer(
+        manifest_path,
+        annotations_path,
+        host="127.0.0.1",
+        port=port,
+        read_only=read_only,
+        task008_root=task008_root,
+        ffmpeg=ffmpeg,
+        cache_dir=cache_dir,
+    )
     print(f"Annotation UI: http://127.0.0.1:{server.server_address[1]}/", flush=True)
     try:
         server.serve_forever()
