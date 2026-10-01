@@ -115,9 +115,9 @@ If V4L2 is absent, the documented raw H.264 fallback is selected automatically. 
 
 ## Task 009: offline shuttle-perception dataset (host-only)
 
-Task 009 is intentionally an annotation and evaluation foundation, not a
-detector or tracker. It uses only the existing Task 008 captures and never
-accesses the phone. The frozen candidate subset is exactly 136 records:
+Task 009 is complete and host-only. It uses only the existing Task 008 captures
+and never accesses the phone. The frozen ground truth contains exactly 136
+records:
 126 frames from all six 21-frame temporal bursts (`A_01`, `A_02`, `B_01`,
 `B_02`, `C_01`, `C_02`) plus the ten preselected frames from the older C run
 `20260930T192911Z`. The deterministic split is complete bursts: `A_01`,
@@ -126,7 +126,8 @@ accesses the phone. The frozen candidate subset is exactly 136 records:
 No burst is split across partitions and no labels are inferred.
 
 The candidate manifest and editable annotation document live under the
-gitignored path `artifacts/task009/ground_truth/`:
+gitignored path `artifacts/task009/ground_truth/`; the compact reproducible
+snapshot is tracked at `data/task009/ground_truth.json`:
 
 ```text
 subset.json
@@ -159,17 +160,19 @@ python3 -m smashbot_diagnostics perception-label \
 Open the printed `http://127.0.0.1:<port>/` URL. The CLI and annotation
 workflow do not import OpenCV or NumPy.
 
-### Exact offline frames and benchmark scaffold
+### Perception implementation and benchmark
 
 `smashbot_diagnostics/perception_frames.py` provides bounded-memory FFmpeg
 pipe streaming for sequential, selected, and inclusive frame ranges. It
 uses `packets.json` for frame index/PTS identity, rejects short/extra output
 and decoder failures, and terminates the child process on early cleanup.
-`perception_models.py` contains stable data contracts for future registration,
-candidate, observation, prediction, and track stages; it contains no
-perception algorithm.
+`perception_models.py`, `perception_registration.py`, `perception_detector.py`,
+`perception_association.py`, and `perception_tracker.py` provide the host-side
+registration, candidate, observation, prediction, and tracking paths. The
+benchmark consumes exact FFmpeg frame-index/PTS identity and keeps measured
+observations distinct from predictions.
 
-`perception_metrics.py` defines baseline-only contracts for recall at 5/10/20
+`perception_metrics.py` defines the frozen contracts for recall at 5/10/20
 pixels, matched localization p50/p95, negative-frame false-positive rate and
 FP/frame, longest consecutive miss burst, track fragmentation, reacquisition
 frames/PTS, registration success/residual, algorithm/e2e latency, and
@@ -182,20 +185,16 @@ python3 -m smashbot_diagnostics perception-benchmark \
   --split dev
 ```
 
-No PASS/FAIL thresholds are fixed yet; the first benchmark purpose is a real
-baseline after human annotation. The optional vision dependency was not
-installed on this host because the system Python has no `ensurepip`/pip
-bootstrap and no `uv`, `virtualenv`, `pip`, or `pip3` executable was available.
-The stdlib annotation, frame-stream, and benchmark scaffolding remain usable;
-installing a local Python environment with wheel support is a separate human
-toolchain action. No global packages were changed.
-The exact proposed unblock command and deferred synthetic smoke test are in
+The optional `[perception]` extra is installed and evaluated in the isolated
+repo `.venv`: NumPy and `opencv-python-headless==4.14.0.94` passed the required
+synthetic API smoke tests. The core diagnostics package remains usable without
+that optional extra. The exact environment plan is in
 [the Python/OpenCV plan](docs/task009-python-opencv-plan.md).
 
 Task 009 invariants are: framed packet count equals decoded-frame count,
 frame index/PTS identity comes from the device-derived metadata, labels are
 human-only, unlabeled records are never negatives, and the frozen dev/holdout
-split is never mixed for tuning. The future tracker contract keeps
+split is never mixed for tuning. The implemented tracker keeps
 `observation != prediction`, derives `dt` from device PTS, and bounds
 coasting. See [the Task 010 readiness boundary](docs/task010-readiness.md) for
 the next layer's timestamp, uncertainty, frame-age and prediction contract.
@@ -204,9 +203,8 @@ The host-only tracker core in `perception_tracker.py` is an
 `UNCALIBRATED` constant-velocity alpha-beta model. It gates observations by
 Euclidean distance, decays confidence during bounded coasting, supports only
 short reacquisition, and fails closed on duplicate/backwards or excessive-gap
-device PTS. `perception_association.py` performs the same detector-independent
-geometric gate and explicit weighted ranking for future candidates; its
-weights are not tuned from gameplay. Synthetic tests cover misses,
+device PTS. `perception_association.py` performs the detector-independent
+geometric gate and explicit ranking. Synthetic tests cover misses,
 distractors, crossing candidates, irregular cadence and loss/reinitialization.
 
 Benchmark reports carry schema/tool/input hashes, split and label counts,
@@ -225,9 +223,28 @@ identities and reports only deltas. The annotation UI shows progress and split,
 supports `←/→`, `V`, `N`, `A`, `O`, `M`, and `U` shortcuts, and has an optional
 `--read-only` review mode.
 
-`perception_timing.py` provides a bounded `monotonic_ns()` stage timer for
-future decode/registration/candidate/tracker measurements. It reports host
-intervals only; it never subtracts device PTS from host monotonic time.
+`perception_timing.py` provides bounded host-only stage timing for
+decode/registration/candidate/tracker measurements; it never subtracts device
+PTS from host monotonic time.
+
+### Final Task 009 result
+
+The frozen acceptance gates are recall@20 >= 0.90, recall@10 >= 0.80,
+localization p50/p95 <=10/20 px, negative FP rate 0/5, miss burst <=2 frames,
+reacquisition <=2 frames and <=70 ms, registration success >=0.80 with
+residual p95 <=4 px, and algorithm p95 <=33 ms at >=30 FPS.
+
+Yellow proposals retain a high DEV ceiling (61/63, 96.83% @20), but single-
+hypothesis acquisition, temporal beam ranking, and candidate-centric
+appearance-geometry ranking all fail to keep the correct first-acquisition
+hypothesis within beam 32 across A/B/C. The heuristic gate is therefore
+`FAIL`, while the proposal representation remains useful.
+
+Task 010 / Issue #18 is the next architecture: evaluate a learned
+candidate-centric scorer/ranker over native-resolution yellow proposal patches,
+preserving the existing tracker and reserving a full-frame detector as a
+fallback. HOLDOUT remains untouched and reserved for that evaluation. See
+[the final Task 009 report](docs/task009-final.md).
 
 ## Task 003: real-time observe→act loop
 
@@ -647,9 +664,12 @@ framing/CONFIG/PTS lifecycle, packet/frame cardinality, fail-closed cleanup,
 exact AU-index sampling, and artifact metadata. No Task 002–007 transport or
 protocol test was removed as a shortcut.
 
-## Task 009: perception characterization and shuttle-tracking baseline (research)
+## Historical Task 009 proposal (superseded, 2026-10-01)
 
-This is a design note only; it does not implement perception or tracking.
+The following paragraph records the original pre-capture research proposal. It
+is historical only; the final Task 009 status, implemented perception paths,
+frozen gates, and heuristic FAIL are documented in the current Task 009 section
+above and in [the final report](docs/task009-final.md).
 
 Known facts are limited to the accepted pipeline and historical evidence:
 portrait captures have historically been 864×1920, the source can provide up

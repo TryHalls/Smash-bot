@@ -31,14 +31,30 @@ No se incluyen PNG, H.264, CSV diagnósticos grandes, `.venv` ni paths absolutos
 
 **MEASURED RESULT.** Equivalence gate PASS en los 68 frames DEV: candidatos raw, candidatos retenidos, scores y asociación permanecieron equivalentes.
 
+The paired values below are the accepted equivalence-gate run recorded in the
+Issue #17 review for commit `14a71211a3c82d449f3dfb652d39ae0ae7b1ebe0`.
+
 | `component_scoring_ms` | Antes | Después |
 |---|---:|---:|
-| Media | 776.003 | 12.540 |
-| p50 | 735.945 | 10.358 |
-| p95 | 1,152.207 | 23.710 |
-| Máximo | no congelado en snapshot | 64.921 |
+| Media | 766.147 | 8.166 |
+| p50 | 741.156 | 6.610 |
+| p95 | 1,155.177 | 16.128 |
+| Máximo | 1,371.271 | 20.901 |
 
-La reducción observada fue aproximadamente 61.9× en media, 71.0× en p50 y 48.6× en p95. El runtime global todavía no cumplía el gate de producción; esta optimización sólo eliminó un hot path sin alterar la semántica.
+| `total_algorithm_ms` | Antes | Después |
+|---|---:|---:|
+| Media | 892.194 | 114.649 |
+| p50 | 884.761 | 116.063 |
+| p95 | 1,287.206 | 163.245 |
+
+La reducción observada en el scoring fue aproximadamente 93.8× en media,
+112.1× en p50 y 71.6× en p95. El runtime global también mejoró, pero todavía
+no cumplía el gate de producción; esta optimización sólo eliminó un hot path
+sin alterar la semántica.
+
+Los valores `776.003 → 12.540` de una ejecución diagnóstica posterior no se
+mezclan con este before/after: no son el par diseñado para el equivalence gate
+y por eso no forman parte de la tabla final.
 
 ## Representación yellow
 
