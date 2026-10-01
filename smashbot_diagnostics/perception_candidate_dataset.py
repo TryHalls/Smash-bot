@@ -21,7 +21,8 @@ from .perception_detector import BASELINE_DETECTOR
 from .perception_metrics import percentile
 from .perception_models import ShuttleCandidate
 from .perception_snapshot import SnapshotError, validate_snapshot
-from .perception_v1 import _iter_dev_frames, _load_snapshot, yellow_candidates
+from .perception_train_ground_truth import TrainGroundTruthError, validate_train_ground_truth_snapshot
+from .perception_v1 import _iter_dev_frames, _iter_records_frames, _load_snapshot, yellow_candidates
 
 
 TASK010_SCHEMA_VERSION = 1
@@ -33,6 +34,12 @@ IGNORE_RADIUS_PX = 30.0
 ALLOWED_ACTIVE_BURSTS = ("A_01", "B_01", "C_01")
 ALLOWED_NEGATIVE_BURSTS = ("C_NEG_01", "C_NEG_03", "C_NEG_05", "C_NEG_07", "C_NEG_09")
 ALLOWED_BURSTS = ALLOWED_ACTIVE_BURSTS + ALLOWED_NEGATIVE_BURSTS
+TRAIN_GROUPS = ("A", "B", "C")
+TRAIN_SOURCE_RUNS = {
+    "A": "20260930T191744Z",
+    "B": "20260930T192742Z",
+    "C": "20260930T193433Z",
+}
 
 
 class CandidateDatasetError(RuntimeError):
@@ -123,6 +130,27 @@ def _select_gate_b_records(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(selected, key=lambda record: (record["source_run"], record["burst_id"], int(record["frame_index"])))
 
 
+def _select_train_records(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate and select only the frozen TRAIN snapshot before decoding."""
+
+    try:
+        validate_train_ground_truth_snapshot(snapshot)
+    except TrainGroundTruthError as exc:
+        raise CandidateDatasetError(f"invalid TRAIN ground-truth snapshot: {exc}") from exc
+    records = list(snapshot.get("records", []))
+    if len(records) != 180 or any(record.get("split") != "train" for record in records):
+        raise CandidateDatasetError("TRAIN manifest must contain exactly 180 TRAIN records")
+    if any(record.get("train_group") not in TRAIN_GROUPS for record in records):
+        raise CandidateDatasetError("TRAIN snapshot contains an unknown train_group")
+    for group in TRAIN_GROUPS:
+        group_records = [record for record in records if record.get("train_group") == group]
+        if len(group_records) != 60:
+            raise CandidateDatasetError(f"TRAIN group {group} must contain exactly 60 records")
+        if any(record.get("source_run") != TRAIN_SOURCE_RUNS[group] for record in group_records):
+            raise CandidateDatasetError(f"TRAIN group {group} mixes source runs")
+    return sorted(records, key=lambda record: (record["source_run"], record["train_group"], int(record["frame_index"])))
+
+
 def _spatial_order(candidates: Iterable[ShuttleCandidate]) -> list[ShuttleCandidate]:
     """Order candidates without consulting legacy confidence/ranking fields."""
 
@@ -190,6 +218,8 @@ def _distance(candidate: ShuttleCandidate, record: dict[str, Any]) -> float | No
 def _label_candidates(
     candidates: list[ShuttleCandidate],
     record: dict[str, Any],
+    *,
+    train_invisible_as_negative: bool = False,
 ) -> tuple[list[str], list[bool], list[float | None], str, str]:
     """Label one frame after proposals/crops exist.
 
@@ -205,6 +235,8 @@ def _label_candidates(
         and shuttle.get("ambiguous") is False
         and shuttle.get("occluded") is False
     )
+    if train_invisible_as_negative and shuttle.get("visible") is False and shuttle.get("ambiguous") is False:
+        return ([("negative")] * len(candidates), [True] * len(candidates), [None] * len(candidates), "negative_state", "train")
     if negative_state:
         return (["negative"] * len(candidates), [False] * len(candidates), [None] * len(candidates), "negative_state", "dev_negative_check")
     distances = [_distance(candidate, record) for candidate in candidates]
@@ -254,6 +286,10 @@ def _candidate_row(
     distance: float | None,
     padding: dict[str, int],
     patch_hash: str,
+    *,
+    dataset_role: str | None = None,
+    train_group: str | None = None,
+    include_diagnostics: bool = True,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "record_id": record["record_id"],
@@ -266,11 +302,6 @@ def _candidate_row(
         "x": float(candidate.x),
         "y": float(candidate.y),
         "area_px": float(candidate.area_px) if candidate.area_px is not None else None,
-        "confidence": float(candidate.confidence),
-        "body_score": float(candidate.body_score),
-        "motion_score": float(candidate.motion_score),
-        "trail_score": float(candidate.trail_score),
-        "shape_score": float(candidate.shape_score) if candidate.shape_score is not None else None,
         "distance_to_gt_px": float(distance) if distance is not None else None,
         "label": label,
         "trainable": bool(trainable),
@@ -281,6 +312,18 @@ def _candidate_row(
         **padding,
         "patch_sha256": patch_hash,
     }
+    if include_diagnostics:
+        row.update({
+            "confidence": float(candidate.confidence),
+            "body_score": float(candidate.body_score),
+            "motion_score": float(candidate.motion_score),
+            "trail_score": float(candidate.trail_score),
+            "shape_score": float(candidate.shape_score) if candidate.shape_score is not None else None,
+        })
+    if dataset_role is not None:
+        row["dataset_role"] = dataset_role
+    if train_group is not None:
+        row["train_group"] = train_group
     return row
 
 
@@ -417,6 +460,233 @@ def _build_report(
             "candidates_per_frame": _summary(len(frame["candidate_ids"]) for frame in burst_frames),
         }
     return report
+
+
+def _train_lobo_policy() -> dict[str, dict[str, list[str]]]:
+    """Combined DEV+TRAIN policy used by the future CNN folds."""
+
+    return {
+        "validate_A_01": {"dev_training_bursts": ["B_01", "C_01"], "train_groups": ["B", "C"]},
+        "validate_B_01": {"dev_training_bursts": ["A_01", "C_01"], "train_groups": ["A", "C"]},
+        "validate_C_01": {"dev_training_bursts": ["A_01", "B_01"], "train_groups": ["A", "B"]},
+    }
+
+
+def _build_train_report(manifest: dict[str, Any], frame_statuses: list[dict[str, Any]]) -> dict[str, Any]:
+    candidates = manifest["candidates"]
+    by_group: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in candidates:
+        by_group[row["train_group"]].append(row)
+    label_counts = {label: sum(1 for row in candidates if row["label"] == label) for label in ("positive", "ignore", "negative")}
+    visible_frames = [frame for frame in frame_statuses if frame["visible"] is True]
+    invisible_frames = [frame for frame in frame_statuses if frame["visible"] is False and frame["ambiguous"] is False]
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "PASS",
+        "split": "train",
+        "dataset_role": "train",
+        "holdout_used": False,
+        "holdout_sealed": True,
+        "frames": len(frame_statuses),
+        "raw_candidates": len(candidates),
+        "frames_by_group": {group: sum(frame["train_group"] == group for frame in frame_statuses) for group in TRAIN_GROUPS},
+        "candidates_by_group": {group: len(by_group[group]) for group in TRAIN_GROUPS},
+        "labels": label_counts,
+        "trainable_positive": sum(1 for row in candidates if row["label"] == "positive" and row["trainable"]),
+        "trainable_negative": sum(1 for row in candidates if row["label"] == "negative" and row["trainable"]),
+        "invisible_unambiguous_frames": len(invisible_frames),
+        "invisible_unambiguous_negative_candidates": sum(len(frame["candidate_ids"]) for frame in invisible_frames),
+        "positive_status": {
+            status: sum(1 for frame in frame_statuses if frame["positive_status"] == status)
+            for status in ("positive", "no_positive_in_band", "proposal_miss", "negative_state", "not_labelable")
+        },
+        "occluded_visible_frames": sum(frame["occluded"] is True and frame["visible"] is True for frame in frame_statuses),
+        "occluded_positives": sum(row["occluded"] is True and row["label"] == "positive" for row in candidates),
+        "candidates_per_frame": _summary(len(frame["candidate_ids"]) for frame in frame_statuses),
+        "positive_distance_px": _summary(
+            row["distance_to_gt_px"] for row in candidates if row["label"] == "positive" and row["distance_to_gt_px"] is not None
+        ),
+        "negative_positive_ratio": label_counts["negative"] / max(1, label_counts["positive"]),
+        "independent_source_groups": len(TRAIN_GROUPS),
+        "lobo_policy": _train_lobo_policy(),
+        "by_group": {},
+    }
+    for group in TRAIN_GROUPS:
+        group_frames = [frame for frame in frame_statuses if frame["train_group"] == group]
+        group_rows = by_group[group]
+        report["by_group"][group] = {
+            "frames": len(group_frames),
+            "raw_candidates": len(group_rows),
+            "positive": sum(row["label"] == "positive" for row in group_rows),
+            "ignore": sum(row["label"] == "ignore" for row in group_rows),
+            "negative": sum(row["label"] == "negative" for row in group_rows),
+            "trainable_positive": sum(row["label"] == "positive" and row["trainable"] for row in group_rows),
+            "trainable_negative": sum(row["label"] == "negative" and row["trainable"] for row in group_rows),
+            "invisible_unambiguous_frames": sum(
+                frame["visible"] is False and frame["ambiguous"] is False for frame in group_frames
+            ),
+            "positive_status": {
+                status: sum(frame["positive_status"] == status for frame in group_frames)
+                for status in ("positive", "no_positive_in_band", "proposal_miss", "negative_state", "not_labelable")
+            },
+            "candidates_per_frame": _summary(len(frame["candidate_ids"]) for frame in group_frames),
+        }
+    return report
+
+
+def build_train_candidate_manifest(
+    snapshot_path: Path,
+    *,
+    task008_root: Path = Path("artifacts/task008"),
+    ffmpeg: str = "ffmpeg",
+    output_path: Path | None = None,
+    report_base: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build the frozen TRAIN candidate manifest without touching HOLDOUT."""
+
+    snapshot_path = Path(snapshot_path)
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CandidateDatasetError(f"cannot load TRAIN ground-truth snapshot: {exc}") from exc
+    if not isinstance(snapshot, dict):
+        raise CandidateDatasetError("TRAIN ground-truth snapshot must be a JSON object")
+    selected = _select_train_records(snapshot)
+    selected_ids = {(record["source_run"], int(record["frame_index"])) for record in selected}
+    if len(selected_ids) != 180:
+        raise CandidateDatasetError("TRAIN selected record identities are not unique")
+    ffmpeg_identity = _ffmpeg_identity(ffmpeg)
+    manifest: dict[str, Any] = {
+        "schema_version": TASK010_SCHEMA_VERSION,
+        "dataset": {
+            "name": "task010-candidate-manifest-train",
+            "split": "train",
+            "dataset_role": "train",
+            "width": 864,
+            "height": 1920,
+            "frame_count": len(selected),
+            "candidate_count": 0,
+        },
+        "patch": {
+            "source_size": PATCH_SOURCE_SIZE,
+            "output_size": PATCH_OUTPUT_SIZE,
+            "center_rounding": "floor(x + 0.5)",
+            "border_mode": "BORDER_REFLECT_101",
+            "interpolation": "INTER_AREA",
+            "color": "RGB",
+            "dtype": "uint8",
+            "channels": PATCH_CHANNELS,
+            "storage": "raw C-contiguous bytes hashed only; no patch files",
+        },
+        "label_policy": {
+            "positive_px": POSITIVE_RADIUS_PX,
+            "ignore_px": IGNORE_RADIUS_PX,
+            "single_nearest_positive": True,
+            "invisible_unambiguous": "all candidates negative and trainable",
+            "ambiguous_or_unresolved": "ignore and non-trainable",
+        },
+        "generator_provenance": {
+            "git_commit": _git_commit(),
+            "ground_truth_sha256": _sha256_file(snapshot_path),
+            "train_subset_sha256": snapshot["provenance"]["train_subset_sha256"],
+            "annotations_sha256": snapshot["provenance"]["annotations_sha256"],
+            "mask_config": asdict(BASELINE_DETECTOR.masks),
+            "morphology": "existing 3x3 open",
+            "component_area_config": {
+                "min_component_area": BASELINE_DETECTOR.min_component_area,
+                "max_component_area": BASELINE_DETECTOR.max_component_area,
+            },
+            "candidate_generator": "smashbot_diagnostics.perception_v1.yellow_candidates",
+            "ffmpeg_version": ffmpeg_identity,
+            "source_run_identities": [TRAIN_SOURCE_RUNS[group] for group in TRAIN_GROUPS],
+            "holdout_used": False,
+            "holdout_sealed": True,
+            "dev_negative_check_in_fit": False,
+        },
+        "combined_lobo_policy": _train_lobo_policy(),
+        "dev_negative_check": {"included_in_manifest": False, "used_for_fit": False},
+        "holdout": {"sealed": True, "decoded": False, "used_for_fit": False},
+        "frames": [],
+        "candidates": [],
+    }
+    records_by_identity = {(record["source_run"], int(record["frame_index"])): record for record in selected}
+    seen_ids: set[str] = set()
+    for item in _iter_records_frames(selected, Path(task008_root), ffmpeg):
+        identity = (item["source_run"], int(item["frame_index"]))
+        if identity not in selected_ids:
+            raise CandidateDatasetError("decoder yielded a record outside TRAIN scope")
+        record = records_by_identity[identity]
+        if int(item["pts_us"]) != int(record["pts_us"]):
+            raise CandidateDatasetError(f"PTS mismatch for TRAIN record {record['record_id']}")
+        candidates = _spatial_order(yellow_candidates(item["masks"], item["frame_index"], item["pts_us"]))
+        labels, trainable, distances, positive_status, dataset_role = _label_candidates(
+            candidates, record, train_invisible_as_negative=True
+        )
+        frame_row = {
+            "record_id": record["record_id"],
+            "burst_id": record["burst_id"],
+            "source_run": record["source_run"],
+            "train_group": record["train_group"],
+            "dataset_role": "train",
+            "frame_index": int(record["frame_index"]),
+            "pts_us": int(record["pts_us"]),
+            "candidate_count": len(candidates),
+            "candidate_ids": [],
+            "positive_status": positive_status,
+            "visible": record["shuttle"].get("visible"),
+            "active_rally": record.get("active_rally"),
+            "ambiguous": record["shuttle"].get("ambiguous"),
+            "occluded": record["shuttle"].get("occluded"),
+        }
+        for index, (candidate, label, is_trainable, distance) in enumerate(zip(candidates, labels, trainable, distances)):
+            patch, padding, patch_hash = canonical_patch(item["frame"], candidate)
+            del patch
+            row = _candidate_row(
+                record,
+                candidate,
+                index,
+                label,
+                is_trainable,
+                distance,
+                padding,
+                patch_hash,
+                dataset_role="train",
+                train_group=record["train_group"],
+                include_diagnostics=False,
+            )
+            if row["candidate_id"] in seen_ids:
+                raise CandidateDatasetError(f"duplicate candidate_id: {row['candidate_id']}")
+            seen_ids.add(row["candidate_id"])
+            manifest["candidates"].append(row)
+            frame_row["candidate_ids"].append(row["candidate_id"])
+        manifest["frames"].append(frame_row)
+    if len(manifest["frames"]) != len(selected):
+        raise CandidateDatasetError(f"decoder yielded {len(manifest['frames'])} frames; expected {len(selected)}")
+    manifest["frames"].sort(key=lambda row: (row["source_run"], row["train_group"], row["frame_index"]))
+    manifest["candidates"].sort(key=lambda row: (row["source_run"], row["train_group"], row["frame_index"], row["candidate_index"]))
+    manifest["dataset"]["candidate_count"] = len(manifest["candidates"])
+    report = _build_train_report(manifest, manifest["frames"])
+    if output_path is not None:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(_json_bytes(manifest))
+    if report_base is not None:
+        report_base = Path(report_base)
+        report_base.mkdir(parents=True, exist_ok=True)
+        (report_base / "report.json").write_bytes(_json_bytes(report))
+        (report_base / "summary.txt").write_text(
+            "\n".join([
+                "Task 010 Gate C2c candidate dataset (TRAIN only)",
+                "Status: PASS",
+                f"Frames: {len(manifest['frames'])}",
+                f"Raw candidates: {len(manifest['candidates'])}",
+                f"Positive/ignore/negative: {report['labels']['positive']}/{report['labels']['ignore']}/{report['labels']['negative']}",
+                "DEV negative-check used for fit: false",
+                "HOLDOUT decoded: false",
+            ]) + "\n",
+            encoding="utf-8",
+        )
+    return manifest, report
 
 
 def build_candidate_manifest(

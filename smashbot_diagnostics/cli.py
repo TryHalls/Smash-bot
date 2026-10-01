@@ -30,7 +30,7 @@ from .perception_compare import BenchmarkComparisonError, compare_report_files, 
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
-from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest
+from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest, build_train_candidate_manifest
 from .perception_candidate_svm import CandidateSVMError, run_candidate_svm
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
@@ -386,6 +386,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"),
         help="historical Task 009 report used only for proposal equivalence diagnostics",
+    )
+    candidate_dataset_train = subparsers.add_parser(
+        "perception-candidate-dataset-train",
+        help="build the deterministic Task 010 Gate C2c candidate manifest from frozen TRAIN only",
+    )
+    candidate_dataset_train.add_argument(
+        "--snapshot",
+        type=Path,
+        default=Path("data/task010/train_ground_truth.json"),
+        help="frozen TRAIN ground-truth snapshot",
+    )
+    candidate_dataset_train.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_dataset_train.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_dataset_train.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/task010/candidate_manifest_train.json"),
+    )
+    candidate_dataset_train.add_argument(
+        "--report-base",
+        type=Path,
+        default=Path("artifacts/task010/gate_c2c"),
     )
     candidate_svm = subparsers.add_parser(
         "perception-candidate-svm",
@@ -1710,6 +1732,28 @@ def _perception_candidate_dataset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_dataset_train(args: argparse.Namespace) -> int:
+    try:
+        manifest, report = build_train_candidate_manifest(
+            args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_path=args.output,
+            report_base=args.report_base,
+        )
+    except CandidateDatasetError as exc:
+        print(f"TRAIN candidate dataset error: {exc}")
+        return 2
+    print(f"Manifest: {args.output}")
+    print(f"Report: {args.report_base / 'report.json'}")
+    print(f"Frames: {len(manifest['frames'])}")
+    print(f"Candidates: {len(manifest['candidates'])}")
+    print(f"Labels: {json.dumps(report['labels'], sort_keys=True)}")
+    print("DEV negative-check used for fit: false")
+    print("HOLDOUT decoded: false")
+    return 0
+
+
 def _perception_candidate_svm(args: argparse.Namespace) -> int:
     try:
         report = run_candidate_svm(
@@ -1778,6 +1822,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_appearance_geometry(args)
         if args.command == "perception-candidate-dataset":
             return _perception_candidate_dataset(args)
+        if args.command == "perception-candidate-dataset-train":
+            return _perception_candidate_dataset_train(args)
         if args.command == "perception-candidate-svm":
             return _perception_candidate_svm(args)
         if args.command == "perception-compare":

@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+from copy import deepcopy
 import unittest
+from pathlib import Path
 
 from smashbot_diagnostics.cli import build_parser
 from smashbot_diagnostics.perception_candidate_dataset import (
@@ -11,8 +13,11 @@ from smashbot_diagnostics.perception_candidate_dataset import (
     CandidateDatasetError,
     _folds,
     _label_candidates,
+    _select_train_records,
     _select_gate_b_records,
     _spatial_order,
+    _train_lobo_policy,
+    build_train_candidate_manifest,
     canonical_patch,
     manifest_bytes,
 )
@@ -106,6 +111,66 @@ class Task010CandidateDatasetTests(unittest.TestCase):
         self.assertEqual(trainable, [False])
         self.assertEqual(distances, [None])
         self.assertEqual((status, role), ("negative_state", "dev_negative_check"))
+
+    def test_train_invisible_unambiguous_candidates_are_trainable_negative(self) -> None:
+        record = visible_record()
+        record.update({"active_rally": False})
+        record["shuttle"] = {"visible": False, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False}
+        labels, trainable, distances, status, role = _label_candidates(
+            [candidate(10, 10), candidate(20, 20)], record, train_invisible_as_negative=True
+        )
+        self.assertEqual(labels, ["negative", "negative"])
+        self.assertEqual(trainable, [True, True])
+        self.assertEqual(distances, [None, None])
+        self.assertEqual((status, role), ("negative_state", "train"))
+
+    def test_train_lobo_policy_is_combined_dev_and_train_policy(self) -> None:
+        self.assertEqual(
+            _train_lobo_policy(),
+            {
+                "validate_A_01": {"dev_training_bursts": ["B_01", "C_01"], "train_groups": ["B", "C"]},
+                "validate_B_01": {"dev_training_bursts": ["A_01", "C_01"], "train_groups": ["A", "C"]},
+                "validate_C_01": {"dev_training_bursts": ["A_01", "B_01"], "train_groups": ["A", "B"]},
+            },
+        )
+
+    def test_train_selection_rejects_holdout_before_decode(self) -> None:
+        snapshot = json.loads(Path("data/task010/train_ground_truth.json").read_text(encoding="utf-8"))
+        mutated = deepcopy(snapshot)
+        mutated["records"][0]["split"] = "holdout"
+        with self.assertRaises(CandidateDatasetError):
+            _select_train_records(mutated)
+
+    def test_train_cli_is_explicit_and_defaults_to_train_snapshot(self) -> None:
+        args = build_parser().parse_args(["perception-candidate-dataset-train"])
+        self.assertEqual(args.command, "perception-candidate-dataset-train")
+        self.assertEqual(str(args.snapshot), "data/task010/train_ground_truth.json")
+        self.assertEqual(str(args.output), "data/task010/candidate_manifest_train.json")
+
+    def test_committed_train_manifest_invariants(self) -> None:
+        path = Path("data/task010/candidate_manifest_train.json")
+        self.assertTrue(path.is_file())
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["dataset"]["frame_count"], 180)
+        self.assertEqual(manifest["dataset"]["candidate_count"], 8742)
+        self.assertEqual(manifest["dataset"]["dataset_role"], "train")
+        self.assertEqual(len(manifest["frames"]), 180)
+        self.assertEqual(len(manifest["candidates"]), 8742)
+        self.assertEqual(
+            {group: sum(frame["train_group"] == group for frame in manifest["frames"]) for group in "ABC"},
+            {"A": 60, "B": 60, "C": 60},
+        )
+        self.assertEqual(
+            {label: sum(row["label"] == label for row in manifest["candidates"]) for label in ("positive", "ignore", "negative")},
+            {"positive": 98, "ignore": 86, "negative": 8558},
+        )
+        self.assertTrue(manifest["holdout"]["sealed"])
+        self.assertFalse(manifest["holdout"]["decoded"])
+        self.assertFalse(manifest["dev_negative_check"]["used_for_fit"])
+        for row in manifest["candidates"]:
+            self.assertEqual(row["dataset_role"], "train")
+            self.assertIn(row["train_group"], "ABC")
+            self.assertNotIn("/home/", json.dumps(row))
 
     def test_holdout_scope_is_rejected_before_decode(self) -> None:
         records = []
