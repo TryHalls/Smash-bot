@@ -95,6 +95,13 @@ class Task010CandidateCNNTests(unittest.TestCase):
         self.assertIn("randperm", source)
         self.assertIn('"shuffle": True', source)
 
+    def test_provenance_commit_is_captured_by_run_not_training(self) -> None:
+        module = __import__("smashbot_diagnostics.perception_candidate_cnn", fromlist=["run_candidate_cnn"])
+        training_source = inspect.getsource(module._train_model)
+        run_source = inspect.getsource(module.run_candidate_cnn)
+        self.assertNotIn("code_commit = _git_commit()", training_source)
+        self.assertIn("code_commit = _git_commit()", run_source)
+
     def test_parameter_count_when_training_target_is_available(self) -> None:
         try:
             import torch  # type: ignore[import-not-found]

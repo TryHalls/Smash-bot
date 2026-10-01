@@ -334,7 +334,6 @@ def _patch_tensor(torch: Any, numpy: Any, patches: Any) -> Any:
 
 
 def _train_model(torch: Any, nn: Any, numpy: Any, rows: list[dict[str, Any]], store: PatchStore) -> tuple[Any, float, float]:
-    code_commit = _git_commit()
     _freeze_seeds(torch)
     model = _make_model(torch, nn)
     model.train()
@@ -556,6 +555,7 @@ def run_candidate_cnn(
     train = _load_manifest(Path(train_manifest_path), "train", EXPECTED_TRAIN_SHA256)
     torch, nn = _torch()
     numpy = _numpy()
+    code_commit = _git_commit()
     _freeze_seeds(torch)
     store = _materialize_patch_store((dev, train), Path(task008_root), ffmpeg)
     fold_reports: dict[str, Any] = {}
