@@ -16,6 +16,8 @@ class RegistrationResult:
     residual_px: float | None = None
     failure_reason: str | None = None
     processing_ms: float | None = None
+    model: str = "translation"
+    inlier_ratio: float | None = None
 
 
 @dataclass(frozen=True)
