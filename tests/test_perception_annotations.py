@@ -76,6 +76,27 @@ def _annotation(record, *, active=True, visible=True, x=10.0, y=20.0):
     return result
 
 
+def _server_for_annotations(root, annotations):
+    images = root / "images"
+    images.mkdir()
+    manifest_records = []
+    stored_annotations = []
+    for index, annotation in enumerate(annotations):
+        image_path = f"images/record-{index}.png"
+        (root / image_path).write_bytes(b"png")
+        identity = {key: annotation[key] for key in ("record_id", "split", "clip", "source_run", "burst_id", "frame_index", "pts_us")}
+        identity["image_path"] = image_path
+        manifest_records.append(identity)
+        stored = json.loads(json.dumps(annotation))
+        stored["image_path"] = image_path
+        stored_annotations.append(stored)
+    manifest_path = root / "subset.json"
+    annotations_path = root / "annotations.json"
+    atomic_write_json(manifest_path, {"schema_version": 1, "width": 864, "height": 1920, "records": manifest_records})
+    atomic_write_json(annotations_path, {"schema_version": 1, "records": stored_annotations})
+    return AnnotationHTTPServer(manifest_path, annotations_path), annotations_path
+
+
 class PerceptionAnnotationTests(unittest.TestCase):
     def test_frozen_subset_has_exact_136_records_and_deterministic_order(self):
         active, negative = _synthetic_sources()
@@ -425,6 +446,73 @@ class PerceptionAnnotationTests(unittest.TestCase):
                 self.assertIsNone(state["record"]["shuttle"]["center_x"])
                 self.assertIsNone(state["record"]["shuttle"]["center_y"])
                 self.assertEqual(json.loads((root / "annotations.json").read_text())["records"][0]["tags"], [])
+            finally:
+                server.server_close()
+
+    def test_shuttle_first_then_game_state_preserves_center_and_unlabeled_status(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = {"record_id": "record", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 10, "pts_us": 100}
+            server, annotations_path = _server_for_annotations(root, [_annotation(identity, active=None, visible=None)])
+            try:
+                clicked = server.apply({"shuttle.visible": True, "shuttle.center_x": 412.4, "shuttle.center_y": 681.7, "ambiguous": False})
+                self.assertIsNone(clicked["record"]["active_rally"])
+                self.assertFalse(clicked["record_status"]["labeled"])
+                self.assertEqual((clicked["record"]["shuttle"]["center_x"], clicked["record"]["shuttle"]["center_y"]), (412.4, 681.7))
+                selected = server.apply({"active_rally": True})
+                self.assertEqual(selected["record"]["active_rally"], True)
+                self.assertEqual((selected["record"]["shuttle"]["center_x"], selected["record"]["shuttle"]["center_y"]), (412.4, 681.7))
+                persisted = json.loads(annotations_path.read_text())["records"][0]
+                self.assertEqual((persisted["shuttle"]["center_x"], persisted["shuttle"]["center_y"]), (412.4, 681.7))
+            finally:
+                server.server_close()
+
+    def test_game_state_first_then_shuttle_matches_shuttle_first(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = {"record_id": "record", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 10, "pts_us": 100}
+            server, _ = _server_for_annotations(root, [_annotation(identity, active=None, visible=None)])
+            try:
+                server.apply({"active_rally": True})
+                final = server.apply({"shuttle.visible": True, "shuttle.center_x": 412.4, "shuttle.center_y": 681.7, "ambiguous": False})
+                self.assertEqual(final["record"]["active_rally"], True)
+                self.assertEqual((final["record"]["shuttle"]["center_x"], final["record"]["shuttle"]["center_y"]), (412.4, 681.7))
+                self.assertTrue(final["record_status"]["labeled"])
+            finally:
+                server.server_close()
+
+    def test_center_survives_navigation_and_reload(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            identities = [
+                {"record_id": "record-0", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 10, "pts_us": 100},
+                {"record_id": "record-1", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 11, "pts_us": 200},
+            ]
+            server, annotations_path = _server_for_annotations(root, [_annotation(item, active=None, visible=None) for item in identities])
+            server.apply({"shuttle.visible": True, "shuttle.center_x": 12.5, "shuttle.center_y": 45.5, "ambiguous": False})
+            try:
+                server.state(move=1)
+                returned = server.state(move=-1)
+                self.assertEqual((returned["record"]["shuttle"]["center_x"], returned["record"]["shuttle"]["center_y"]), (12.5, 45.5))
+            finally:
+                server.server_close()
+            reloaded = AnnotationHTTPServer(root / "subset.json", annotations_path)
+            try:
+                state = reloaded.state()
+                self.assertEqual((state["record"]["shuttle"]["center_x"], state["record"]["shuttle"]["center_y"]), (12.5, 45.5))
+            finally:
+                reloaded.server_close()
+
+    def test_active_false_does_not_clear_valid_center(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = {"record_id": "record", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 10, "pts_us": 100}
+            server, _ = _server_for_annotations(root, [_annotation(identity, active=None, visible=None)])
+            try:
+                server.apply({"shuttle.visible": True, "shuttle.center_x": 100.0, "shuttle.center_y": 200.0, "ambiguous": False})
+                state = server.apply({"active_rally": False})
+                self.assertFalse(state["record"]["active_rally"])
+                self.assertEqual((state["record"]["shuttle"]["center_x"], state["record"]["shuttle"]["center_y"]), (100.0, 200.0))
             finally:
                 server.server_close()
 

@@ -206,11 +206,12 @@ def validate_annotation_record(
             raise AnnotationError("shuttle.visible must be boolean or null while unlabeled")
         if not isinstance(shuttle["ambiguous"], bool) or not isinstance(shuttle["occluded"], bool):
             raise AnnotationError("ambiguous and occluded must be boolean")
-        if shuttle["center_x"] is not None or shuttle["center_y"] is not None:
-            raise AnnotationError("unlabeled records must have null center coordinates")
-        return
-    if not isinstance(active_rally, bool):
-        raise AnnotationError("active_rally must be boolean")
+        if visible is None:
+            if shuttle["center_x"] is not None or shuttle["center_y"] is not None:
+                raise AnnotationError("unlabeled records with unknown visibility must have null center coordinates")
+            return
+    if active_rally is not None and not isinstance(active_rally, bool):
+        raise AnnotationError("active_rally must be boolean or null")
     if not isinstance(visible, bool):
         raise AnnotationError("shuttle.visible must be boolean")
     if not isinstance(shuttle["ambiguous"], bool) or not isinstance(shuttle["occluded"], bool):
@@ -947,7 +948,7 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             dotted = f"shuttle.{key}"
             if dotted in patch:
                 record["shuttle"][key] = patch[dotted]
-        if record["active_rally"] is None or record["shuttle"]["visible"] in {False, None}:
+        if record["shuttle"]["visible"] in {False, None}:
             record["shuttle"]["center_x"] = None
             record["shuttle"]["center_y"] = None
         if "tags" in patch:
