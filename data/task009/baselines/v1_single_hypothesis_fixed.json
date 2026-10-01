@@ -1,0 +1,1189 @@
+{
+  "acquisition": {
+    "A_01": {
+      "benchmark_observation_frames": [
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98
+      ],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": 0.0,
+      "confirmation_events": [
+        {
+          "candidate_distance_px": 0.0,
+          "confirmed_track_originated_correct": false,
+          "first_candidate": {
+            "area_px": 78.0,
+            "body_score": 0.975,
+            "confidence": 0.5254166666666666,
+            "frame_index": 78,
+            "motion_score": 0.0,
+            "pts_us": 545687037719,
+            "shape_score": 0.2,
+            "trail_score": 0.43333333333333335,
+            "x": 151.73076923076923,
+            "y": 931.5384615384615
+          },
+          "first_candidate_distance_to_gt_px": 386.9899658223819,
+          "first_frame_index": 78,
+          "first_pts_us": 545687037719,
+          "second_candidate": {
+            "area_px": 78.0,
+            "body_score": 0.975,
+            "confidence": 0.5270833333333333,
+            "frame_index": 79,
+            "motion_score": 0.0,
+            "pts_us": 545687054721,
+            "shape_score": 0.2,
+            "trail_score": 0.44166666666666665,
+            "x": 151.73076923076923,
+            "y": 931.5384615384615
+          },
+          "second_candidate_distance_to_gt_px": 378.22915685524515,
+          "second_frame_index": 79,
+          "second_pts_us": 545687054721
+        }
+      ],
+      "confirmation_frame_pair": [
+        78,
+        79
+      ],
+      "confirmed_acquisitions": 1,
+      "confirmed_track_originated_correct": false,
+      "first_candidate_distance_to_gt_px": 386.9899658223819,
+      "first_confirmed_frame": 79,
+      "frame_count": 21,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 1,
+      "second_candidate_distance_to_gt_px": 378.22915685524515,
+      "tentative_pending_frames": [
+        78
+      ]
+    },
+    "B_01": {
+      "benchmark_observation_frames": [
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98
+      ],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": 8.40688293843904,
+      "confirmation_events": [
+        {
+          "candidate_distance_px": 8.40688293843904,
+          "confirmed_track_originated_correct": true,
+          "first_candidate": {
+            "area_px": 88.0,
+            "body_score": 1.0,
+            "confidence": 0.8,
+            "frame_index": 79,
+            "motion_score": 1.0,
+            "pts_us": 546284104937,
+            "shape_score": 0.7142857142857143,
+            "trail_score": 0.0,
+            "x": 313.8636363636364,
+            "y": 805.0454545454545
+          },
+          "first_candidate_distance_to_gt_px": 2.313163836170797,
+          "first_frame_index": 79,
+          "first_pts_us": 546284104937,
+          "second_candidate": {
+            "area_px": 84.0,
+            "body_score": 1.0,
+            "confidence": 0.8,
+            "frame_index": 80,
+            "motion_score": 1.0,
+            "pts_us": 546284121624,
+            "shape_score": 0.7142857142857143,
+            "trail_score": 0.0,
+            "x": 315.64285714285717,
+            "y": 813.2619047619048
+          },
+          "second_candidate_distance_to_gt_px": 3.210359739178854,
+          "second_frame_index": 80,
+          "second_pts_us": 546284121624
+        }
+      ],
+      "confirmation_frame_pair": [
+        79,
+        80
+      ],
+      "confirmed_acquisitions": 1,
+      "confirmed_track_originated_correct": true,
+      "first_candidate_distance_to_gt_px": 2.313163836170797,
+      "first_confirmed_frame": 80,
+      "frame_count": 21,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 2,
+      "second_candidate_distance_to_gt_px": 3.210359739178854,
+      "tentative_pending_frames": [
+        78,
+        79
+      ]
+    },
+    "C_01": {
+      "benchmark_observation_frames": [
+        356,
+        357,
+        358,
+        359,
+        360,
+        361,
+        362,
+        363,
+        364,
+        365,
+        368,
+        369,
+        370,
+        371
+      ],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": 6.5853888980663795,
+      "confirmation_events": [
+        {
+          "candidate_distance_px": 6.5853888980663795,
+          "confirmed_track_originated_correct": false,
+          "first_candidate": {
+            "area_px": 124.0,
+            "body_score": 1.0,
+            "confidence": 0.8,
+            "frame_index": 355,
+            "motion_score": 1.0,
+            "pts_us": 546700965016,
+            "shape_score": 0.7142857142857143,
+            "trail_score": 0.0,
+            "x": 790.5,
+            "y": 984.5
+          },
+          "first_candidate_distance_to_gt_px": 428.3263682612449,
+          "first_frame_index": 355,
+          "first_pts_us": 546700965016,
+          "second_candidate": {
+            "area_px": 112.0,
+            "body_score": 1.0,
+            "confidence": 0.8,
+            "frame_index": 356,
+            "motion_score": 1.0,
+            "pts_us": 546700981786,
+            "shape_score": 0.8333333333333334,
+            "trail_score": 0.0,
+            "x": 795.5,
+            "y": 980.2142857142857
+          },
+          "second_candidate_distance_to_gt_px": 452.2601842772931,
+          "second_frame_index": 356,
+          "second_pts_us": 546700981786
+        }
+      ],
+      "confirmation_frame_pair": [
+        355,
+        356
+      ],
+      "confirmed_acquisitions": 1,
+      "confirmed_track_originated_correct": false,
+      "first_candidate_distance_to_gt_px": 428.3263682612449,
+      "first_confirmed_frame": 356,
+      "frame_count": 21,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 5,
+      "second_candidate_distance_to_gt_px": 452.2601842772931,
+      "tentative_pending_frames": [
+        351,
+        352,
+        353,
+        354,
+        355
+      ]
+    },
+    "C_NEG_01": {
+      "benchmark_observation_frames": [],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": null,
+      "confirmation_events": [],
+      "confirmation_frame_pair": null,
+      "confirmed_acquisitions": 0,
+      "confirmed_track_originated_correct": null,
+      "first_candidate_distance_to_gt_px": null,
+      "first_confirmed_frame": null,
+      "frame_count": 1,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 1,
+      "second_candidate_distance_to_gt_px": null,
+      "tentative_pending_frames": [
+        69
+      ]
+    },
+    "C_NEG_03": {
+      "benchmark_observation_frames": [],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": null,
+      "confirmation_events": [],
+      "confirmation_frame_pair": null,
+      "confirmed_acquisitions": 0,
+      "confirmed_track_originated_correct": null,
+      "first_candidate_distance_to_gt_px": null,
+      "first_confirmed_frame": null,
+      "frame_count": 1,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 1,
+      "second_candidate_distance_to_gt_px": null,
+      "tentative_pending_frames": [
+        208
+      ]
+    },
+    "C_NEG_05": {
+      "benchmark_observation_frames": [],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": null,
+      "confirmation_events": [],
+      "confirmation_frame_pair": null,
+      "confirmed_acquisitions": 0,
+      "confirmed_track_originated_correct": null,
+      "first_candidate_distance_to_gt_px": null,
+      "first_confirmed_frame": null,
+      "frame_count": 1,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 1,
+      "second_candidate_distance_to_gt_px": null,
+      "tentative_pending_frames": [
+        369
+      ]
+    },
+    "C_NEG_07": {
+      "benchmark_observation_frames": [],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": null,
+      "confirmation_events": [],
+      "confirmation_frame_pair": null,
+      "confirmed_acquisitions": 0,
+      "confirmed_track_originated_correct": null,
+      "first_candidate_distance_to_gt_px": null,
+      "first_confirmed_frame": null,
+      "frame_count": 1,
+      "pending_acquisition_episodes": 1,
+      "pending_acquisition_frames": 1,
+      "second_candidate_distance_to_gt_px": null,
+      "tentative_pending_frames": [
+        525
+      ]
+    },
+    "C_NEG_09": {
+      "benchmark_observation_frames": [],
+      "coasting_before_confirmation_frames": [],
+      "confirmation_candidate_distance_px": null,
+      "confirmation_events": [],
+      "confirmation_frame_pair": null,
+      "confirmed_acquisitions": 0,
+      "confirmed_track_originated_correct": null,
+      "first_candidate_distance_to_gt_px": null,
+      "first_confirmed_frame": null,
+      "frame_count": 1,
+      "pending_acquisition_episodes": 0,
+      "pending_acquisition_frames": 0,
+      "second_candidate_distance_to_gt_px": null,
+      "tentative_pending_frames": []
+    }
+  },
+  "acquisition_interpretation": {
+    "ground_truth_used_only_after_selection_for_distances": true,
+    "only_confirmed_tracking_observation_counts": true,
+    "tentative_pending_and_coasting_before_confirmation_are_not_benchmark_observations": true
+  },
+  "baseline_name": "V1_SINGLE_HYPOTHESIS_FIXED",
+  "breakdown": {
+    "A_01": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 1,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": null,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 21,
+          "effective_fps": 6.598548882894488,
+          "max": 272.4236780049978,
+          "mean": 151.548471906045,
+          "min": 74.47877300728578,
+          "p50": 141.52221199765336,
+          "p95": 220.85423099633772
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": null,
+      "negative_frames": 0,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        },
+        "20px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        },
+        "5px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "B_01": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 2,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": null,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 21,
+          "effective_fps": 6.685662322765362,
+          "max": 212.48906500113662,
+          "mean": 149.57381209560913,
+          "min": 53.99498000042513,
+          "p50": 147.24343000125373,
+          "p95": 188.5333360041841
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 19,
+        "max": 6.21743586243425,
+        "mean": 1.9745941918362528,
+        "min": 0.5077652448376587,
+        "p50": 1.5422008990557887,
+        "p95": 3.796983994300868
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": null,
+      "negative_frames": 0,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 19,
+          "recall": 0.9047619047619048,
+          "total_visible_non_ambiguous": 21
+        },
+        "20px": {
+          "matched": 19,
+          "recall": 0.9047619047619048,
+          "total_visible_non_ambiguous": 21
+        },
+        "5px": {
+          "matched": 18,
+          "recall": 0.8571428571428571,
+          "total_visible_non_ambiguous": 21
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_01": {
+      "episode_metrics": {
+        "fragmentation_count": 1,
+        "longest_consecutive_miss_burst": 5,
+        "reacquisition_frames": {
+          "count": 1,
+          "max": 2.0,
+          "mean": 2.0,
+          "min": 2.0,
+          "p50": 2.0,
+          "p95": 2.0
+        },
+        "reacquisition_pts_ms": {
+          "count": 1,
+          "max": 66.291,
+          "mean": 66.291,
+          "min": 66.291,
+          "p50": 66.291,
+          "p95": 66.291
+        }
+      },
+      "false_predictions_per_negative_frame": null,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 21,
+          "effective_fps": 6.085976460767817,
+          "max": 246.38478700217092,
+          "mean": 164.31217019098335,
+          "min": 74.50975900428602,
+          "p50": 163.56320400518598,
+          "p95": 225.81720399466576
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": null,
+      "negative_frames": 0,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        },
+        "20px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        },
+        "5px": {
+          "matched": 0,
+          "recall": 0.0,
+          "total_visible_non_ambiguous": 21
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_NEG_01": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 0,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": 0.0,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 1,
+          "effective_fps": 20.641324722753378,
+          "max": 48.44650299492059,
+          "mean": 48.44650299492059,
+          "min": 48.44650299492059,
+          "p50": 48.44650299492059,
+          "p95": 48.44650299492059
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": 0.0,
+      "negative_frames": 1,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "20px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "5px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_NEG_03": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 0,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": 0.0,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 1,
+          "effective_fps": 17.403378053413007,
+          "max": 57.46010900475085,
+          "mean": 57.46010900475085,
+          "min": 57.46010900475085,
+          "p50": 57.46010900475085,
+          "p95": 57.46010900475085
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": 0.0,
+      "negative_frames": 1,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "20px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "5px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_NEG_05": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 0,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": 0.0,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 1,
+          "effective_fps": 14.039545299381732,
+          "max": 71.22737800091272,
+          "mean": 71.22737800091272,
+          "min": 71.22737800091272,
+          "p50": 71.22737800091272,
+          "p95": 71.22737800091272
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": 0.0,
+      "negative_frames": 1,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "20px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "5px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_NEG_07": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 0,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": 0.0,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 1,
+          "effective_fps": 13.970585379388815,
+          "max": 71.5789620007854,
+          "mean": 71.5789620007854,
+          "min": 71.5789620007854,
+          "p50": 71.5789620007854,
+          "p95": 71.5789620007854
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": 0.0,
+      "negative_frames": 1,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "20px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "5px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    },
+    "C_NEG_09": {
+      "episode_metrics": {
+        "fragmentation_count": 0,
+        "longest_consecutive_miss_burst": 0,
+        "reacquisition_frames": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        },
+        "reacquisition_pts_ms": {
+          "count": 0,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "false_predictions_per_negative_frame": 0.0,
+      "latency": {
+        "algorithm_only_ms": {
+          "count": 1,
+          "effective_fps": 18.48359581942964,
+          "max": 54.1020269956789,
+          "mean": 54.1020269956789,
+          "min": 54.1020269956789,
+          "p50": 54.1020269956789,
+          "p95": 54.1020269956789
+        },
+        "decode_plus_algorithm_ms": {
+          "count": 0,
+          "effective_fps": null,
+          "max": null,
+          "mean": null,
+          "min": null,
+          "p50": null,
+          "p95": null
+        }
+      },
+      "localization_error_px": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      },
+      "localization_match_radius_px": 20.0,
+      "metrics_contract": {
+        "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+        "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+        "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+        "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+      },
+      "metrics_schema_version": 1,
+      "negative_frame_fp_rate": 0.0,
+      "negative_frames": 1,
+      "recall_at_radius_px": {
+        "10px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "20px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        },
+        "5px": {
+          "matched": 0,
+          "recall": null,
+          "total_visible_non_ambiguous": 0
+        }
+      },
+      "schema_version": 1,
+      "split": "dev"
+    }
+  },
+  "configuration": {
+    "acquisition_confirmations": 2,
+    "calibration_status": "DEV_V1_FROZEN",
+    "candidate_family": "yellow_only",
+    "ffmpeg": "ffmpeg",
+    "gate_px": 120.0,
+    "holdout_used": false,
+    "name": "V1_DEV_FROZEN",
+    "positive_area_median": 78.0,
+    "positive_area_p05": 16.0,
+    "positive_area_p95": 424.2000000000001,
+    "ranking_rule": "R5",
+    "task008_root": "artifacts/task008",
+    "white_fallback": false
+  },
+  "false_positive_diagnostics": {
+    "confirmed_observation_fp_count": 0,
+    "interpretation": "isolated negative frames cannot prove an active-state gate; zero confirmed FP is partly due to two-frame acquisition confirmation",
+    "negative_frames": 5,
+    "unconfirmed_acquisition_candidates_on_negative_frames": 4
+  },
+  "holdout_used": false,
+  "metrics": {
+    "episode_metrics": {
+      "fragmentation_count": 1,
+      "longest_consecutive_miss_burst": 5,
+      "reacquisition_frames": {
+        "count": 1,
+        "max": 2.0,
+        "mean": 2.0,
+        "min": 2.0,
+        "p50": 2.0,
+        "p95": 2.0
+      },
+      "reacquisition_pts_ms": {
+        "count": 1,
+        "max": 66.291,
+        "mean": 66.291,
+        "min": 66.291,
+        "p50": 66.291,
+        "p95": 66.291
+      }
+    },
+    "false_predictions_per_negative_frame": 0.0,
+    "latency": {
+      "algorithm_only_ms": {
+        "count": 68,
+        "effective_fps": 6.748081263470672,
+        "max": 272.4236780049978,
+        "mean": 148.19027230944758,
+        "min": 48.44650299492059,
+        "p50": 147.37656299985247,
+        "p95": 218.499705049544
+      },
+      "decode_plus_algorithm_ms": {
+        "count": 0,
+        "effective_fps": null,
+        "max": null,
+        "mean": null,
+        "min": null,
+        "p50": null,
+        "p95": null
+      }
+    },
+    "localization_error_px": {
+      "count": 19,
+      "max": 6.21743586243425,
+      "mean": 1.9745941918362528,
+      "min": 0.5077652448376587,
+      "p50": 1.5422008990557887,
+      "p95": 3.796983994300868
+    },
+    "localization_match_radius_px": 20.0,
+    "metrics_contract": {
+      "fragmentation": "sum of observed segments minus one within each visible episode; segment breaks on a frame gap or track_id change",
+      "miss_bursts": "max consecutive visible non-ambiguous episode frames without an observation; episodes never cross burst/clip/source boundaries",
+      "percentile": "inclusive linear interpolation at index=(n-1)*p/100",
+      "reacquisition": "missed frame count and device PTS milliseconds from the prior observation to the first subsequent observation"
+    },
+    "metrics_schema_version": 1,
+    "negative_frame_fp_rate": 0.0,
+    "negative_frames": 5,
+    "recall_at_radius_px": {
+      "10px": {
+        "matched": 19,
+        "recall": 0.30158730158730157,
+        "total_visible_non_ambiguous": 63
+      },
+      "20px": {
+        "matched": 19,
+        "recall": 0.30158730158730157,
+        "total_visible_non_ambiguous": 63
+      },
+      "5px": {
+        "matched": 18,
+        "recall": 0.2857142857142857,
+        "total_visible_non_ambiguous": 63
+      }
+    },
+    "schema_version": 1,
+    "split": "dev"
+  },
+  "registration": {
+    "eligible_transitions": 60,
+    "failures": 11,
+    "inliers": {
+      "count": 60,
+      "max": 250.0,
+      "mean": 177.96666666666667,
+      "min": 14.0,
+      "p50": 176.5,
+      "p95": 250.0
+    },
+    "processing_ms": {
+      "count": 60,
+      "max": 186.9466479984112,
+      "mean": 96.92413911664819,
+      "min": 52.14280700602103,
+      "p50": 90.10524949917453,
+      "p95": 144.4316315028118
+    },
+    "registration_schema_version": 1,
+    "residual_px": {
+      "count": 49,
+      "max": 3.6406100011849016,
+      "mean": 1.3893908117588447,
+      "min": 0.11920465962066112,
+      "p50": 1.6066069226225357,
+      "p95": 3.053633808890613
+    },
+    "schema_version": 1,
+    "valid_transforms": 49
+  },
+  "runtime": {
+    "algorithm_total_ms": {
+      "count": 68,
+      "max": 272.4236780049978,
+      "mean": 148.19027230944758,
+      "min": 48.44650299492059,
+      "p50": 147.37656299985247,
+      "p75": 178.5211657461332,
+      "p95": 218.499705049544
+    },
+    "effective_fps": 6.748081263470672,
+    "stage_times_ms": {
+      "association_ms": {
+        "count": 68,
+        "max": 0.002016000507865101,
+        "mean": 0.0008291619237484958,
+        "min": 0.0005789988790638745,
+        "p50": 0.0007704984454903752,
+        "p75": 0.0009192535799229518,
+        "p95": 0.0011891490430571137
+      },
+      "mask_build_ms": {
+        "count": 68,
+        "max": 84.8084800018114,
+        "mean": 47.77683863219007,
+        "min": 25.46362999419216,
+        "p50": 46.658110499265604,
+        "p75": 57.43553325009998,
+        "p95": 73.38011925457977
+      },
+      "quality_gate_ms": {
+        "count": 68,
+        "max": 0.25986000400735065,
+        "mean": 0.0480723528573221,
+        "min": 0.009613002475816756,
+        "p50": 0.03964650022680871,
+        "p75": 0.05405749470810406,
+        "p95": 0.09890780165733302
+      },
+      "registration_ms": {
+        "count": 68,
+        "max": 187.1011620023637,
+        "mean": 85.83257801568406,
+        "min": 0.0008130009518936276,
+        "p50": 88.22422249795636,
+        "p75": 104.92625375263742,
+        "p95": 144.0234663503361
+      },
+      "tracker_ms": {
+        "count": 55,
+        "max": 0.591283998801373,
+        "mean": 0.03464141812979837,
+        "min": 0.01757899735821411,
+        "p50": 0.019302999135106802,
+        "p75": 0.025807003112277016,
+        "p95": 0.051867296861018965
+      },
+      "yellow_components_ms": {
+        "count": 68,
+        "max": 33.382638001057785,
+        "mean": 14.4899742645066,
+        "min": 5.348154998500831,
+        "p50": 12.563702497573104,
+        "p75": 16.708914250557427,
+        "p95": 26.080966051085852
+      }
+    },
+    "wall_time_ms": 1029.0097540055285
+  },
+  "snapshot_schema_version": 1,
+  "source": {
+    "commit": "7605fe7366a45a6e4425e7ae5dc07b9f251481ff",
+    "report_sha256": "f425d7fe5cd65fb5f2a754ddc5dfd237c9f984d7dbcd0fe305f1e8b602057438",
+    "summary_sha256": "526f9c6deead134391894595236bab1e5fd9442f88dfbb36375999deb8401b9b"
+  },
+  "split": "dev",
+  "stage_ceiling": {
+    "post_area_gate_oracle_at_20": 57,
+    "post_geometric_gate_oracle_at_20": 29,
+    "selected_recall_at_20": {
+      "matched": 19,
+      "recall": 0.30158730158730157,
+      "total_visible_non_ambiguous": 63
+    },
+    "visible_total": 63,
+    "yellow_raw_oracle_at_20": 61
+  }
+}
