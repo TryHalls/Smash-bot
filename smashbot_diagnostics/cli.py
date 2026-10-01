@@ -23,6 +23,7 @@ from .perception import (
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
 from .perception_train_subset import TrainSubsetError, build_train_subset
+from .perception_train_ground_truth import TrainGroundTruthError, audit_train_labels, build_train_ground_truth_snapshot
 from .perception_benchmark import benchmark_report, write_benchmark_report
 from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
@@ -276,6 +277,15 @@ def build_parser() -> argparse.ArgumentParser:
     train_subset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     train_subset.add_argument("--output", type=Path, default=Path("data/task010/train_subset.json"))
     train_subset.add_argument("--annotations-output", type=Path, default=Path("artifacts/task010/train_annotation/annotations.json"))
+
+    train_ground_truth = subparsers.add_parser(
+        "perception-train-ground-truth",
+        help="validate completed Task 010 TRAIN labels and write an immutable snapshot",
+    )
+    train_ground_truth.add_argument("--subset", type=Path, default=Path("data/task010/train_subset.json"))
+    train_ground_truth.add_argument("--annotations", type=Path, default=Path("artifacts/task010/train_annotation/annotations.json"))
+    train_ground_truth.add_argument("--task009-snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    train_ground_truth.add_argument("--output", type=Path, default=Path("data/task010/train_ground_truth.json"))
 
     benchmark = subparsers.add_parser(
         "perception-benchmark",
@@ -1504,6 +1514,23 @@ def _perception_train_subset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_train_ground_truth(args: argparse.Namespace) -> int:
+    try:
+        snapshot = build_train_ground_truth_snapshot(
+            subset_path=args.subset,
+            annotations_path=args.annotations,
+            task009_snapshot_path=args.task009_snapshot,
+            output_path=args.output,
+        )
+    except TrainGroundTruthError as exc:
+        print(f"TRAIN ground-truth error: {exc}")
+        return 2
+    print(f"Snapshot: {args.output}")
+    print(f"Records: {snapshot['dataset']['record_count']}")
+    print(json.dumps(audit_train_labels({"records": snapshot["records"]}), sort_keys=True))
+    return 0
+
+
 def _perception_benchmark(args: argparse.Namespace) -> int:
     report = benchmark_report(
         args.annotations,
@@ -1727,6 +1754,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_label(args)
         if args.command == "perception-train-subset":
             return _perception_train_subset(args)
+        if args.command == "perception-train-ground-truth":
+            return _perception_train_ground_truth(args)
         if args.command == "perception-benchmark":
             return _perception_benchmark(args)
         if args.command == "perception-dev-baseline":
