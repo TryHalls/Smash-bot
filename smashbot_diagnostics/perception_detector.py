@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .perception_masks import BASELINE_MASKS, MaskBundle, MaskConfig, build_masks
@@ -39,6 +39,9 @@ class DetectorResult:
     motion_pixels: int
     diagnostics: dict[str, Any]
     masks: MaskBundle | None = None
+    raw_candidates: tuple[ShuttleCandidate, ...] = ()
+    raw_components: tuple[dict[str, Any], ...] = ()
+    stage_timings_ms: dict[str, float] = field(default_factory=dict)
 
 
 def _opencv() -> tuple[Any, Any]:
@@ -62,16 +65,23 @@ def detect_candidates(
     previous_frame: Any | None = None,
     registration: RegistrationResult | None = None,
     config: DetectorConfig = BASELINE_DETECTOR,
+    include_raw: bool = False,
 ) -> DetectorResult:
     """Return candidates whose x/y are body-component centers, never trail centers."""
 
     start = time.perf_counter()
     cv2, numpy = _opencv()
+    mask_start = time.perf_counter()
     masks = build_masks(frame, previous_frame=previous_frame, registration=registration, config=config.masks)
+    mask_build_ms = (time.perf_counter() - mask_start) * 1000.0
+    components_start = time.perf_counter()
     count, labels, stats, centroids = cv2.connectedComponentsWithStats(masks.body, connectivity=8)
+    connected_components_ms = (time.perf_counter() - components_start) * 1000.0
     candidates: list[ShuttleCandidate] = []
+    raw_components: list[dict[str, Any]] = []
     radius = config.trail_dilation_radius
     dilation_kernel = numpy.ones((radius * 2 + 1, radius * 2 + 1), dtype=numpy.uint8)
+    scoring_start = time.perf_counter()
     for component in range(1, count):
         x, y, width, height, area = (int(value) for value in stats[component])
         if area < config.min_component_area or area > config.max_component_area:
@@ -95,34 +105,58 @@ def detect_candidates(
             + config.trail_weight * trail_score
         )
         center_x, center_y = centroids[component]
-        candidates.append(
-            ShuttleCandidate(
-                frame_index=frame_index,
-                pts_us=pts_us,
-                x=float(center_x),
-                y=float(center_y),
-                confidence=float(max(0.0, min(1.0, confidence))),
-                body_score=body_score,
-                trail_score=trail_score,
-                motion_score=motion_score,
-                area_px=float(area),
-                shape_score=shape_score,
-            )
+        candidate = ShuttleCandidate(
+            frame_index=frame_index,
+            pts_us=pts_us,
+            x=float(center_x),
+            y=float(center_y),
+            confidence=float(max(0.0, min(1.0, confidence))),
+            body_score=body_score,
+            trail_score=trail_score,
+            motion_score=motion_score,
+            area_px=float(area),
+            shape_score=shape_score,
         )
+        candidates.append(candidate)
+        raw_components.append(
+            {
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "area": area,
+                "body_pixels": body_pixels,
+                "candidate": candidate,
+            }
+        )
+    component_scoring_ms = (time.perf_counter() - scoring_start) * 1000.0
+    sort_start = time.perf_counter()
     candidates.sort(key=lambda candidate: (-candidate.confidence, candidate.x, candidate.y))
-    candidates = candidates[: config.max_candidates]
+    raw_candidates = tuple(candidates)
+    retained_candidates = tuple(candidates[: config.max_candidates])
+    candidate_sort_ms = (time.perf_counter() - sort_start) * 1000.0
+    total_algorithm_ms = (time.perf_counter() - start) * 1000.0
     return DetectorResult(
-        candidates=tuple(candidates),
-        processing_ms=(time.perf_counter() - start) * 1000.0,
+        candidates=retained_candidates,
+        processing_ms=total_algorithm_ms,
         component_count=max(0, count - 1),
         body_pixels=int((masks.body > 0).sum()),
         trail_pixels=int((masks.trail > 0).sum()),
         motion_pixels=int((masks.motion > 0).sum()),
         diagnostics={
             "config": config.name,
-            "candidate_count": len(candidates),
+            "candidate_count": len(retained_candidates),
             "body_components": max(0, count - 1),
             "trail_is_evidence_only": True,
         },
         masks=masks,
+        raw_candidates=raw_candidates if include_raw else (),
+        raw_components=tuple(raw_components) if include_raw else (),
+        stage_timings_ms={
+            "mask_build_ms": mask_build_ms,
+            "connected_components_ms": connected_components_ms,
+            "component_scoring_ms": component_scoring_ms,
+            "candidate_sort_ms": candidate_sort_ms,
+            "total_algorithm_ms": total_algorithm_ms,
+        },
     )

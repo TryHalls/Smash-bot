@@ -25,6 +25,7 @@ from .perception_annotations import build_ground_truth_subset, run_annotation_ui
 from .perception_benchmark import benchmark_report, write_benchmark_report
 from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
+from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -271,6 +272,14 @@ def build_parser() -> argparse.ArgumentParser:
     dev_baseline.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     dev_baseline.add_argument("--ffmpeg", default="ffmpeg")
     dev_baseline.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_baseline"))
+    dev_diagnose = subparsers.add_parser(
+        "perception-dev-diagnose",
+        help="attribute the BASELINE_UNTUNED detector on DEV without changing its behavior",
+    )
+    dev_diagnose.add_argument("--snapshot", type=Path, required=True)
+    dev_diagnose.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    dev_diagnose.add_argument("--ffmpeg", default="ffmpeg")
+    dev_diagnose.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_diagnosis"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1399,6 +1408,20 @@ def _perception_dev_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_dev_diagnose(args: argparse.Namespace) -> int:
+    report = run_dev_diagnosis(
+        args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        output_base=args.output_base,
+    )
+    report_path, summary_path, csv_path = write_diagnosis_outputs(report, args.output_base)
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    print(f"Frames CSV: {csv_path}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1440,8 +1463,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_benchmark(args)
         if args.command == "perception-dev-baseline":
             return _perception_dev_baseline(args)
+        if args.command == "perception-dev-diagnose":
+            return _perception_dev_diagnose(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ValueError) as exc:
         parser.error(str(exc))
     return 2

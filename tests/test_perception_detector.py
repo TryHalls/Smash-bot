@@ -49,6 +49,23 @@ class DetectorTests(unittest.TestCase):
         second = detect_candidates(frame, 1, 20)
         self.assertEqual(first.candidates, second.candidates)
 
+    def test_raw_diagnostic_preserves_normal_top32_output(self):
+        import numpy as np
+
+        frame = np.zeros((400, 320, 3), dtype=np.uint8)
+        frame[300:308, 80:88] = (255, 255, 255)
+        normal = detect_candidates(frame, 1, 20)
+        diagnostic = detect_candidates(frame, 1, 20, include_raw=True)
+        self.assertEqual(normal.candidates, diagnostic.candidates)
+        self.assertGreaterEqual(len(diagnostic.raw_candidates), len(diagnostic.candidates))
+        self.assertEqual(set(diagnostic.stage_timings_ms), {
+            "mask_build_ms",
+            "connected_components_ms",
+            "component_scoring_ms",
+            "candidate_sort_ms",
+            "total_algorithm_ms",
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
