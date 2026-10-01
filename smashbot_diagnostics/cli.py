@@ -33,6 +33,7 @@ from .perception_candidate_feasibility import CandidateFeasibilityError, run_can
 from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest, build_train_candidate_manifest
 from .perception_candidate_svm import CandidateSVMError, run_candidate_svm
 from .perception_candidate_cnn import CandidateCNNError, run_candidate_cnn
+from .perception_candidate_runtime import CandidateRuntimeError, run_candidate_runtime
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
@@ -428,6 +429,15 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_cnn.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     candidate_cnn.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
     candidate_cnn.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c2d1"))
+    candidate_runtime = subparsers.add_parser(
+        "perception-candidate-runtime",
+        help="run the Task 010 C2d2 OpenCV DNN runtime audit",
+    )
+    candidate_runtime.add_argument("--dev-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
+    candidate_runtime.add_argument("--train-manifest", type=Path, default=Path("data/task010/candidate_manifest_train.json"))
+    candidate_runtime.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_runtime.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    candidate_runtime.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c2d2"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1800,6 +1810,24 @@ def _perception_candidate_cnn(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_runtime(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_runtime(
+            args.dev_manifest,
+            args.train_manifest,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateRuntimeError as exc:
+        print(f"Candidate runtime error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C2d2: {report['status']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1856,8 +1884,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_candidate_svm(args)
         if args.command == "perception-candidate-cnn":
             return _perception_candidate_cnn(args)
+        if args.command == "perception-candidate-runtime":
+            return _perception_candidate_runtime(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, ValueError) as exc:
         parser.error(str(exc))
     return 2
