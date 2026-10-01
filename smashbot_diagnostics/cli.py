@@ -1378,6 +1378,7 @@ def _perception_benchmark(args: argparse.Namespace) -> int:
 
 def _perception_dev_baseline(args: argparse.Namespace) -> int:
     report = run_dev_baseline(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg)
+    args.output_base.mkdir(parents=True, exist_ok=True)
     report_path = args.output_base / "report.json"
     summary_path = args.output_base / "summary.txt"
     write_json(report_path, report)
