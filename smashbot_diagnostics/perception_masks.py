@@ -46,6 +46,11 @@ class MaskBundle:
     trail: Any
     motion: Any
     eligible: Any
+    # Keep the already-computed component masks available to explicit V1
+    # paths.  Existing BASELINE_UNTUNED consumers continue to use body/trail/
+    # motion unchanged; these fields avoid rebuilding HSV masks for V1.
+    yellow: Any | None = None
+    white: Any | None = None
 
 
 def _gray(frame: Any, cv2: Any) -> Any:
@@ -91,11 +96,17 @@ def build_masks(
     )
     eligible = numpy.ones((height, width), dtype=numpy.uint8) * 255
     eligible[: min(config.hud_rows, height), :] = 0
+    yellow = cv2.bitwise_and(yellow, eligible)
+    white = cv2.bitwise_and(white, eligible)
+    # Preserve the historical BASELINE_UNTUNED operation exactly: the body
+    # morphology is applied after the union, while V1 receives separate
+    # component masks below.
     body = cv2.bitwise_or(white, yellow)
-    body = cv2.bitwise_and(body, eligible)
     trail = cv2.bitwise_and(cyan, eligible)
     kernel = numpy.ones((3, 3), dtype=numpy.uint8)
     body = cv2.morphologyEx(body, cv2.MORPH_OPEN, kernel)
+    yellow = cv2.morphologyEx(yellow, cv2.MORPH_OPEN, kernel)
+    white = cv2.morphologyEx(white, cv2.MORPH_OPEN, kernel)
     trail = cv2.morphologyEx(trail, cv2.MORPH_OPEN, kernel)
     motion = numpy.zeros((height, width), dtype=numpy.uint8)
     if previous_frame is not None:
@@ -113,4 +124,4 @@ def build_masks(
         motion = cv2.threshold(difference, config.motion_delta_threshold, 255, cv2.THRESH_BINARY)[1]
         motion = cv2.bitwise_and(motion, eligible)
         motion = cv2.morphologyEx(motion, cv2.MORPH_OPEN, kernel)
-    return MaskBundle(body=body, trail=trail, motion=motion, eligible=eligible)
+    return MaskBundle(body=body, trail=trail, motion=motion, eligible=eligible, yellow=yellow, white=white)

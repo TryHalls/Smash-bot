@@ -28,6 +28,7 @@ from .perception_compare import BenchmarkComparisonError, compare_report_files, 
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
+from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -300,6 +301,22 @@ def build_parser() -> argparse.ArgumentParser:
     feasibility.add_argument("--ffmpeg", default="ffmpeg")
     feasibility.add_argument("--topology-report", type=Path, default=Path("artifacts/task009/component_topology/report.json"))
     feasibility.add_argument("--output-base", type=Path, default=Path("artifacts/task009/candidate_feasibility"))
+    v1_calibrate = subparsers.add_parser(
+        "perception-v1-calibrate",
+        help="calibrate the fixed yellow-primary V1 rules on DEV only",
+    )
+    v1_calibrate.add_argument("--snapshot", type=Path, required=True)
+    v1_calibrate.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    v1_calibrate.add_argument("--ffmpeg", default="ffmpeg")
+    v1_calibrate.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v1_calibration"))
+    v1_benchmark = subparsers.add_parser(
+        "perception-v1-baseline",
+        help="run one frozen V1 DEV benchmark",
+    )
+    v1_benchmark.add_argument("--snapshot", type=Path, required=True)
+    v1_benchmark.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    v1_benchmark.add_argument("--ffmpeg", default="ffmpeg")
+    v1_benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v1_baseline"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1473,6 +1490,23 @@ def _perception_candidate_feasibility(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_v1_calibrate(args: argparse.Namespace) -> int:
+    report = calibrate_v1(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg, output_base=args.output_base)
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Selected rule: {report['selected_rule']}")
+    print(f"Area band: {report['positive_area']}")
+    return 0
+
+
+def _perception_v1_baseline(args: argparse.Namespace) -> int:
+    report = run_v1_dev(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg, output_base=args.output_base)
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Status: {report['status']}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1520,8 +1554,12 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_component_topology(args)
         if args.command == "perception-candidate-feasibility":
             return _perception_candidate_feasibility(args)
+        if args.command == "perception-v1-calibrate":
+            return _perception_v1_calibrate(args)
+        if args.command == "perception-v1-baseline":
+            return _perception_v1_baseline(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, ValueError) as exc:
         parser.error(str(exc))
     return 2
