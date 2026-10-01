@@ -23,6 +23,7 @@ from .perception import (
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
 from .perception_benchmark import benchmark_report, write_benchmark_report
+from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
@@ -262,6 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--predictions", type=Path)
     benchmark.add_argument("--split", choices=("all", "dev", "holdout"), default="all")
     benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/benchmark"))
+    dev_baseline = subparsers.add_parser(
+        "perception-dev-baseline",
+        help="run the single BASELINE_UNTUNED perception pass on the frozen DEV split only",
+    )
+    dev_baseline.add_argument("--snapshot", type=Path, required=True)
+    dev_baseline.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    dev_baseline.add_argument("--ffmpeg", default="ffmpeg")
+    dev_baseline.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_baseline"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1367,6 +1376,28 @@ def _perception_benchmark(args: argparse.Namespace) -> int:
     return 0 if report["status"] == "COMPLETED" else 2
 
 
+def _perception_dev_baseline(args: argparse.Namespace) -> int:
+    report = run_dev_baseline(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg)
+    report_path = args.output_base / "report.json"
+    summary_path = args.output_base / "summary.txt"
+    write_json(report_path, report)
+    write_summary(
+        summary_path,
+        [
+            "Task 009 BASELINE_UNTUNED DEV perception benchmark",
+            f"Status: {report['status']}",
+            f"Split: {report['split']}",
+            f"Detector: {report['configuration']['detector']}",
+            f"Visible recall@20: {report['metrics']['recall_at_radius_px']['20px']['recall']}",
+            f"Registration: {report['registration']['valid_transforms']}/{report['registration']['eligible_transitions']}",
+            "Holdout used: false",
+        ],
+    )
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1406,8 +1437,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_label(args)
         if args.command == "perception-benchmark":
             return _perception_benchmark(args)
+        if args.command == "perception-dev-baseline":
+            return _perception_dev_baseline(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, ValueError) as exc:
         parser.error(str(exc))
     return 2
