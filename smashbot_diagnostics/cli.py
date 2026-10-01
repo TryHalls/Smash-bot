@@ -29,6 +29,7 @@ from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagno
 from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
 from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest
+from .perception_candidate_svm import CandidateSVMError, run_candidate_svm
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
@@ -363,6 +364,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"),
         help="historical Task 009 report used only for proposal equivalence diagnostics",
     )
+    candidate_svm = subparsers.add_parser(
+        "perception-candidate-svm",
+        help="run the Task 010 Gate C1 OpenCV HOG + linear SVM DEV scorer",
+    )
+    candidate_svm.add_argument("--manifest", type=Path, required=True)
+    candidate_svm.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    candidate_svm.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_svm.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_svm.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c1"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1634,6 +1644,24 @@ def _perception_candidate_dataset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_svm(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_svm(
+            args.manifest,
+            snapshot_path=args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateSVMError as exc:
+        print(f"Candidate SVM error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C1: {report['status']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1680,6 +1708,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_appearance_geometry(args)
         if args.command == "perception-candidate-dataset":
             return _perception_candidate_dataset(args)
+        if args.command == "perception-candidate-svm":
+            return _perception_candidate_svm(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
     except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
