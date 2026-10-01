@@ -11,6 +11,7 @@ from smashbot_diagnostics.perception_tracker import TemporalTracker
 from smashbot_diagnostics.perception_v1 import (
     V1Config,
     V1_DEV_FROZEN,
+    acquisition_pair_is_consecutive,
     _dev_records,
     is_confirmed_observation,
     quality_gate,
@@ -86,6 +87,12 @@ class V1PerceptionTests(unittest.TestCase):
         second = tracker.step(1, 20_000, _observation(1, 20_000, 11, 10))
         self.assertFalse(is_confirmed_observation(first))
         self.assertTrue(is_confirmed_observation(second))
+
+    def test_acquisition_requires_consecutive_second_hit(self) -> None:
+        first = _candidate(10, 10, 0.8)
+        second = _candidate(11, 10, 0.8)
+        self.assertTrue(acquisition_pair_is_consecutive(first, 4, second, 5))
+        self.assertFalse(acquisition_pair_is_consecutive(first, 4, second, 6))
 
     def test_tracking_prefers_prediction_distance_before_appearance(self) -> None:
         near = _candidate(100, 100, 0.1)

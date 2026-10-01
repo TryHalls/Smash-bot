@@ -302,6 +302,22 @@ def is_confirmed_observation(tracker_result: Any) -> bool:
     return bool(tracker_result.observed and tracker_result.state == "tracking")
 
 
+def acquisition_pair_is_consecutive(
+    pending_candidate: ShuttleCandidate | None,
+    pending_frame_index: int | None,
+    selected: ShuttleCandidate | None,
+    current_frame_index: int,
+    gate_px: float = V1_AREA_GATE_PX,
+) -> bool:
+    return bool(
+        pending_candidate is not None
+        and pending_frame_index is not None
+        and current_frame_index == pending_frame_index + 1
+        and selected is not None
+        and math.hypot(selected.x - pending_candidate.x, selected.y - pending_candidate.y) <= gate_px
+    )
+
+
 def _iter_dev_frames(snapshot: dict[str, Any], task008_root: Path, ffmpeg: str):
     cv2, numpy = _opencv_numpy()
     records = _dev_records(snapshot)
@@ -542,6 +558,10 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
     stage_times: dict[str, list[float]] = defaultdict(list)
     for burst in sorted({item["burst_id"] for item in items}):
         tracker = TemporalTracker()
+        confirmed = False
+        pending_candidate: ShuttleCandidate | None = None
+        pending_frame_index: int | None = None
+        pending_pts_us: int | None = None
         for item in [value for value in items if value["burst_id"] == burst]:
             record = item["record"]
             frame_start = time.perf_counter()
@@ -551,7 +571,7 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
             mask_time_start = time.perf_counter()
             yellow = yellow_candidates(masks, item["frame_index"], item["pts_us"])
             stage_times["yellow_components_ms"].append((time.perf_counter() - mask_time_start) * 1000.0)
-            predicted = _prediction(tracker, item["pts_us"])
+            predicted = _prediction(tracker, item["pts_us"]) if confirmed else None
             quality_start = time.perf_counter()
             selected, mode, quality = select_candidate(yellow, config=config, predicted_position=predicted)
             white_used = False
@@ -567,12 +587,72 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                     white_used = True
             stage_times["quality_gate_ms"].append((time.perf_counter() - quality_start) * 1000.0)
             stage_times["association_ms"].append((time.perf_counter() - association_start) * 1000.0)
-            was_confirmed = tracker.state is not None and tracker.state.status in {"tracking", "coasting"}
-            observation = ShuttleObservation(item["frame_index"], item["pts_us"], selected.x, selected.y, selected.confidence, selected) if selected else None
-            tracker_start = time.perf_counter()
-            tracker_result = tracker.step(item["frame_index"], item["pts_us"], observation)
-            stage_times["tracker_ms"].append((time.perf_counter() - tracker_start) * 1000.0)
-            confirmed_observation = is_confirmed_observation(tracker_result)
+            was_confirmed = confirmed
+            tracker_kind = "none"
+            tracker_state = "empty"
+            tracker_confidence = 0.0
+            confirmed_observation = False
+            if not confirmed:
+                # Acquisition is an explicit two-consecutive-hit state
+                # machine.  A tentative hit is retained only as a pending
+                # hypothesis and is never emitted as an observation.
+                consecutive = acquisition_pair_is_consecutive(
+                    pending_candidate,
+                    pending_frame_index,
+                    selected,
+                    item["frame_index"],
+                    config.gate_px,
+                )
+                if consecutive:
+                    tracker_start = time.perf_counter()
+                    tracker.reset("v1_acquisition_confirmation")
+                    assert pending_candidate is not None and pending_pts_us is not None
+                    tracker.step(
+                        pending_frame_index,
+                        pending_pts_us,
+                        ShuttleObservation(pending_frame_index, pending_pts_us, pending_candidate.x, pending_candidate.y, pending_candidate.confidence, pending_candidate),
+                    )
+                    tracker_result = tracker.step(
+                        item["frame_index"],
+                        item["pts_us"],
+                        ShuttleObservation(item["frame_index"], item["pts_us"], selected.x, selected.y, selected.confidence, selected),
+                    )
+                    stage_times["tracker_ms"].append((time.perf_counter() - tracker_start) * 1000.0)
+                    confirmed = tracker_result.state == "tracking"
+                    confirmed_observation = confirmed and is_confirmed_observation(tracker_result)
+                    tracker_kind = tracker_result.kind
+                    tracker_state = tracker_result.state
+                    tracker_confidence = tracker_result.confidence
+                    pending_candidate = None
+                    pending_frame_index = None
+                    pending_pts_us = None
+                elif selected is not None:
+                    pending_candidate = selected
+                    pending_frame_index = item["frame_index"]
+                    pending_pts_us = item["pts_us"]
+                    tracker.reset("v1_pending_acquisition")
+                    tracker_kind = "candidate_pending"
+                    tracker_state = "tentative"
+                    tracker_confidence = selected.confidence
+                else:
+                    pending_candidate = None
+                    pending_frame_index = None
+                    pending_pts_us = None
+                    tracker.reset("v1_acquisition_miss")
+            else:
+                observation = ShuttleObservation(item["frame_index"], item["pts_us"], selected.x, selected.y, selected.confidence, selected) if selected else None
+                tracker_start = time.perf_counter()
+                tracker_result = tracker.step(item["frame_index"], item["pts_us"], observation)
+                stage_times["tracker_ms"].append((time.perf_counter() - tracker_start) * 1000.0)
+                confirmed_observation = is_confirmed_observation(tracker_result)
+                tracker_kind = tracker_result.kind
+                tracker_state = tracker_result.state
+                tracker_confidence = tracker_result.confidence
+                if tracker_state == "lost":
+                    confirmed = False
+                    pending_candidate = None
+                    pending_frame_index = None
+                    pending_pts_us = None
             total_algorithm_ms = item["registration_ms"] + item["mask_build_ms"] + (time.perf_counter() - frame_start) * 1000.0
             if confirmed_observation and tracker_result.observation is not None:
                 obs = tracker_result.observation
@@ -587,8 +667,8 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                 prediction_record = {
                     "source_run": item["source_run"], "frame_index": item["frame_index"], "pts_us": item["pts_us"], "split": "dev",
                     "clip": record["clip"], "burst_id": record["burst_id"], "is_observation": False,
-                    "track_id": f"task009-v1-{burst}", "track_kind": tracker_result.kind, "track_state": tracker_result.state,
-                    "confidence": tracker_result.confidence,
+                    "track_id": f"task009-v1-{burst}", "track_kind": tracker_kind, "track_state": tracker_state,
+                    "confidence": tracker_confidence,
                     "algorithm_latency_ms": total_algorithm_ms,
                 }
             predictions.append(prediction_record)
@@ -600,7 +680,7 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                 "predicted_position": list(predicted) if predicted is not None else None,
                 "selected": _candidate_dict(selected), "selection_mode": mode,
                 "white_fallback_used": white_used, "was_confirmed_before_frame": was_confirmed,
-                "tracker_kind": tracker_result.kind, "tracker_state": tracker_result.state,
+                "tracker_kind": tracker_kind, "tracker_state": tracker_state,
                 "registration_ms": item["registration_ms"], "mask_build_ms": item["mask_build_ms"],
             })
     return predictions, {"frames": frame_diagnostics, "registrations": registrations, "stage_times_ms": {key: _summary(values) for key, values in stage_times.items()}}
