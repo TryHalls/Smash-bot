@@ -9,6 +9,7 @@ from smashbot_diagnostics.perception_candidate_svm import (
     TOP_K,
     _first_acquisition_pair,
     _folds,
+    _aggregate_topk,
     _rank_rows,
     _score_orientation,
     derive_class_weights,
@@ -75,6 +76,24 @@ class Task010CandidateSVMTests(unittest.TestCase):
 
     def test_top_k_gate_is_fixed(self) -> None:
         self.assertEqual(TOP_K, (1, 3, 8, 16, 32))
+
+    def test_positive_and_oracle_topk_aggregates_are_separate(self) -> None:
+        positive_a = {str(k): {"matched": 1 if k == 1 else 0, "total": 2} for k in TOP_K}
+        positive_b = {str(k): {"matched": 0, "total": 1} for k in TOP_K}
+        oracle_a = {str(k): {"matched": 2 if k == 1 else 0, "total": 3} for k in TOP_K}
+        oracle_b = {str(k): {"matched": 1 if k == 1 else 0, "total": 4} for k in TOP_K}
+        folds = [
+            {
+                "positive_metrics": positive_a,
+                "oracle_at_20": oracle_a,
+            },
+            {
+                "positive_metrics": positive_b,
+                "oracle_at_20": oracle_b,
+            },
+        ]
+        self.assertEqual(_aggregate_topk(folds, "positive_metrics")["1"], {"matched": 1, "total": 3, "rate": 1 / 3})
+        self.assertEqual(_aggregate_topk(folds, "oracle_at_20")["1"], {"matched": 3, "total": 7, "rate": 3 / 7})
 
 
 if __name__ == "__main__":

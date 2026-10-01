@@ -249,6 +249,20 @@ def _score_distribution(rows: list[dict[str, Any]], scores: Iterable[float]) -> 
     }
 
 
+def _aggregate_topk(fold_reports: Iterable[dict[str, Any]], metric_key: str) -> dict[str, dict[str, Any]]:
+    """Micro-aggregate one top-k metric without mixing it with another metric."""
+    aggregate = {str(k): {"matched": 0, "total": 0} for k in TOP_K}
+    for report in fold_reports:
+        metric = report[metric_key]
+        for k in TOP_K:
+            value = metric[str(k)]
+            aggregate[str(k)]["matched"] += int(value["matched"])
+            aggregate[str(k)]["total"] += int(value["total"])
+    for value in aggregate.values():
+        value["rate"] = value["matched"] / value["total"] if value["total"] else None
+    return aggregate
+
+
 def _git_commit() -> str:
     try:
         return subprocess.run(["git", "rev-parse", "HEAD"], check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
@@ -481,7 +495,6 @@ def run_candidate_svm(
     # Reconstruct aggregate metrics from the per-fold frame reports, without
     # treating macro fold averages as a micro aggregate.
     positive_ranks: list[int] = []
-    oracle_ranks_by_k = {str(k): {"matched": 0, "total": 0} for k in TOP_K}
     candidate_total = 0
     validation_positive_total = 0
     runtime_values = {key: [] for key in ("patch_regeneration_ms", "hog_extraction_ms", "svm_predict_ms", "scorer_total_ms")}
@@ -495,9 +508,6 @@ def run_candidate_svm(
         for frame in report["runtime_frames"]:
             for key in runtime_values:
                 runtime_values[key].append(frame[key])
-        for k in TOP_K:
-            oracle_ranks_by_k[str(k)]["matched"] += report["oracle_at_20"][str(k)]["matched"]
-            oracle_ranks_by_k[str(k)]["total"] += report["oracle_at_20"][str(k)]["total"]
     # Ranks are recovered from the per-fold summary only for percentile-free
     # fold metrics; the global top-K is an exact micro aggregate.
     global_positive = {
@@ -508,9 +518,8 @@ def run_candidate_svm(
         "rank_by_fold": {fold: report["positive_metrics"]["rank"] for fold, report in fold_reports.items()},
         "mrr_by_fold": {fold: report["positive_metrics"]["mrr"] for fold, report in fold_reports.items()},
     }
-    for k in TOP_K:
-        value = oracle_ranks_by_k[str(k)]
-        global_positive["topk"][str(k)] = {**value, "rate": value["matched"] / value["total"] if value["total"] else None}
+    global_positive["topk"] = _aggregate_topk(fold_reports.values(), "positive_metrics")
+    global_oracle_at_20 = _aggregate_topk(fold_reports.values(), "oracle_at_20")
     global_runtime = {key: _summary(values) for key, values in runtime_values.items()}
     global_runtime["candidates_per_frame"] = _summary(
         frame["candidate_count"]
@@ -546,6 +555,7 @@ def run_candidate_svm(
             "validation_candidates": candidate_total,
             "validation_positives": validation_positive_total,
             "positive_metrics": global_positive,
+            "oracle_at_20": global_oracle_at_20,
             "top8_by_burst": top8_rates,
             "top8_global": top8_global,
             "first_acquisition_pairs": first_pairs,
