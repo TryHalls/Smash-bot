@@ -10,6 +10,7 @@ from smashbot_diagnostics.perception_candidate_runtime import (
     _blob_from_patches,
     _padding,
     _rank_indices,
+    fast_canonical_patches_v2,
     fast_canonical_patches,
 )
 from smashbot_diagnostics.perception_models import ShuttleCandidate
@@ -37,6 +38,20 @@ class Task010CandidateRuntimeTests(unittest.TestCase):
             self.assertTrue(numpy.array_equal(reference, fast_patch))
             self.assertEqual(reference_padding, padding)
             self.assertEqual(reference_hash, __import__("hashlib").sha256(fast_patch.tobytes(order="C")).hexdigest())
+
+    def test_v2_patch_matches_reference_at_borders_and_interior(self) -> None:
+        try:
+            import numpy
+        except ImportError:
+            self.skipTest("NumPy is unavailable")
+        frame = numpy.arange(100 * 120 * 3, dtype=numpy.uint8).reshape((100, 120, 3))
+        candidates = [candidate(0.0, 0.0), candidate(119.0, 99.0), candidate(60.4, 48.6)]
+        patches, paddings = fast_canonical_patches_v2(frame, candidates)
+        for item, patch, padding in zip(candidates, patches, paddings):
+            reference, reference_padding, reference_hash = canonical_patch(frame, item)
+            self.assertTrue(numpy.array_equal(reference, patch))
+            self.assertEqual(reference_padding, padding)
+            self.assertEqual(reference_hash, __import__("hashlib").sha256(patch.tobytes(order="C")).hexdigest())
 
     def test_blob_is_nchw_float32_and_supports_variable_batch(self) -> None:
         try:

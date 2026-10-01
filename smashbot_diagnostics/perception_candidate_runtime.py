@@ -124,6 +124,63 @@ def fast_canonical_patches(frame_bgr: Any, candidates: list[Any]) -> tuple[list[
     return patches, paddings
 
 
+def fast_canonical_patches_v2(frame_bgr: Any, candidates: list[Any]) -> tuple[list[Any], list[dict[str, int]]]:
+    """Create exact patches without a frame-wide border or RGB conversion.
+
+    Interior candidates use only their 96x96 BGR ROI.  Candidates whose crop
+    touches a frame edge use the minimum ``BORDER_REFLECT_101`` padding needed
+    to reproduce :func:`canonical_patch` exactly.  This function deliberately
+    does not hash patches; hashing remains a separate, untimed equivalence
+    diagnostic.
+    """
+
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise CandidateRuntimeError("C2d4 requires OpenCV") from exc
+    numpy = _numpy()
+    if getattr(frame_bgr, "ndim", None) != 3 or frame_bgr.shape[2] != 3:
+        raise CandidateRuntimeError("v2 canonical patch source must be BGR three-channel")
+    height, width = frame_bgr.shape[:2]
+    patches: list[Any] = []
+    paddings: list[dict[str, int]] = []
+    for candidate in candidates:
+        cx = math.floor(float(candidate.x) + 0.5)
+        cy = math.floor(float(candidate.y) + 0.5)
+        if not (0 <= cx < width and 0 <= cy < height):
+            raise CandidateRuntimeError("candidate center lies outside source frame")
+        left, top = cx - PATCH_PAD, cy - PATCH_PAD
+        right, bottom = left + PATCH_SOURCE_SIZE, top + PATCH_SOURCE_SIZE
+        padding = {
+            "pad_left": max(0, -left),
+            "pad_top": max(0, -top),
+            "pad_right": max(0, right - width),
+            "pad_bottom": max(0, bottom - height),
+        }
+        if any(padding.values()):
+            source_frame = cv2.copyMakeBorder(
+                frame_bgr,
+                padding["pad_top"],
+                padding["pad_bottom"],
+                padding["pad_left"],
+                padding["pad_right"],
+                cv2.BORDER_REFLECT_101,
+            )
+            source = source_frame[
+                top + padding["pad_top"] : bottom + padding["pad_top"],
+                left + padding["pad_left"] : right + padding["pad_left"],
+            ]
+        else:
+            source = frame_bgr[top:bottom, left:right]
+        if source.shape[:2] != (PATCH_SOURCE_SIZE, PATCH_SOURCE_SIZE):
+            raise CandidateRuntimeError("v2 canonical patch geometry did not produce 96x96")
+        rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (PATCH_OUTPUT_SIZE, PATCH_OUTPUT_SIZE), interpolation=cv2.INTER_AREA)
+        patches.append(numpy.ascontiguousarray(resized, dtype=numpy.uint8))
+        paddings.append(padding)
+    return patches, paddings
+
+
 def _frame_groups(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, list[dict[str, Any]]]]]:
     grouped: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
