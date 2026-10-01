@@ -1,7 +1,7 @@
 import importlib.util
 import unittest
 
-from smashbot_diagnostics.perception_detector import BASELINE_DETECTOR, detect_candidates
+from smashbot_diagnostics.perception_detector import BASELINE_DETECTOR, detect_candidates, detect_candidates_reference
 from smashbot_diagnostics.perception_masks import build_masks
 
 
@@ -65,6 +65,23 @@ class DetectorTests(unittest.TestCase):
             "candidate_sort_ms",
             "total_algorithm_ms",
         })
+
+    def test_roi_scoring_matches_reference_at_frame_border_with_motion(self):
+        import cv2
+        import numpy as np
+
+        previous = np.zeros((400, 320, 3), dtype=np.uint8)
+        current = np.zeros_like(previous)
+        cv2.circle(previous, (3, 305), 6, (255, 255, 255), -1)
+        cv2.circle(current, (2, 305), 6, (255, 255, 255), -1)
+        cv2.line(current, (0, 305), (24, 305), (255, 255, 0), 3)
+        optimized = detect_candidates(current, 2, 2000, previous_frame=previous, include_raw=True)
+        reference = detect_candidates_reference(current, 2, 2000, previous_frame=previous, include_raw=True)
+        self.assertEqual(optimized.candidates, reference.candidates)
+        self.assertEqual(optimized.raw_candidates, reference.raw_candidates)
+        for actual, expected in zip(optimized.raw_candidates, reference.raw_candidates):
+            for field in ("x", "y", "confidence", "body_score", "motion_score", "trail_score", "shape_score", "area_px"):
+                self.assertEqual(getattr(actual, field), getattr(expected, field), field)
 
 
 if __name__ == "__main__":

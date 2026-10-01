@@ -67,6 +67,53 @@ def detect_candidates(
     config: DetectorConfig = BASELINE_DETECTOR,
     include_raw: bool = False,
 ) -> DetectorResult:
+    return _detect_candidates(
+        frame,
+        frame_index,
+        pts_us,
+        previous_frame=previous_frame,
+        registration=registration,
+        config=config,
+        include_raw=include_raw,
+        roi_local=True,
+    )
+
+
+def detect_candidates_reference(
+    frame: Any,
+    frame_index: int,
+    pts_us: int,
+    *,
+    previous_frame: Any | None = None,
+    registration: RegistrationResult | None = None,
+    config: DetectorConfig = BASELINE_DETECTOR,
+    include_raw: bool = False,
+) -> DetectorResult:
+    """Reference implementation retained for DEV equivalence checks only."""
+
+    return _detect_candidates(
+        frame,
+        frame_index,
+        pts_us,
+        previous_frame=previous_frame,
+        registration=registration,
+        config=config,
+        include_raw=include_raw,
+        roi_local=False,
+    )
+
+
+def _detect_candidates(
+    frame: Any,
+    frame_index: int,
+    pts_us: int,
+    *,
+    previous_frame: Any | None,
+    registration: RegistrationResult | None,
+    config: DetectorConfig,
+    include_raw: bool,
+    roi_local: bool,
+) -> DetectorResult:
     """Return candidates whose x/y are body-component centers, never trail centers."""
 
     start = time.perf_counter()
@@ -86,14 +133,26 @@ def detect_candidates(
         x, y, width, height, area = (int(value) for value in stats[component])
         if area < config.min_component_area or area > config.max_component_area:
             continue
-        body_pixels = int((labels[y : y + height, x : x + width] == component).sum())
+        component_labels = labels[y : y + height, x : x + width]
+        body_pixels = int(area) if roi_local else int((component_labels == component).sum())
         if body_pixels < config.min_body_pixels:
             continue
-        component_mask = numpy.zeros_like(masks.body)
-        component_mask[labels == component] = 255
-        nearby = cv2.dilate(component_mask, dilation_kernel)
-        trail_pixels = int(((nearby > 0) & (masks.trail > 0)).sum())
-        motion_pixels = int(((component_mask > 0) & (masks.motion > 0)).sum())
+        if roi_local:
+            expand_x0 = max(0, x - radius)
+            expand_y0 = max(0, y - radius)
+            expand_x1 = min(masks.body.shape[1], x + width + radius)
+            expand_y1 = min(masks.body.shape[0], y + height + radius)
+            local_labels = labels[expand_y0:expand_y1, expand_x0:expand_x1]
+            local_component_mask = numpy.where(local_labels == component, 255, 0).astype(numpy.uint8)
+            nearby = cv2.dilate(local_component_mask, dilation_kernel)
+            trail_pixels = int(((nearby > 0) & (masks.trail[expand_y0:expand_y1, expand_x0:expand_x1] > 0)).sum())
+            motion_pixels = int(((component_labels == component) & (masks.motion[y : y + height, x : x + width] > 0)).sum())
+        else:
+            component_mask = numpy.zeros_like(masks.body)
+            component_mask[labels == component] = 255
+            nearby = cv2.dilate(component_mask, dilation_kernel)
+            trail_pixels = int(((nearby > 0) & (masks.trail > 0)).sum())
+            motion_pixels = int(((component_mask > 0) & (masks.motion > 0)).sum())
         body_score = _score(body_pixels, 80.0)
         motion_score = _score(motion_pixels, 50.0)
         trail_score = _score(trail_pixels, 120.0)

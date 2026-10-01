@@ -26,6 +26,7 @@ from .perception_benchmark import benchmark_report, write_benchmark_report
 from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
+from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -280,6 +281,15 @@ def build_parser() -> argparse.ArgumentParser:
     dev_diagnose.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     dev_diagnose.add_argument("--ffmpeg", default="ffmpeg")
     dev_diagnose.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_diagnosis"))
+    topology = subparsers.add_parser(
+        "perception-component-topology",
+        help="diagnose pre-filter body connected components on DEV NO_NEAR_COMPONENT frames",
+    )
+    topology.add_argument("--snapshot", type=Path, required=True)
+    topology.add_argument("--diagnosis-report", type=Path, required=True)
+    topology.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    topology.add_argument("--ffmpeg", default="ffmpeg")
+    topology.add_argument("--output-base", type=Path, default=Path("artifacts/task009/component_topology"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1422,6 +1432,21 @@ def _perception_dev_diagnose(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_component_topology(args: argparse.Namespace) -> int:
+    report = run_component_topology(
+        args.snapshot,
+        diagnosis_report=args.diagnosis_report,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Frames: {args.output_base / 'frames.csv'}")
+    print(f"Classification: {report['classification']['global']}")
+    return 0
+
+
 def _perception_compare(args: argparse.Namespace) -> int:
     try:
         report = compare_report_files(args.baseline, args.candidate)
@@ -1465,8 +1490,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_dev_baseline(args)
         if args.command == "perception-dev-diagnose":
             return _perception_dev_diagnose(args)
+        if args.command == "perception-component-topology":
+            return _perception_component_topology(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, ValueError) as exc:
         parser.error(str(exc))
     return 2

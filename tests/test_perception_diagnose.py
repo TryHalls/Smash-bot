@@ -3,6 +3,7 @@ import unittest
 from smashbot_diagnostics.perception_detector import BASELINE_DETECTOR
 from smashbot_diagnostics.perception_diagnose import _dev_records, _failure_category, _oracle, _profile_key
 from smashbot_diagnostics.perception_models import ShuttleCandidate
+from smashbot_diagnostics.perception_component_topology import classify_component_topology
 
 
 class PerceptionDiagnosisTests(unittest.TestCase):
@@ -54,6 +55,12 @@ class PerceptionDiagnosisTests(unittest.TestCase):
     def test_total_algorithm_timer_is_not_double_counted(self):
         self.assertEqual(_profile_key("total_algorithm_ms"), "detector_total_algorithm_ms")
         self.assertEqual(_profile_key("association_ms"), "association_ms")
+
+    def test_component_topology_categories_are_deterministic(self):
+        self.assertEqual(classify_component_topology([{"area": 501, "centroid_distance_px": 4}]), "FILTERED_TOO_LARGE")
+        self.assertEqual(classify_component_topology([{"area": 2, "centroid_distance_px": 4}]), "FILTERED_TOO_SMALL")
+        self.assertEqual(classify_component_topology([{"area": 20, "centroid_distance_px": 25}]), "CENTROID_DRAGGED_OR_MERGED")
+        self.assertEqual(classify_component_topology([{"area": 1, "centroid_distance_px": 4}, {"area": 2, "centroid_distance_px": 5}]), "FILTERED_TOO_SMALL")
 
 
 if __name__ == "__main__":

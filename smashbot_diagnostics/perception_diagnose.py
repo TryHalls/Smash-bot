@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .perception_association import associate_candidates
-from .perception_detector import BASELINE_DETECTOR, DetectorResult, detect_candidates
+from .perception_detector import BASELINE_DETECTOR, DetectorResult, detect_candidates, detect_candidates_reference
 from .perception_frames import FFmpegFrameStream, FrameStreamError, load_frame_metadata
 from .perception_metrics import percentile
 from .perception_models import ShuttleCandidate, ShuttleObservation
@@ -260,9 +260,14 @@ def run_dev_diagnosis(
     task008_root: Path = Path("artifacts/task008"),
     ffmpeg: str = "ffmpeg",
     output_base: Path = Path("artifacts/task009/dev_diagnosis"),
+    implementation: str = "optimized",
+    generate_debug: bool = True,
 ) -> dict[str, Any]:
     """Run attribution diagnostics over DEV only, without changing baseline semantics."""
 
+    if implementation not in {"optimized", "reference"}:
+        raise DiagnosisError(f"unknown detector implementation: {implementation}")
+    started = time.perf_counter()
     try:
         import cv2
         import numpy as np
@@ -279,7 +284,7 @@ def run_dev_diagnosis(
         records_by_burst[record["burst_id"]].append(record)
     for values in records_by_burst.values():
         values.sort(key=lambda item: item["frame_index"])
-    debug_targets = _debug_targets(records_by_burst)
+    debug_targets = _debug_targets(records_by_burst) if generate_debug else set()
     output_base = Path(output_base)
     debug_dir = output_base / "debug"
     debug_dir.mkdir(parents=True, exist_ok=True)
@@ -320,7 +325,8 @@ def run_dev_diagnosis(
                     registration = register_translation(previous_bgr, current_bgr, mask=mask, config=BASELINE_UNTUNED)
                     registration_info.update(registration_dict(registration))
                     registration_results.append({"source_run": source_run, "burst_id": burst_id, "from_frame_index": indices[indices.index(offline_frame.frame_index) - 1], "to_frame_index": offline_frame.frame_index, **registration_dict(registration)})
-                detected = detect_candidates(
+                detector = detect_candidates if implementation == "optimized" else detect_candidates_reference
+                detected = detector(
                     current_bgr,
                     offline_frame.frame_index,
                     offline_frame.pts_us,
@@ -486,12 +492,14 @@ def run_dev_diagnosis(
         }
         for item in frames
     ]
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
     return {
         "schema_version": 1,
         "status": "COMPLETED",
         "split": "dev",
         "configuration": {
             "name": "BASELINE_UNTUNED",
+            "implementation": implementation,
             "registration": "translation",
             "registration_parameters": BASELINE_UNTUNED.__dict__,
             "detector": BASELINE_DETECTOR.name,
@@ -516,6 +524,11 @@ def run_dev_diagnosis(
         },
         "feature_distributions": {key: _feature_summary(value) for key, value in feature_groups.items()},
         "profiling_ms": {key: _summary(values) for key, values in sorted(timing_values.items())},
+        "runtime": {
+            "wall_time_ms": elapsed_ms,
+            "wall_fps": len(frames) / (elapsed_ms / 1000.0) if elapsed_ms > 0 else None,
+            "effective_algorithm_fps": len(frames) / (sum(timing_values["total_algorithm_ms"]) / 1000.0) if timing_values["total_algorithm_ms"] else None,
+        },
         "registration_correlation": registration_correlation,
         "diagnostics": {
             "candidate_count_total_pre_cap": total_candidates,
