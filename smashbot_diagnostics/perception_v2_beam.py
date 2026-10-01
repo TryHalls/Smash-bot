@@ -249,6 +249,77 @@ def _first_window_ranks(rows: list[dict[str, Any]], key: Callable[[dict[str, Any
     return result
 
 
+def _row_rank(row: dict[str, Any], rows: list[dict[str, Any]], key: Callable[[dict[str, Any]], tuple[Any, ...]], *, tracklet: bool = False) -> int | None:
+    same_window = [candidate for candidate in rows if candidate["burst_id"] == row["burst_id"] and candidate["frame_t"] == row["frame_t"]]
+    if tracklet:
+        same_window = [candidate for candidate in same_window if candidate["frame_t1"] == row["frame_t1"]]
+    else:
+        same_window = [candidate for candidate in same_window if candidate["frame_t1"] == row["frame_t1"]]
+    ranked = sorted(same_window, key=key)
+    for index, candidate in enumerate(ranked, 1):
+        if candidate.get("_tie") == row.get("_tie"):
+            return index
+    return None
+
+
+def _specific_control_comparison(pair_rows: list[dict[str, Any]], tracklet_rows: list[dict[str, Any]], v1_report: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for burst in MULTI_HYPOTHESIS_BURSTS:
+        event = (v1_report.get("diagnostics", {}).get("acquisition", {}).get(burst, {}).get("confirmation_events") or [None])[0]
+        if not event:
+            result[burst] = {"available": False}
+            continue
+        first_frame, second_frame = event["first_frame_index"], event["second_frame_index"]
+        matching = [
+            row for row in pair_rows
+            if row["burst_id"] == burst and row["frame_t"] == first_frame and row["frame_t1"] == second_frame
+            and row["distance_t_to_gt_px"] is not None
+            and abs(row["distance_t_to_gt_px"] - event["first_candidate_distance_to_gt_px"]) < 1e-6
+            and abs(row["distance_t1_to_gt_px"] - event["second_candidate_distance_to_gt_px"]) < 1e-6
+        ]
+        v1_pair = matching[0] if matching else None
+        first_correct_frame = min((row["frame_t"] for row in pair_rows if row["burst_id"] == burst and row["correct"]), default=None)
+        correct_pairs = [row for row in pair_rows if row["burst_id"] == burst and row["frame_t"] == first_correct_frame and row["correct"]]
+        best_pair = min(correct_pairs, key=lambda row: row["distance_t_to_gt_px"] + row["distance_t1_to_gt_px"]) if correct_pairs else None
+        tracklet_matches = []
+        if v1_pair:
+            x0, y0, x1, y1 = v1_pair["_tie"]
+            tracklet_matches = [
+                row for row in tracklet_rows
+                if row["burst_id"] == burst and row["frame_t"] == first_frame and row["frame_t1"] == second_frame
+                and abs(row["_tie"][0] - x0) < 1e-9 and abs(row["_tie"][1] - y0) < 1e-9
+                and abs(row["_tie"][2] - x1) < 1e-9 and abs(row["_tie"][3] - y1) < 1e-9
+            ]
+        correct_tracklets = [row for row in tracklet_rows if row["burst_id"] == burst and row["frame_t"] == first_correct_frame and row["correct"]]
+        best_tracklet = min(correct_tracklets, key=lambda row: row["distance_t_to_gt_px"] + row["distance_t1_to_gt_px"] + row["distance_t2_to_gt_px"]) if correct_tracklets else None
+        entry: dict[str, Any] = {
+            "available": v1_pair is not None,
+            "v1_wrong_or_control_pair": {
+                "frame_pair": [first_frame, second_frame],
+                "correct": v1_pair["correct"] if v1_pair else None,
+                "p1_rank": _row_rank(v1_pair, pair_rows, p1_pair_key) if v1_pair else None,
+                "features": {key: value for key, value in v1_pair.items() if not key.startswith("_")} if v1_pair else None,
+            },
+            "best_correct_pair_in_first_window": {
+                "frame_pair": [best_pair["frame_t"], best_pair["frame_t1"]] if best_pair else None,
+                "p1_rank": _row_rank(best_pair, pair_rows, p1_pair_key) if best_pair else None,
+                "features": {key: value for key, value in best_pair.items() if not key.startswith("_")} if best_pair else None,
+            },
+            "corresponding_v1_tracklet_T1_T6_rank_ranges": {},
+            "best_correct_tracklet_T1_T6_ranks": {},
+        }
+        for rule in RULE_NAMES:
+            key = lambda row, rule=rule: tracklet_rule_key(rule, row)
+            ranks = [_row_rank(row, tracklet_rows, key, tracklet=True) for row in tracklet_matches]
+            ranks = [rank for rank in ranks if rank is not None]
+            entry["corresponding_v1_tracklet_T1_T6_rank_ranges"][rule] = {
+                "count": len(ranks), "min": min(ranks) if ranks else None, "max": max(ranks) if ranks else None,
+            }
+            entry["best_correct_tracklet_T1_T6_ranks"][rule] = _row_rank(best_tracklet, tracklet_rows, key, tracklet=True) if best_tracklet else None
+        result[burst] = entry
+    return result
+
+
 def _feature_distribution(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> dict[str, Any]:
     return {
         label: {
@@ -309,6 +380,7 @@ def run_v2_beam_feasibility(
         "pair_p1": {"global": p1, "by_burst": p1_by_burst, "first_acquisition_windows": p1_first},
         "tracklet_rules": {rule: {"global": track_rules[rule], "by_burst": track_rules_by_burst[rule], "first_acquisition_windows": first_windows[rule]} for rule in RULE_NAMES},
         "feature_populations": {"pairs": _feature_distribution(pair_rows, pair_fields), "tracklets3": _feature_distribution(tracklet_rows, tracklet_fields)},
+        "specific_A_C_B_control": _specific_control_comparison(pair_rows, tracklet_rows, v1_report),
         "decision": {"eligible_rules": eligible_rules, "selected_rule": selected_rule, "recommended_beam_width": beam_width, "pair_seed_gate_pass": pair_seed_pass, "status": "PASS" if selected_rule and beam_width and pair_seed_pass else "FAIL"},
         "runtime_ms": {"report_only_graph_and_ranking": (time.perf_counter() - start) * 1000.0},
     }
