@@ -318,6 +318,99 @@ def acquisition_pair_is_consecutive(
     )
 
 
+def _summarize_acquisition(frame_diagnostics: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize the V1 acquisition state machine without evaluating ground truth.
+
+    This helper is deliberately based only on production observations.  Ground
+    truth distances are added later by the benchmark evaluator, never used to
+    select or confirm a candidate.
+    """
+
+    frames = sorted(frame_diagnostics, key=lambda item: (int(item["frame_index"]), int(item["pts_us"])))
+    pending_frames = [item for item in frames if item.get("pending_acquisition") is True]
+    confirmations = [item for item in frames if item.get("acquisition_confirmed") is True]
+    pending_episodes = 0
+    was_pending = False
+    for item in frames:
+        is_pending = bool(item.get("pending_acquisition"))
+        if is_pending and not was_pending:
+            pending_episodes += 1
+        was_pending = is_pending
+    confirmation_events = []
+    for item in confirmations:
+        first = item.get("acquisition_candidate_first")
+        second = item.get("acquisition_candidate_second")
+        confirmation_events.append({
+            "first_frame_index": first.get("frame_index") if first else None,
+            "second_frame_index": second.get("frame_index") if second else int(item["frame_index"]),
+            "first_pts_us": first.get("pts_us") if first else None,
+            "second_pts_us": second.get("pts_us") if second else int(item["pts_us"]),
+            "candidate_distance_px": item.get("acquisition_pair_distance_px"),
+            "first_candidate": first,
+            "second_candidate": second,
+        })
+    return {
+        "frame_count": len(frames),
+        "pending_acquisition_frames": len(pending_frames),
+        "pending_acquisition_episodes": pending_episodes,
+        "confirmed_acquisitions": len(confirmations),
+        "first_confirmed_frame": int(confirmations[0]["frame_index"]) if confirmations else None,
+        "confirmation_frame_pair": (
+            [confirmation_events[0]["first_frame_index"], confirmation_events[0]["second_frame_index"]]
+            if confirmation_events else None
+        ),
+        "confirmation_candidate_distance_px": confirmation_events[0]["candidate_distance_px"] if confirmation_events else None,
+        "confirmation_events": confirmation_events,
+        "benchmark_observation_frames": [int(item["frame_index"]) for item in frames if item.get("benchmark_observation") is True],
+        "tentative_pending_frames": [int(item["frame_index"]) for item in pending_frames],
+        "coasting_before_confirmation_frames": [
+            int(item["frame_index"])
+            for item in frames
+            if not item.get("was_confirmed_before_frame", False) and item.get("tracker_state") == "coasting"
+        ],
+    }
+
+
+def _add_acquisition_evaluator_distances(
+    summaries: dict[str, dict[str, Any]],
+    records: Iterable[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Add read-only GT distances to acquisition summaries after selection."""
+
+    by_identity = {(record["burst_id"], int(record["frame_index"])): record for record in records}
+    enriched: dict[str, dict[str, Any]] = {}
+    for burst, summary in sorted(summaries.items()):
+        copy = json.loads(json.dumps(summary))
+        events = []
+        for event in summary["confirmation_events"]:
+            first_record = by_identity.get((burst, event["first_frame_index"]))
+            second_record = by_identity.get((burst, event["second_frame_index"]))
+            first_distance = None
+            second_distance = None
+            if first_record and first_record["shuttle"].get("visible") is True and event.get("first_candidate"):
+                first_distance = _distance(_candidate_from_dict(event["first_candidate"]), first_record)
+            if second_record and second_record["shuttle"].get("visible") is True and event.get("second_candidate"):
+                second_distance = _distance(_candidate_from_dict(event["second_candidate"]), second_record)
+            event_copy = dict(event)
+            event_copy["first_candidate_distance_to_gt_px"] = first_distance
+            event_copy["second_candidate_distance_to_gt_px"] = second_distance
+            event_copy["confirmed_track_originated_correct"] = (
+                first_distance <= 20.0 if first_distance is not None else None
+            )
+            events.append(event_copy)
+        copy["confirmation_events"] = events
+        if events:
+            copy["first_candidate_distance_to_gt_px"] = events[0]["first_candidate_distance_to_gt_px"]
+            copy["second_candidate_distance_to_gt_px"] = events[0]["second_candidate_distance_to_gt_px"]
+            copy["confirmed_track_originated_correct"] = events[0]["confirmed_track_originated_correct"]
+        else:
+            copy["first_candidate_distance_to_gt_px"] = None
+            copy["second_candidate_distance_to_gt_px"] = None
+            copy["confirmed_track_originated_correct"] = None
+        enriched[burst] = copy
+    return enriched
+
+
 def _iter_dev_frames(snapshot: dict[str, Any], task008_root: Path, ffmpeg: str):
     cv2, numpy = _opencv_numpy()
     records = _dev_records(snapshot)
@@ -592,6 +685,10 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
             tracker_state = "empty"
             tracker_confidence = 0.0
             confirmed_observation = False
+            acquisition_confirmed = False
+            acquisition_first_candidate: ShuttleCandidate | None = None
+            acquisition_second_candidate: ShuttleCandidate | None = None
+            acquisition_pair_distance: float | None = None
             if not confirmed:
                 # Acquisition is an explicit two-consecutive-hit state
                 # machine.  A tentative hit is retained only as a pending
@@ -604,6 +701,14 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                     config.gate_px,
                 )
                 if consecutive:
+                    assert pending_candidate is not None
+                    acquisition_confirmed = True
+                    acquisition_first_candidate = pending_candidate
+                    acquisition_second_candidate = selected
+                    acquisition_pair_distance = math.hypot(
+                        selected.x - pending_candidate.x,
+                        selected.y - pending_candidate.y,
+                    )
                     tracker_start = time.perf_counter()
                     tracker.reset("v1_acquisition_confirmation")
                     assert pending_candidate is not None and pending_pts_us is not None
@@ -653,6 +758,8 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                     pending_candidate = None
                     pending_frame_index = None
                     pending_pts_us = None
+            pending_after = not confirmed and pending_candidate is not None
+            benchmark_observation = bool(confirmed_observation)
             total_algorithm_ms = item["registration_ms"] + item["mask_build_ms"] + (time.perf_counter() - frame_start) * 1000.0
             if confirmed_observation and tracker_result.observation is not None:
                 obs = tracker_result.observation
@@ -680,10 +787,34 @@ def _prediction_metrics(items: list[dict[str, Any]], config: V1Config, white_fal
                 "predicted_position": list(predicted) if predicted is not None else None,
                 "selected": _candidate_dict(selected), "selection_mode": mode,
                 "white_fallback_used": white_used, "was_confirmed_before_frame": was_confirmed,
+                "acquisition_state": (
+                    "confirmed" if acquisition_confirmed else
+                    "tracking" if was_confirmed else
+                    "pending" if pending_after else "idle"
+                ),
+                "pending_acquisition": pending_after,
+                "pending_candidate_frame_index": pending_frame_index if pending_after else None,
+                "acquisition_confirmed": acquisition_confirmed,
+                "acquisition_candidate_first": _candidate_dict(acquisition_first_candidate),
+                "acquisition_candidate_second": _candidate_dict(acquisition_second_candidate),
+                "acquisition_pair_distance_px": acquisition_pair_distance,
+                "benchmark_observation": benchmark_observation,
                 "tracker_kind": tracker_kind, "tracker_state": tracker_state,
                 "registration_ms": item["registration_ms"], "mask_build_ms": item["mask_build_ms"],
             })
-    return predictions, {"frames": frame_diagnostics, "registrations": registrations, "stage_times_ms": {key: _summary(values) for key, values in stage_times.items()}}
+    by_burst: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for frame in frame_diagnostics:
+        by_burst[frame["burst_id"]].append(frame)
+    acquisition = {
+        burst: _summarize_acquisition(frames)
+        for burst, frames in sorted(by_burst.items())
+    }
+    return predictions, {
+        "frames": frame_diagnostics,
+        "registrations": registrations,
+        "acquisition": acquisition,
+        "stage_times_ms": {key: _summary(values) for key, values in stage_times.items()},
+    }
 
 
 def run_v1_dev(snapshot_path: Path, *, task008_root: Path = Path("artifacts/task008"), ffmpeg: str = "ffmpeg", output_base: Path = Path("artifacts/task009/v1_baseline")) -> dict[str, Any]:
@@ -727,6 +858,13 @@ def run_v1_dev(snapshot_path: Path, *, task008_root: Path = Path("artifacts/task
         if item["record"]["shuttle"]["visible"] is False and diag["selected"] is not None and diag["tracker_state"] != "tracking":
             unconfirmed_candidates += 1
     registrations = [registration_dict(item["registration"]) for item in items if item["registration"] is not None]
+    acquisition = _add_acquisition_evaluator_distances(diagnostics["acquisition"], records)
+    diagnostics["acquisition"] = acquisition
+    diagnostics["acquisition_interpretation"] = {
+        "tentative_pending_and_coasting_before_confirmation_are_not_benchmark_observations": True,
+        "only_confirmed_tracking_observation_counts": True,
+        "ground_truth_used_only_after_selection_for_distances": True,
+    }
     report = {
         "schema_version": 1, "status": "COMPLETED", "split": "dev", "detector_executed": True,
         "configuration": {"name": "V1_DEV_FROZEN", **asdict(V1_DEV_FROZEN), "holdout_used": False, "ffmpeg": ffmpeg, "task008_root": str(Path(task008_root))},

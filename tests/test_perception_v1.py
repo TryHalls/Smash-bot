@@ -13,6 +13,7 @@ from smashbot_diagnostics.perception_v1 import (
     V1_DEV_FROZEN,
     acquisition_pair_is_consecutive,
     _dev_records,
+    _summarize_acquisition,
     is_confirmed_observation,
     quality_gate,
     ranking_key,
@@ -93,6 +94,66 @@ class V1PerceptionTests(unittest.TestCase):
         second = _candidate(11, 10, 0.8)
         self.assertTrue(acquisition_pair_is_consecutive(first, 4, second, 5))
         self.assertFalse(acquisition_pair_is_consecutive(first, 4, second, 6))
+
+    def test_acquisition_diagnostics_distinguish_pending_from_confirmation(self) -> None:
+        first = _candidate(10, 10, 0.8)
+        second = _candidate(11, 10, 0.8)
+        summary = _summarize_acquisition([
+            {
+                "frame_index": 4,
+                "pts_us": 40,
+                "pending_acquisition": True,
+                "acquisition_confirmed": False,
+                "acquisition_candidate_first": None,
+                "acquisition_candidate_second": None,
+                "acquisition_pair_distance_px": None,
+                "benchmark_observation": False,
+                "was_confirmed_before_frame": False,
+                "tracker_state": "tentative",
+            },
+            {
+                "frame_index": 5,
+                "pts_us": 50,
+                "pending_acquisition": False,
+                "acquisition_confirmed": True,
+                "acquisition_candidate_first": {
+                    "frame_index": 4,
+                    "pts_us": 40,
+                    "x": first.x,
+                    "y": first.y,
+                    "confidence": first.confidence,
+                    "body_score": first.body_score,
+                    "motion_score": first.motion_score,
+                    "trail_score": first.trail_score,
+                    "shape_score": first.shape_score,
+                    "area_px": first.area_px,
+                },
+                "acquisition_candidate_second": {
+                    "frame_index": 5,
+                    "pts_us": 50,
+                    "x": second.x,
+                    "y": second.y,
+                    "confidence": second.confidence,
+                    "body_score": second.body_score,
+                    "motion_score": second.motion_score,
+                    "trail_score": second.trail_score,
+                    "shape_score": second.shape_score,
+                    "area_px": second.area_px,
+                },
+                "acquisition_pair_distance_px": 1.0,
+                "benchmark_observation": True,
+                "was_confirmed_before_frame": False,
+                "tracker_state": "tracking",
+            },
+        ])
+        self.assertEqual(summary["pending_acquisition_frames"], 1)
+        self.assertEqual(summary["pending_acquisition_episodes"], 1)
+        self.assertEqual(summary["confirmed_acquisitions"], 1)
+        self.assertEqual(summary["first_confirmed_frame"], 5)
+        self.assertEqual(summary["confirmation_frame_pair"], [4, 5])
+        self.assertEqual(summary["confirmation_candidate_distance_px"], 1.0)
+        self.assertEqual(summary["benchmark_observation_frames"], [5])
+        self.assertEqual(summary["coasting_before_confirmation_frames"], [])
 
     def test_tracking_prefers_prediction_distance_before_appearance(self) -> None:
         near = _candidate(100, 100, 0.1)
