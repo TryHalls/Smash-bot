@@ -115,6 +115,49 @@ class Task010TrainSubsetTests(unittest.TestCase):
                 self.assertEqual(len(list((root / "cache" / "images").glob("*.png"))), 60)
                 self.assertFalse((root / "cache" / "images" / "a0.png").exists())
 
+    def test_cache_serializes_source_switch_and_reads_before_eviction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = TrainSourceCache(root / "cache", root / "task008", "ffmpeg")
+            records_a = [{"record_id": "a0", "frame_index": 0}]
+            records_b = [{"record_id": "b0", "frame_index": 0}]
+            for source in ("A", "B"):
+                (root / "task008" / source).mkdir(parents=True)
+                (root / "task008" / source / "capture.h264").write_bytes(source.encode())
+            extraction_started = threading.Event()
+            release_a = threading.Event()
+            b_finished = threading.Event()
+            results = {}
+
+            def fake_extract(_ffmpeg, source, records, images_dir):
+                images_dir.mkdir(parents=True, exist_ok=True)
+                if source.parent.name == "A":
+                    extraction_started.set()
+                    self.assertTrue(release_a.wait(timeout=2))
+                for record in records:
+                    (images_dir.parent / record["image_path"]).write_bytes(source.parent.name.encode())
+                return []
+
+            def read_a():
+                results["a"] = cache.read_bytes("A", "a0", records_a)
+
+            def read_b():
+                results["b"] = cache.read_bytes("B", "b0", records_b)
+                b_finished.set()
+
+            with patch("smashbot_diagnostics.perception_annotations._extract_source_frames", side_effect=fake_extract):
+                a_thread = threading.Thread(target=read_a)
+                a_thread.start()
+                self.assertTrue(extraction_started.wait(timeout=2))
+                b_thread = threading.Thread(target=read_b)
+                b_thread.start()
+                self.assertFalse(b_finished.wait(timeout=0.05))
+                release_a.set()
+                a_thread.join(timeout=2)
+                b_thread.join(timeout=2)
+            self.assertEqual(results, {"a": b"A", "b": b"B"})
+            self.assertEqual(cache.current_source, "B")
+
     def _server_fixture(self, root: Path) -> tuple[Path, Path, Path]:
         record = {
             "record_id": "train_A_0000_000000",

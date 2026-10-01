@@ -21,6 +21,7 @@ from smashbot_diagnostics.perception_annotations import (
     css_to_image_coordinates,
     _html,
     load_json_with_recovery,
+    marker_position_for_rendered_image,
     require_opencv,
     validate_annotation_record,
     validate_annotations_document,
@@ -584,6 +585,76 @@ class PerceptionAnnotationTests(unittest.TestCase):
                 self.assertEqual(state["storage_path"], str(annotation_path.resolve()))
             finally:
                 server.server_close()
+
+    def test_http_save_requires_record_id_and_rejects_stale_cursor(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            identities = [
+                {"record_id": "record-0", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 10, "pts_us": 100},
+                {"record_id": "record-1", "split": "dev", "clip": "A", "source_run": "run", "burst_id": "A_01", "frame_index": 11, "pts_us": 200},
+            ]
+            server, annotations_path = _server_for_annotations(root, [_annotation(item, active=None, visible=None) for item in identities])
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+
+            def post(value):
+                request = urllib.request.Request(
+                    base + "/save",
+                    data=json.dumps(value).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                return urllib.request.urlopen(request, timeout=2)
+
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as missing:
+                    post({"active_rally": True})
+                self.assertEqual(missing.exception.code, 400)
+                self.assertEqual(post({"record_id": "record-0", "active_rally": True}).status, 200)
+                with urllib.request.urlopen(base + "/state?move=1", timeout=2) as response:
+                    self.assertEqual(json.loads(response.read())["record"]["record_id"], "record-1")
+                with self.assertRaises(urllib.error.HTTPError) as stale:
+                    post({"record_id": "record-0", "shuttle.visible": True, "shuttle.center_x": 1.0, "shuttle.center_y": 2.0})
+                self.assertEqual(stale.exception.code, 400)
+                self.assertEqual(post({"record_id": "record-1", "active_rally": False}).status, 200)
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+                server.server_close()
+            saved = json.loads(annotations_path.read_text(encoding="utf-8"))["records"]
+            by_id = {record["record_id"]: record for record in saved}
+            self.assertTrue(by_id["record-0"]["active_rally"])
+            self.assertFalse(by_id["record-1"]["active_rally"])
+            self.assertIsNone(by_id["record-0"]["shuttle"]["center_x"])
+
+    def test_marker_uses_actual_rendered_image_rect_and_offset(self):
+        first = marker_position_for_rendered_image(
+            432.0, 960.0,
+            image_left=100.0, image_top=50.0, image_width=432.0, image_height=960.0,
+            stage_left=0.0, stage_top=0.0,
+        )
+        second = marker_position_for_rendered_image(
+            432.0, 960.0,
+            image_left=240.0, image_top=90.0, image_width=864.0, image_height=1920.0,
+            stage_left=40.0, stage_top=10.0,
+        )
+        self.assertEqual(first, (316.0, 530.0))
+        self.assertEqual(second, (632.0, 1040.0))
+
+    def test_annotation_ui_has_load_identity_guard_and_disables_mutation_until_ready(self):
+        html = _html()
+        for token in (
+            "requestedRecordId",
+            "loadedRecordId",
+            "frameRequestToken",
+            "setMutationEnabled(false)",
+            "Frame load failed (source",
+            "getBoundingClientRect",
+            "record_id:targetRecordId",
+            "image.style.visibility='hidden'",
+        ):
+            self.assertIn(token, html)
 
 
 if __name__ == "__main__":

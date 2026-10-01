@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import RLock, Thread
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
@@ -142,6 +142,31 @@ def css_to_image_coordinates(
     x = float(click_x) * natural_width / float(display_width)
     y = float(click_y) * natural_height / float(display_height)
     return x, y
+
+
+def marker_position_for_rendered_image(
+    center_x: float,
+    center_y: float,
+    *,
+    image_left: float,
+    image_top: float,
+    image_width: float,
+    image_height: float,
+    stage_left: float,
+    stage_top: float,
+    natural_width: int = FRAME_WIDTH,
+    natural_height: int = FRAME_HEIGHT,
+) -> tuple[float, float]:
+    """Return marker coordinates relative to the stage's actual rendered rectangle."""
+
+    if image_width <= 0 or image_height <= 0 or natural_width <= 0 or natural_height <= 0:
+        raise AnnotationError("rendered image dimensions must be positive")
+    require_finite_number(center_x, field="center_x")
+    require_finite_number(center_y, field="center_y")
+    return (
+        image_left - stage_left + float(center_x) * image_width / natural_width,
+        image_top - stage_top + float(center_y) * image_height / natural_height,
+    )
 
 
 def _is_number(value: Any) -> bool:
@@ -542,39 +567,53 @@ class TrainSourceCache:
         self.ffmpeg = ffmpeg
         self.current_source: str | None = None
         self._paths: dict[str, Path] = {}
+        self._lock = RLock()
 
     def clear(self) -> None:
-        if self.cache_dir.exists():
-            shutil.rmtree(self.cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.current_source = None
-        self._paths = {}
+        with self._lock:
+            if self.cache_dir.exists():
+                shutil.rmtree(self.cache_dir)
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.current_source = None
+            self._paths = {}
 
     def ensure(self, source_run: str, records: list[dict[str, Any]]) -> None:
-        if len(records) > 60:
-            raise AnnotationError("TRAIN source cache may contain at most 60 images")
-        expected = {record["record_id"] for record in records}
-        if self.current_source == source_run and set(self._paths) == expected and all(path.is_file() for path in self._paths.values()):
-            return
-        self.clear()
-        run_dir = self.task008_root / source_run
-        source_h264 = run_dir / "capture.h264"
-        if not source_h264.is_file():
-            raise AnnotationError(f"missing TRAIN source capture: {source_h264}")
-        cache_records = [dict(record, image_path=f"images/{record['record_id']}.png") for record in records]
-        _extract_source_frames(self.ffmpeg, source_h264, cache_records, self.cache_dir / "images")
-        paths = {record["record_id"]: self.cache_dir / "images" / f"{record['record_id']}.png" for record in records}
-        if len(paths) != len(records) or not all(path.is_file() for path in paths.values()):
-            raise AnnotationError("TRAIN source cache extraction is incomplete")
-        self.current_source = source_run
-        self._paths = paths
+        with self._lock:
+            if len(records) > 60:
+                raise AnnotationError("TRAIN source cache may contain at most 60 images")
+            expected = {record["record_id"] for record in records}
+            if self.current_source == source_run and set(self._paths) == expected and all(path.is_file() for path in self._paths.values()):
+                return
+            self.clear()
+            run_dir = self.task008_root / source_run
+            source_h264 = run_dir / "capture.h264"
+            if not source_h264.is_file():
+                raise AnnotationError(f"missing TRAIN source capture: {source_h264}")
+            cache_records = [dict(record, image_path=f"images/{record['record_id']}.png") for record in records]
+            _extract_source_frames(self.ffmpeg, source_h264, cache_records, self.cache_dir / "images")
+            paths = {record["record_id"]: self.cache_dir / "images" / f"{record['record_id']}.png" for record in records}
+            if len(paths) != len(records) or not all(path.is_file() for path in paths.values()):
+                raise AnnotationError("TRAIN source cache extraction is incomplete")
+            self.current_source = source_run
+            self._paths = paths
 
     def path_for(self, source_run: str, record_id: str, records: list[dict[str, Any]]) -> Path:
-        self.ensure(source_run, records)
-        try:
-            return self._paths[record_id]
-        except KeyError as exc:
-            raise AnnotationError(f"record is absent from TRAIN source cache: {record_id}") from exc
+        with self._lock:
+            self.ensure(source_run, records)
+            try:
+                return self._paths[record_id]
+            except KeyError as exc:
+                raise AnnotationError(f"record is absent from TRAIN source cache: {record_id}") from exc
+
+    def read_bytes(self, source_run: str, record_id: str, records: list[dict[str, Any]]) -> bytes:
+        """Ensure and read while holding the cache lock, preventing eviction races."""
+
+        with self._lock:
+            path = self.path_for(source_run, record_id, records)
+            try:
+                return path.read_bytes()
+            except OSError as exc:
+                raise AnnotationError(f"cached TRAIN image is unavailable: {record_id}") from exc
 
 
 def build_ground_truth_subset(
@@ -712,7 +751,7 @@ button.selected{border-color:var(--blue);background:#dbe8ff;box-shadow:0 0 0 2px
 progress{width:min(500px,65vw);height:13px}.progress-text{font-weight:700}.layout{display:grid;grid-template-columns:minmax(320px,1fr) minmax(300px,390px);gap:18px;align-items:start}
 .card{background:white;border:1px solid var(--line);border-radius:10px;padding:14px;box-shadow:0 2px 9px #18212b0c}.viewer{min-width:0}
 #frame-wrap{position:relative;width:min(100%,620px);margin:auto;overflow:auto;background:#e7ebf2;border-radius:8px;text-align:center}
-#image-stage{position:relative;width:100%;margin:auto}#frame{display:block;width:100%;height:auto;max-height:78vh;object-fit:contain;cursor:crosshair;margin:auto}
+#image-stage{position:relative;width:100%;margin:auto}#frame{display:block;width:100%;height:auto;max-height:78vh;object-fit:contain;cursor:crosshair;margin:auto;visibility:hidden;pointer-events:none}
 #marker{display:none;position:absolute;width:24px;height:24px;border:2px solid #ff2d55;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;box-shadow:0 0 0 2px #fff,0 0 0 4px #ff2d55aa}
 #marker:before,#marker:after{content:"";position:absolute;background:#ff2d55}#marker:before{width:38px;height:2px;left:-9px;top:9px}#marker:after{width:2px;height:38px;left:9px;top:-9px}
 .zoom-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px}.zoom-row button.selected{background:#e7f0ff}
@@ -733,31 +772,34 @@ progress{width:min(500px,65vw);height:13px}.progress-text{font-weight:700}.layou
 <div class="frame-line"><span id="frame-number">Frame — / —</span><span id="context-line"></span><span id="label-badge" class="badge pending">UNLABELED</span></div>
 <div class="progress-wrap"><progress id="progress" max="1" value="0"></progress><span id="progress-text">0 / 0 labeled</span></div>
 <div id="warning" class="warning">This frame is incomplete.<button onclick="stayHere()">Stay</button><button onclick="skipAnyway()">Skip anyway</button></div></header>
-<div class="layout"><section class="card viewer"><div id="frame-wrap"><div id="image-stage"><img id="frame" alt="Current annotation frame"><span id="marker" aria-hidden="true"></span></div></div>
+<div class="layout"><section class="card viewer"><div id="frame-wrap"><div id="image-stage"><img id="frame" alt="Current annotation frame"><span id="marker" aria-hidden="true"></span></div></div><p id="frame-loading" class="warning" style="display:block">Loading frame…</p>
 <div class="zoom-row"><strong>Zoom</strong><button data-zoom="fit" onclick="setZoom('fit')">Fit</button><button data-zoom="1" onclick="setZoom('1')">100%</button><button data-zoom="1.5" onclick="setZoom('1.5')">150%</button><button data-zoom="2" onclick="setZoom('2')">200%</button></div>
 <p id="center-readout" class="center-readout">Center: —</p><div class="temporal"><div>Previous<strong id="prev-context">—</strong></div><div>CURRENT<strong id="current-context">—</strong></div><div>Next<strong id="next-context">—</strong></div></div></section>
 <aside class="panel"><section class="card section"><h2>NAVIGATION</h2><div class="button-row"><button onclick="requestMove(-1)">← Previous</button><button onclick="requestMove(1)">Next →</button><button onclick="nextUnlabeled()">Next unlabeled</button></div><p id="nav-position"><strong>Frame — / —</strong></p></section>
-<section class="card section"><h2>GAME STATE</h2><div class="button-row"><button id="active-yes" onclick="setActive(true)"__DISABLED__>YES</button><button id="active-no" onclick="setActive(false)"__DISABLED__>NO</button><button id="active-unset" onclick="setActive(null)"__DISABLED__>UNSET</button></div></section>
-<section class="card section"><h2>SHUTTLE</h2><div class="button-row"><button id="visible-yes" onclick="setVisible(true)"__DISABLED__>VISIBLE</button><button id="visible-no" onclick="setVisible(false)"__DISABLED__>NOT VISIBLE</button><button id="visible-unset" onclick="setVisible(null)"__DISABLED__>UNSET</button></div>
-<p><label><input id="occluded" type="checkbox" onchange="setFlag('occluded')"__DISABLED__> Occluded</label><br><label><input id="ambiguous" type="checkbox" onchange="setFlag('ambiguous')"__DISABLED__> Ambiguous</label></p><button onclick="clearCenter()"__DISABLED__>Clear center</button><p id="incomplete-note" class="badge incomplete" style="display:none">INCOMPLETE — click shuttle center</p></section>
+<section class="card section"><h2>GAME STATE</h2><div class="button-row"><button class="mutation-control" id="active-yes" onclick="setActive(true)"__DISABLED__>YES</button><button class="mutation-control" id="active-no" onclick="setActive(false)"__DISABLED__>NO</button><button class="mutation-control" id="active-unset" onclick="setActive(null)"__DISABLED__>UNSET</button></div></section>
+<section class="card section"><h2>SHUTTLE</h2><div class="button-row"><button class="mutation-control" id="visible-yes" onclick="setVisible(true)"__DISABLED__>VISIBLE</button><button class="mutation-control" id="visible-no" onclick="setVisible(false)"__DISABLED__>NOT VISIBLE</button><button class="mutation-control" id="visible-unset" onclick="setVisible(null)"__DISABLED__>UNSET</button></div>
+<p><label><input class="mutation-control" id="occluded" type="checkbox" onchange="setFlag('occluded')"__DISABLED__> Occluded</label><br><label><input class="mutation-control" id="ambiguous" type="checkbox" onchange="setFlag('ambiguous')"__DISABLED__> Ambiguous</label></p><button class="mutation-control" onclick="clearCenter()"__DISABLED__>Clear center</button><p id="incomplete-note" class="badge incomplete" style="display:none">INCOMPLETE — click shuttle center</p></section>
 <section class="card section"><h2>STATUS</h2><div class="status-row"><span id="save-badge">Saved ✓</span><span id="readonly-note"></span></div><p id="save-location"></p><p id="save-error"></p></section>
 <section class="card section"><h2>PROGRESS</h2><dl class="stats"><dt>Labeled</dt><dd id="count-labeled">0</dd><dt>Unlabeled</dt><dd id="count-unlabeled">0</dd><dt>Visible</dt><dd id="count-visible">0</dd><dt>Invisible</dt><dd id="count-invisible">0</dd><dt>Ambiguous</dt><dd id="count-ambiguous">0</dd><dt>Occluded</dt><dd id="count-occluded">0</dd><dt>Incomplete</dt><dd id="count-incomplete">0</dd></dl></section>
-<details class="card advanced"><summary>Advanced</summary><input id="tags" placeholder="tags, comma-separated"__DISABLED__><button onclick="setTags()"__DISABLED__>Save tags</button></details>
+<details class="card advanced"><summary>Advanced</summary><input class="mutation-control" id="tags" placeholder="tags, comma-separated"__DISABLED__><button class="mutation-control" onclick="setTags()"__DISABLED__>Save tags</button></details>
 <section class="card shortcuts"><strong>Shortcuts</strong><br>← previous · → next · V visible · N not visible · A active toggle · O occluded · M ambiguous · U next unlabeled<br><small>Click the shuttle head/body, not the cyan trail.</small></section></aside></div></main>
 <script>
-const READ_ONLY=__READONLY__;const FULL_WIDTH=864;const FULL_HEIGHT=1920;let state=null;let zoom='fit';let pendingNavigation=null;
-async function load(url='/state'){const response=await fetch(url);state=await response.json();pendingNavigation=null;hideWarning();render();}
+const READ_ONLY=__READONLY__;const FULL_WIDTH=864;const FULL_HEIGHT=1920;let state=null;let zoom='fit';let pendingNavigation=null;let requestedRecordId=null;let loadedRecordId=null;let frameReady=false;let frameRequestToken=0;let navigationEpoch=0;let displayedCenter=null;
+function setMutationEnabled(enabled){const allowed=!READ_ONLY&&enabled&&state&&loadedRecordId===state.record.record_id;document.querySelectorAll('.mutation-control').forEach(control=>{control.disabled=!allowed;});document.getElementById('frame').style.pointerEvents=allowed?'auto':'none';}
+function frameLoading(message='Loading frame…',failed=false){const box=document.getElementById('frame-loading');box.textContent=message;box.style.display='block';box.style.color=failed?'var(--red)':'';}
+function beginFrameLoad(){navigationEpoch+=1;requestedRecordId=null;loadedRecordId=null;frameReady=false;displayedCenter=null;frameRequestToken+=1;const image=document.getElementById('frame');image.style.visibility='hidden';image.style.pointerEvents='none';document.getElementById('marker').style.display='none';setMutationEnabled(false);frameLoading();}
+async function load(url='/state'){try{const response=await fetch(url);if(!response.ok)throw new Error(`state request failed (${response.status})`);state=await response.json();pendingNavigation=null;hideWarning();render();}catch(error){frameLoading(`Frame state failed — labeling disabled: ${error.message}`,true);setMutationEnabled(false);}}
 function isIncomplete(record){return record.shuttle.visible===true&&(record.shuttle.center_x===null||record.shuttle.center_y===null);}function needsNavigationWarning(record){return record.active_rally===null||record.shuttle.visible===null||isIncomplete(record);}
 function setSelected(id,selected){document.getElementById(id).classList.toggle('selected',selected);}
 function contextText(item){return item?`${item.frame_index} · ${item.pts_us} μs`:'not contiguous';}
-function render(){const record=state.record;document.getElementById('frame-number').textContent=`Frame ${state.index+1} / ${state.count}`;document.getElementById('nav-position').innerHTML=`<strong>Frame ${state.index+1} / ${state.count}</strong>`;document.getElementById('context-line').textContent=`Burst ${record.burst_id} · source frame ${record.frame_index} · ${record.split.toUpperCase()}`;const labeled=state.record_status.labeled;const badge=document.getElementById('label-badge');badge.textContent=labeled?'LABELED':'UNLABELED';badge.className=`badge ${labeled?'good':'pending'}`;document.getElementById('progress').max=state.count;document.getElementById('progress').value=state.progress.labeled;document.getElementById('progress-text').textContent=`${state.progress.labeled} / ${state.count} labeled`;for(const [id,value] of [['count-labeled',state.progress.labeled],['count-unlabeled',state.progress.unlabeled],['count-visible',state.progress.visible],['count-invisible',state.progress.invisible],['count-ambiguous',state.progress.ambiguous],['count-occluded',state.progress.occluded],['count-incomplete',state.progress.incomplete]])document.getElementById(id).textContent=value;setSelected('active-yes',record.active_rally===true);setSelected('active-no',record.active_rally===false);setSelected('active-unset',record.active_rally===null);setSelected('visible-yes',record.shuttle.visible===true);setSelected('visible-no',record.shuttle.visible===false);setSelected('visible-unset',record.shuttle.visible===null);document.getElementById('occluded').checked=record.shuttle.occluded===true;document.getElementById('ambiguous').checked=record.shuttle.ambiguous===true;document.getElementById('incomplete-note').style.display=isIncomplete(record)?'inline-block':'none';document.getElementById('center-readout').textContent=record.shuttle.center_x===null||record.shuttle.center_y===null?'Center: —':`Center: x=${Number(record.shuttle.center_x).toFixed(1)}, y=${Number(record.shuttle.center_y).toFixed(1)}`;document.getElementById('save-location').textContent=READ_ONLY?'Read-only — no changes saved':`Saved to: ${state.storage_path}`;document.getElementById('readonly-note').textContent=READ_ONLY?'READ-ONLY':'';document.getElementById('prev-context').textContent=contextText(state.temporal.previous);document.getElementById('current-context').textContent=`${record.frame_index} · ${record.pts_us} μs`;document.getElementById('next-context').textContent=contextText(state.temporal.next);const image=document.getElementById('frame');image.onload=()=>{applyZoom();renderMarker();};image.src=`/frame/${encodeURIComponent(record.record_id)}.png`;applyZoom();renderMarker();}
+function render(){const record=state.record;document.getElementById('frame-number').textContent=`Frame ${state.index+1} / ${state.count}`;document.getElementById('nav-position').innerHTML=`<strong>Frame ${state.index+1} / ${state.count}</strong>`;document.getElementById('context-line').textContent=`Burst ${record.burst_id} · source frame ${record.frame_index} · ${record.split.toUpperCase()}`;const labeled=state.record_status.labeled;const badge=document.getElementById('label-badge');badge.textContent=labeled?'LABELED':'UNLABELED';badge.className=`badge ${labeled?'good':'pending'}`;document.getElementById('progress').max=state.count;document.getElementById('progress').value=state.progress.labeled;document.getElementById('progress-text').textContent=`${state.progress.labeled} / ${state.count} labeled`;for(const [id,value] of [['count-labeled',state.progress.labeled],['count-unlabeled',state.progress.unlabeled],['count-visible',state.progress.visible],['count-invisible',state.progress.invisible],['count-ambiguous',state.progress.ambiguous],['count-occluded',state.progress.occluded],['count-incomplete',state.progress.incomplete]])document.getElementById(id).textContent=value;setSelected('active-yes',record.active_rally===true);setSelected('active-no',record.active_rally===false);setSelected('active-unset',record.active_rally===null);setSelected('visible-yes',record.shuttle.visible===true);setSelected('visible-no',record.shuttle.visible===false);setSelected('visible-unset',record.shuttle.visible===null);document.getElementById('occluded').checked=record.shuttle.occluded===true;document.getElementById('ambiguous').checked=record.shuttle.ambiguous===true;document.getElementById('incomplete-note').style.display=isIncomplete(record)?'inline-block':'none';document.getElementById('center-readout').textContent=record.shuttle.center_x===null||record.shuttle.center_y===null?'Center: —':`Center: x=${Number(record.shuttle.center_x).toFixed(1)}, y=${Number(record.shuttle.center_y).toFixed(1)}`;document.getElementById('save-location').textContent=READ_ONLY?'Read-only — no changes saved':`Saved to: ${state.storage_path}`;document.getElementById('readonly-note').textContent=READ_ONLY?'READ-ONLY':'';document.getElementById('prev-context').textContent=contextText(state.temporal.previous);document.getElementById('current-context').textContent=`${record.frame_index} · ${record.pts_us} μs`;document.getElementById('next-context').textContent=contextText(state.temporal.next);const image=document.getElementById('frame');if(requestedRecordId!==record.record_id||loadedRecordId!==record.record_id){const token=++frameRequestToken;requestedRecordId=record.record_id;loadedRecordId=null;frameReady=false;displayedCenter=null;image.style.visibility='hidden';image.style.pointerEvents='none';document.getElementById('marker').style.display='none';setMutationEnabled(false);frameLoading();image.onload=()=>{if(token!==frameRequestToken||requestedRecordId!==record.record_id)return;loadedRecordId=record.record_id;frameReady=true;image.style.visibility='visible';frameLoading('');document.getElementById('frame-loading').style.display='none';setMutationEnabled(true);applyZoom();renderMarker();};image.onerror=()=>{if(token!==frameRequestToken||requestedRecordId!==record.record_id)return;loadedRecordId=null;frameReady=false;image.style.visibility='hidden';setMutationEnabled(false);frameLoading(`Frame load failed (source ${record.frame_index}) — labeling disabled`,true);};image.src=`/frame/${encodeURIComponent(record.record_id)}.png`;}else{setMutationEnabled(true);applyZoom();renderMarker();}}
 function setSave(status,message=''){const badge=document.getElementById('save-badge');badge.textContent=status==='saving'?'Saving…':status==='failed'?'Save failed':'Saved ✓';badge.className=status==='saving'?'saving':status==='failed'?'failed':'';const error=document.getElementById('save-error');error.textContent=message;error.style.display=status==='failed'?'block':'none';}
-async function save(patch){if(READ_ONLY)return;setSave('saving');try{const response=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'annotation save failed');state=payload;setSave('saved');render();}catch(error){setSave('failed',error.message);renderMarker();}}
+async function save(patch){if(READ_ONLY||!state||!frameReady||loadedRecordId!==state.record.record_id)return;const targetRecordId=state.record.record_id;const epoch=navigationEpoch;setSave('saving');try{const response=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...patch,record_id:targetRecordId})});const payload=await response.json();if(!response.ok)throw new Error(payload.error||'annotation save failed');if(epoch!==navigationEpoch||!state||state.record.record_id!==targetRecordId)return;state=payload;setSave('saved');render();}catch(error){if(epoch===navigationEpoch)setSave('failed',error.message);renderMarker();}}
 function setActive(value){return save({active_rally:value});}function setVisible(value){const patch={'shuttle.visible':value};if(value===true&&(state.record.shuttle.center_x===null||state.record.shuttle.center_y===null))patch.ambiguous=true;if(value===false)patch.ambiguous=false;return save(patch);}function setFlag(name){return save({[name]:!state.record.shuttle[name]});}function clearCenter(){return save({'shuttle.center_x':null,'shuttle.center_y':null,ambiguous:true});}function setTags(){return save({tags:document.getElementById('tags').value.split(',').map(s=>s.trim()).filter(Boolean)});}
-function setZoom(value){zoom=value;applyZoom();renderMarker();document.querySelectorAll('[data-zoom]').forEach(button=>button.classList.toggle('selected',button.dataset.zoom===value));}function applyZoom(){const image=document.getElementById('frame');const stage=document.getElementById('image-stage');if(!image.naturalWidth)return;stage.style.width=zoom==='fit'?'100%':`${Number(zoom)*100}%`;image.style.width='100%';image.style.maxHeight=zoom==='fit'?'78vh':'none';}function renderMarker(){const marker=document.getElementById('marker');if(!state||state.record.shuttle.center_x===null||state.record.shuttle.center_y===null){marker.style.display='none';return;}marker.style.display='block';marker.style.left=`${Number(state.record.shuttle.center_x)/FULL_WIDTH*100}%`;marker.style.top=`${Number(state.record.shuttle.center_y)/FULL_HEIGHT*100}%`;}
-document.getElementById('frame').addEventListener('click',event=>{if(READ_ONLY)return;const image=event.currentTarget;const box=image.getBoundingClientRect();const x=(event.clientX-box.left)*FULL_WIDTH/box.width;const y=(event.clientY-box.top)*FULL_HEIGHT/box.height;const marker=document.getElementById('marker');marker.style.display='block';marker.style.left=`${x/FULL_WIDTH*100}%`;marker.style.top=`${y/FULL_HEIGHT*100}%`;save({'shuttle.visible':true,'shuttle.center_x':x,'shuttle.center_y':y,ambiguous:false});});
-function hideWarning(){document.getElementById('warning').style.display='none';pendingNavigation=null;}function stayHere(){hideWarning();}function skipAnyway(){const delta=pendingNavigation;hideWarning();if(delta)doMove(delta);}function requestMove(delta){if(delta>0&&needsNavigationWarning(state.record)){pendingNavigation=delta;document.getElementById('warning').style.display='block';return;}doMove(delta);}function doMove(delta){return fetch('/state?move='+delta).then(r=>r.json()).then(s=>{state=s;render();});}function nextUnlabeled(){return fetch('/state?next_unlabeled=1').then(r=>r.json()).then(s=>{state=s;render();});}
-document.addEventListener('keydown',event=>{if(event.target.tagName==='INPUT'||event.target.tagName==='TEXTAREA')return;const key=event.key.toLowerCase();if(event.key==='ArrowLeft')requestMove(-1);else if(event.key==='ArrowRight')requestMove(1);else if(key==='v')setVisible(true);else if(key==='n')setVisible(false);else if(key==='a')setActive(state.record.active_rally===null?true:!state.record.active_rally);else if(key==='o')setFlag('occluded');else if(key==='m')setFlag('ambiguous');else if(key==='u')nextUnlabeled();});load();
+function setZoom(value){zoom=value;applyZoom();renderMarker();document.querySelectorAll('[data-zoom]').forEach(button=>button.classList.toggle('selected',button.dataset.zoom===value));}function applyZoom(){const image=document.getElementById('frame');const stage=document.getElementById('image-stage');if(!image.naturalWidth)return;stage.style.width=zoom==='fit'?'100%':`${Number(zoom)*100}%`;image.style.width='100%';image.style.maxHeight=zoom==='fit'?'78vh':'none';}function renderMarker(){const marker=document.getElementById('marker');const image=document.getElementById('frame');const stage=document.getElementById('image-stage');const center=displayedCenter||(state&&state.record.shuttle.center_x!==null&&state.record.shuttle.center_y!==null?{x:Number(state.record.shuttle.center_x),y:Number(state.record.shuttle.center_y)}:null);if(!state||!frameReady||!center||!image.naturalWidth){marker.style.display='none';return;}const imageBox=image.getBoundingClientRect();const stageBox=stage.getBoundingClientRect();marker.style.display='block';marker.style.left=`${imageBox.left-stageBox.left+center.x/FULL_WIDTH*imageBox.width}px`;marker.style.top=`${imageBox.top-stageBox.top+center.y/FULL_HEIGHT*imageBox.height}px`;}
+document.getElementById('frame').addEventListener('click',event=>{if(READ_ONLY||!state||!frameReady||loadedRecordId!==state.record.record_id)return;const image=event.currentTarget;const box=image.getBoundingClientRect();const x=(event.clientX-box.left)*FULL_WIDTH/box.width;const y=(event.clientY-box.top)*FULL_HEIGHT/box.height;displayedCenter={x,y};document.getElementById('center-readout').textContent=`Center: x=${x.toFixed(1)}, y=${y.toFixed(1)}`;renderMarker();save({'shuttle.visible':true,'shuttle.center_x':x,'shuttle.center_y':y,ambiguous:false});});
+function hideWarning(){document.getElementById('warning').style.display='none';pendingNavigation=null;}function stayHere(){hideWarning();}function skipAnyway(){const delta=pendingNavigation;hideWarning();if(delta)doMove(delta);}function requestMove(delta){if(!state)return;if(delta>0&&needsNavigationWarning(state.record)){pendingNavigation=delta;document.getElementById('warning').style.display='block';return;}doMove(delta);}function doMove(delta){beginFrameLoad();const epoch=navigationEpoch;return fetch('/state?move='+delta).then(r=>{if(!r.ok)throw new Error(`navigation failed (${r.status})`);return r.json();}).then(s=>{if(epoch!==navigationEpoch)return;state=s;render();}).catch(error=>{if(epoch===navigationEpoch)frameLoading(`Navigation failed — labeling disabled: ${error.message}`,true);});}function nextUnlabeled(){beginFrameLoad();const epoch=navigationEpoch;return fetch('/state?next_unlabeled=1').then(r=>{if(!r.ok)throw new Error(`navigation failed (${r.status})`);return r.json();}).then(s=>{if(epoch!==navigationEpoch)return;state=s;render();}).catch(error=>{if(epoch===navigationEpoch)frameLoading(`Navigation failed — labeling disabled: ${error.message}`,true);});}
+document.addEventListener('keydown',event=>{if(event.target.tagName==='INPUT'||event.target.tagName==='TEXTAREA')return;const key=event.key.toLowerCase();if(event.key==='ArrowLeft')requestMove(-1);else if(event.key==='ArrowRight')requestMove(1);else if(key==='v'&&frameReady)setVisible(true);else if(key==='n'&&frameReady)setVisible(false);else if(key==='a'&&frameReady)setActive(state.record.active_rally===null?true:!state.record.active_rally);else if(key==='o'&&frameReady)setFlag('occluded');else if(key==='m'&&frameReady)setFlag('ambiguous');else if(key==='u')nextUnlabeled();});load();
 </script></body></html>"""
     title = "TASK 010 — TRAIN Labels" if dataset_role == "train" else "TASK 009 — Ground Truth"
     return (
@@ -806,9 +848,8 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/frame/") and parsed.path.endswith(".png"):
             record_id = unquote(parsed.path[len("/frame/") : -len(".png")])
             try:
-                path = self.server.image_for(record_id)
-                payload = path.read_bytes()
-            except (KeyError, OSError):
+                payload = self.server.read_image_bytes(record_id)
+            except (AnnotationError, KeyError, OSError):
                 self.send_error(404)
                 return
             self.send_response(200)
@@ -831,7 +872,12 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
             if length < 0 or length > 64 * 1024:
                 raise AnnotationError("annotation request body is too large")
             patch = json.loads(self.rfile.read(length).decode("utf-8"))
-            self._send_json(self.server.apply(patch))
+            if not isinstance(patch, dict) or not isinstance(patch.get("record_id"), str) or not patch["record_id"]:
+                raise AnnotationError("save requires an explicit record_id")
+            record_id = patch["record_id"]
+            patch = dict(patch)
+            del patch["record_id"]
+            self._send_json(self.server.apply(patch, record_id=record_id))
         except (AnnotationError, json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
             self._send_json({"error": str(exc)}, status=400)
 
@@ -858,6 +904,7 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             raise AnnotationError("annotation UI must bind exclusively to 127.0.0.1")
         self.manifest_path = Path(manifest_path).resolve()
         self.annotations_path = Path(annotations_path).resolve()
+        self._lock = RLock()
         self.read_only = read_only
         self.manifest = load_json_with_recovery(self.manifest_path)
         self.dataset_role = self.manifest.get("dataset_role")
@@ -896,6 +943,10 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         super().__init__((host, port), _AnnotationHandler)
 
     def state(self, *, move: int = 0, next_unlabeled: bool = False) -> dict[str, Any]:
+        with self._lock:
+            return self._state_unlocked(move=move, next_unlabeled=next_unlabeled)
+
+    def _state_unlocked(self, *, move: int = 0, next_unlabeled: bool = False) -> dict[str, Any]:
         if move not in {-1, 0, 1}:
             raise AnnotationError("move must be -1, 0, or 1")
         if move:
@@ -977,22 +1028,50 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             raise OSError(path)
         return path
 
+    def read_image_bytes(self, record_id: str) -> bytes:
+        """Read the selected frame while holding the server/cache locks."""
+
+        with self._lock:
+            record = self._by_id[record_id]
+            if self.dataset_role == "train":
+                if self._train_cache is None:
+                    raise AnnotationError("TRAIN source cache is not configured")
+                source_records = [item for item in self.records if item.get("source_run") == record.get("source_run")]
+                return self._train_cache.read_bytes(record["source_run"], record_id, source_records)
+            return self.image_for(record_id).read_bytes()
+
     def cleanup(self) -> None:
         """Idempotently remove disposable TRAIN cache contents only."""
-        if self._train_cache is not None:
-            self._train_cache.clear()
+        with self._lock:
+            if self._train_cache is not None:
+                self._train_cache.clear()
 
     def server_close(self) -> None:
-        try:
-            super().server_close()
-        finally:
-            self.cleanup()
+        with self._lock:
+            try:
+                super().server_close()
+            finally:
+                self.cleanup()
 
-    def apply(self, patch: dict[str, Any]) -> dict[str, Any]:
+    def apply(self, patch: dict[str, Any], *, record_id: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            return self._apply_unlocked(patch, record_id=record_id)
+
+    def _apply_unlocked(self, patch: dict[str, Any], *, record_id: str | None = None) -> dict[str, Any]:
         if self.read_only:
             raise AnnotationError("annotation UI is read-only")
         if not isinstance(patch, dict):
             raise AnnotationError("annotation patch must be an object")
+        if record_id is not None:
+            if not isinstance(record_id, str) or not record_id:
+                raise AnnotationError("record_id must be a non-empty string")
+            if record_id not in self._by_id:
+                raise AnnotationError(f"unknown record_id: {record_id}")
+            current_id = self.records[self._cursor]["record_id"]
+            if record_id != current_id:
+                raise AnnotationError("stale record_id: current cursor has moved")
+            if "move" in patch:
+                raise AnnotationError("explicit record save cannot include move")
         allowed = {"move", "active_rally", "ambiguous", "occluded", "shuttle.visible", "shuttle.center_x", "shuttle.center_y", "tags"}
         unknown = set(patch) - allowed
         if unknown:
@@ -1021,8 +1100,8 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         if "move" in patch:
             move = int(patch["move"])
             self._cursor = max(0, min(len(self.records) - 1, self._cursor + move))
-        record_id = self.records[self._cursor]["record_id"]
-        record = deepcopy(self._annotation_by_id[record_id])
+        target_record_id = self.records[self._cursor]["record_id"]
+        record = deepcopy(self._annotation_by_id[target_record_id])
         if "active_rally" in patch:
             record["active_rally"] = patch["active_rally"]
         for key in ("ambiguous", "occluded"):
@@ -1041,7 +1120,7 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
             record["tags"] = patch["tags"]
         candidate_document = deepcopy(self.annotations)
         candidate_document["records"] = [
-            record if item["record_id"] == record_id else item
+            record if item["record_id"] == target_record_id else item
             for item in candidate_document["records"]
         ]
         validate_annotations_document(candidate_document, width=self.width, height=self.height, allow_unlabeled=True)
