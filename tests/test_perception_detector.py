@@ -1,0 +1,88 @@
+import importlib.util
+import unittest
+
+from smashbot_diagnostics.perception_detector import BASELINE_DETECTOR, detect_candidates, detect_candidates_reference
+from smashbot_diagnostics.perception_masks import build_masks
+
+
+HAS_OPENCV = importlib.util.find_spec("cv2") is not None and importlib.util.find_spec("numpy") is not None
+
+
+@unittest.skipUnless(HAS_OPENCV, "optional perception extra is not installed")
+class DetectorTests(unittest.TestCase):
+    def test_masks_keep_body_and_trail_separate(self):
+        import cv2
+        import numpy as np
+
+        frame = np.zeros((400, 240, 3), dtype=np.uint8)
+        cv2.circle(frame, (120, 300), 7, (255, 255, 255), -1)
+        cv2.line(frame, (80, 300), (110, 300), (255, 255, 0), 3)
+        masks = build_masks(frame)
+        self.assertGreater(int((masks.body > 0).sum()), 0)
+        self.assertGreater(int((masks.trail > 0).sum()), 0)
+        self.assertEqual(masks.body.shape, (400, 240))
+
+    def test_candidate_center_comes_from_body_not_trail(self):
+        import cv2
+        import numpy as np
+
+        frame = np.zeros((400, 320, 3), dtype=np.uint8)
+        cv2.circle(frame, (220, 300), 7, (255, 255, 255), -1)
+        cv2.line(frame, (120, 300), (210, 300), (255, 255, 0), 3)
+        result = detect_candidates(frame, 4, 1000)
+        self.assertTrue(result.candidates)
+        candidate = min(result.candidates, key=lambda item: abs(item.x - 220) + abs(item.y - 300))
+        self.assertAlmostEqual(candidate.x, 220, delta=4)
+        self.assertAlmostEqual(candidate.y, 300, delta=4)
+        self.assertTrue(result.diagnostics["trail_is_evidence_only"])
+
+    def test_detector_api_does_not_accept_ground_truth(self):
+        self.assertNotIn("ground_truth", detect_candidates.__annotations__)
+        self.assertEqual(BASELINE_DETECTOR.name, "BASELINE_UNTUNED")
+
+    def test_candidate_generation_is_deterministic(self):
+        import numpy as np
+
+        frame = np.zeros((400, 160, 3), dtype=np.uint8)
+        frame[300:308, 80:88] = (255, 255, 255)
+        first = detect_candidates(frame, 1, 20)
+        second = detect_candidates(frame, 1, 20)
+        self.assertEqual(first.candidates, second.candidates)
+
+    def test_raw_diagnostic_preserves_normal_top32_output(self):
+        import numpy as np
+
+        frame = np.zeros((400, 320, 3), dtype=np.uint8)
+        frame[300:308, 80:88] = (255, 255, 255)
+        normal = detect_candidates(frame, 1, 20)
+        diagnostic = detect_candidates(frame, 1, 20, include_raw=True)
+        self.assertEqual(normal.candidates, diagnostic.candidates)
+        self.assertGreaterEqual(len(diagnostic.raw_candidates), len(diagnostic.candidates))
+        self.assertEqual(set(diagnostic.stage_timings_ms), {
+            "mask_build_ms",
+            "connected_components_ms",
+            "component_scoring_ms",
+            "candidate_sort_ms",
+            "total_algorithm_ms",
+        })
+
+    def test_roi_scoring_matches_reference_at_frame_border_with_motion(self):
+        import cv2
+        import numpy as np
+
+        previous = np.zeros((400, 320, 3), dtype=np.uint8)
+        current = np.zeros_like(previous)
+        cv2.circle(previous, (3, 305), 6, (255, 255, 255), -1)
+        cv2.circle(current, (2, 305), 6, (255, 255, 255), -1)
+        cv2.line(current, (0, 305), (24, 305), (255, 255, 0), 3)
+        optimized = detect_candidates(current, 2, 2000, previous_frame=previous, include_raw=True)
+        reference = detect_candidates_reference(current, 2, 2000, previous_frame=previous, include_raw=True)
+        self.assertEqual(optimized.candidates, reference.candidates)
+        self.assertEqual(optimized.raw_candidates, reference.raw_candidates)
+        for actual, expected in zip(optimized.raw_candidates, reference.raw_candidates):
+            for field in ("x", "y", "confidence", "body_score", "motion_score", "trail_score", "shape_score", "area_px"):
+                self.assertEqual(getattr(actual, field), getattr(expected, field), field)
+
+
+if __name__ == "__main__":
+    unittest.main()

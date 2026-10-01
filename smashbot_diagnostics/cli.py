@@ -21,6 +21,17 @@ from .perception import (
     run_perception_capture,
     validate_capture_duration,
 )
+from .perception_annotations import build_ground_truth_subset, run_annotation_ui
+from .perception_benchmark import benchmark_report, write_benchmark_report
+from .perception_baseline import BaselineError, run_dev_baseline
+from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
+from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
+from .perception_component_topology import ComponentTopologyError, run_component_topology
+from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
+from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
+from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
+from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
+from .perception_appearance_geometry import AppearanceGeometryError, run_appearance_geometry
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -223,6 +234,126 @@ def build_parser() -> argparse.ArgumentParser:
         help="real H.264 sample used to verify has_b_frames=0 before capture",
     )
     perception.add_argument("--output-base", type=Path, default=PERCEPTION_OUTPUT_BASE)
+
+    subset = subparsers.add_parser(
+        "perception-subset",
+        help="build the frozen Task 009 annotation candidate subset from Task 008 captures",
+    )
+    subset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    subset.add_argument("--output-base", type=Path, default=Path("artifacts/task009/ground_truth"))
+    subset.add_argument("--ffmpeg", default="ffmpeg")
+    subset.add_argument(
+        "--no-extract",
+        action="store_true",
+        help="write manifests only; do not regenerate PNG derivatives",
+    )
+    subset.add_argument(
+        "--replace-annotations",
+        action="store_true",
+        help="explicitly replace an existing annotations.json with an unlabeled skeleton",
+    )
+
+    label = subparsers.add_parser(
+        "perception-label",
+        help="serve the dependency-free Task 009 annotation UI on localhost",
+    )
+    label.add_argument("--manifest", type=Path, required=True)
+    label.add_argument("--annotations", type=Path, required=True)
+    label.add_argument("--port", type=_nonnegative_int, default=0)
+    label.add_argument("--read-only", action="store_true", help="serve labels without enabling save endpoints")
+
+    benchmark = subparsers.add_parser(
+        "perception-benchmark",
+        help="validate annotations and optional explicit predictions without running a detector",
+    )
+    benchmark.add_argument("--annotations", type=Path, required=True)
+    benchmark.add_argument("--predictions", type=Path)
+    benchmark.add_argument("--split", choices=("all", "dev", "holdout"), default="all")
+    benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/benchmark"))
+    dev_baseline = subparsers.add_parser(
+        "perception-dev-baseline",
+        help="run the single BASELINE_UNTUNED perception pass on the frozen DEV split only",
+    )
+    dev_baseline.add_argument("--snapshot", type=Path, required=True)
+    dev_baseline.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    dev_baseline.add_argument("--ffmpeg", default="ffmpeg")
+    dev_baseline.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_baseline"))
+    dev_diagnose = subparsers.add_parser(
+        "perception-dev-diagnose",
+        help="attribute the BASELINE_UNTUNED detector on DEV without changing its behavior",
+    )
+    dev_diagnose.add_argument("--snapshot", type=Path, required=True)
+    dev_diagnose.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    dev_diagnose.add_argument("--ffmpeg", default="ffmpeg")
+    dev_diagnose.add_argument("--output-base", type=Path, default=Path("artifacts/task009/dev_diagnosis"))
+    topology = subparsers.add_parser(
+        "perception-component-topology",
+        help="diagnose pre-filter body connected components on DEV NO_NEAR_COMPONENT frames",
+    )
+    topology.add_argument("--snapshot", type=Path, required=True)
+    topology.add_argument("--diagnosis-report", type=Path, required=True)
+    topology.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    topology.add_argument("--ffmpeg", default="ffmpeg")
+    topology.add_argument("--output-base", type=Path, default=Path("artifacts/task009/component_topology"))
+    feasibility = subparsers.add_parser(
+        "perception-candidate-feasibility",
+        help="evaluate fixed candidate families on the frozen DEV split only",
+    )
+    feasibility.add_argument("--snapshot", type=Path, required=True)
+    feasibility.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    feasibility.add_argument("--ffmpeg", default="ffmpeg")
+    feasibility.add_argument("--topology-report", type=Path, default=Path("artifacts/task009/component_topology/report.json"))
+    feasibility.add_argument("--output-base", type=Path, default=Path("artifacts/task009/candidate_feasibility"))
+    v1_calibrate = subparsers.add_parser(
+        "perception-v1-calibrate",
+        help="calibrate the fixed yellow-primary V1 rules on DEV only",
+    )
+    v1_calibrate.add_argument("--snapshot", type=Path, required=True)
+    v1_calibrate.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    v1_calibrate.add_argument("--ffmpeg", default="ffmpeg")
+    v1_calibrate.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v1_calibration"))
+    v1_benchmark = subparsers.add_parser(
+        "perception-v1-baseline",
+        help="run one frozen V1 DEV benchmark",
+    )
+    v1_benchmark.add_argument("--snapshot", type=Path, required=True)
+    v1_benchmark.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    v1_benchmark.add_argument("--ffmpeg", default="ffmpeg")
+    v1_benchmark.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v1_baseline"))
+    multi_hypothesis = subparsers.add_parser(
+        "perception-multi-hypothesis-feasibility",
+        help="build and evaluate a DEV-only temporal candidate graph",
+    )
+    multi_hypothesis.add_argument("--snapshot", type=Path, required=True)
+    multi_hypothesis.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    multi_hypothesis.add_argument("--ffmpeg", default="ffmpeg")
+    multi_hypothesis.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
+    multi_hypothesis.add_argument("--output-base", type=Path, default=Path("artifacts/task009/multi_hypothesis_feasibility"))
+    v2_beam = subparsers.add_parser(
+        "perception-v2-beam-feasibility",
+        help="reconstruct raw-yellow beam feasibility from existing reports only",
+    )
+    v2_beam.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
+    v2_beam.add_argument("--area-report", type=Path, default=Path("artifacts/task009/multi_hypothesis_feasibility/report.json"))
+    v2_beam.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    v2_beam.add_argument("--output-base", type=Path, default=Path("artifacts/task009/v2_beam_feasibility"))
+    appearance = subparsers.add_parser(
+        "perception-appearance-geometry",
+        help="evaluate candidate-centric appearance geometry on DEV A/B/C only",
+    )
+    appearance.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    appearance.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    appearance.add_argument("--ffmpeg", default="ffmpeg")
+    appearance.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
+    appearance.add_argument("--v2-report", type=Path, default=Path("artifacts/task009/v2_beam_feasibility/report.json"))
+    appearance.add_argument("--output-base", type=Path, default=Path("artifacts/task009/appearance_geometry"))
+    compare = subparsers.add_parser(
+        "perception-compare",
+        help="compare two completed Task 009 reports without choosing a winner",
+    )
+    compare.add_argument("--baseline", type=Path, required=True)
+    compare.add_argument("--candidate", type=Path, required=True)
+    compare.add_argument("--output", type=Path, default=Path("artifacts/task009/compare.json"))
     return parser
 
 
@@ -1287,6 +1418,185 @@ def _perception_capture(args: argparse.Namespace) -> int:
     return 0 if report.get("status") == "PASS" else 2
 
 
+def _perception_subset(args: argparse.Namespace) -> int:
+    repo_root = Path.cwd()
+    subset = build_ground_truth_subset(
+        repo_root=repo_root,
+        task008_root=args.task008_root,
+        output_root=args.output_base,
+        ffmpeg=args.ffmpeg,
+        extract_images=not args.no_extract,
+        replace_annotations=args.replace_annotations,
+    )
+    print(f"Subset manifest: {Path(args.output_base) / 'subset.json'}")
+    print(f"Annotations: {Path(args.output_base) / 'annotations.json'}")
+    print(f"Records: {subset['record_count']}")
+    return 0
+
+
+def _perception_label(args: argparse.Namespace) -> int:
+    run_annotation_ui(args.manifest, args.annotations, port=args.port, read_only=args.read_only)
+    return 0
+
+
+def _perception_benchmark(args: argparse.Namespace) -> int:
+    report = benchmark_report(
+        args.annotations,
+        args.predictions,
+        split=None if args.split == "all" else args.split,
+    )
+    report_path, summary_path = write_benchmark_report(report, args.output_base)
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    print(f"Status: {report['status']}")
+    return 0 if report["status"] == "COMPLETED" else 2
+
+
+def _perception_dev_baseline(args: argparse.Namespace) -> int:
+    report = run_dev_baseline(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg)
+    args.output_base.mkdir(parents=True, exist_ok=True)
+    report_path = args.output_base / "report.json"
+    summary_path = args.output_base / "summary.txt"
+    write_json(report_path, report)
+    write_summary(
+        summary_path,
+        [
+            "Task 009 BASELINE_UNTUNED DEV perception benchmark",
+            f"Status: {report['status']}",
+            f"Split: {report['split']}",
+            f"Detector: {report['configuration']['detector']}",
+            f"Visible recall@20: {report['metrics']['recall_at_radius_px']['20px']['recall']}",
+            f"Registration: {report['registration']['valid_transforms']}/{report['registration']['eligible_transitions']}",
+            "Holdout used: false",
+        ],
+    )
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    return 0
+
+
+def _perception_dev_diagnose(args: argparse.Namespace) -> int:
+    report = run_dev_diagnosis(
+        args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        output_base=args.output_base,
+    )
+    report_path, summary_path, csv_path = write_diagnosis_outputs(report, args.output_base)
+    print(f"Report: {report_path}")
+    print(f"Summary: {summary_path}")
+    print(f"Frames CSV: {csv_path}")
+    return 0
+
+
+def _perception_component_topology(args: argparse.Namespace) -> int:
+    report = run_component_topology(
+        args.snapshot,
+        diagnosis_report=args.diagnosis_report,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Frames: {args.output_base / 'frames.csv'}")
+    print(f"Classification: {report['classification']['global']}")
+    return 0
+
+
+def _perception_candidate_feasibility(args: argparse.Namespace) -> int:
+    report = run_candidate_feasibility(
+        args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        topology_report=args.topology_report,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Families CSV: {args.output_base / 'families.csv'}")
+    print(f"Ranking CSV: {args.output_base / 'ranking.csv'}")
+    print(f"Gate families >=95% @20: {report['decision_gate']['families_reaching_target']}")
+    return 0
+
+
+def _perception_v1_calibrate(args: argparse.Namespace) -> int:
+    report = calibrate_v1(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg, output_base=args.output_base)
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Selected rule: {report['selected_rule']}")
+    print(f"Area band: {report['positive_area']}")
+    return 0
+
+
+def _perception_v1_baseline(args: argparse.Namespace) -> int:
+    report = run_v1_dev(args.snapshot, task008_root=args.task008_root, ffmpeg=args.ffmpeg, output_base=args.output_base)
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Status: {report['status']}")
+    return 0
+
+
+def _perception_multi_hypothesis(args: argparse.Namespace) -> int:
+    report = run_multi_hypothesis_feasibility(
+        args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        v1_report_path=args.v1_report,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Pairs CSV: {args.output_base / 'pairs.csv'}")
+    print(f"Tracklets CSV: {args.output_base / 'tracklets3.csv'}")
+    print(f"Pair oracle recall: {report['pair_oracle']['global']['pair_oracle_recall']}")
+    return 0
+
+
+def _perception_v2_beam(args: argparse.Namespace) -> int:
+    report = run_v2_beam_feasibility(
+        v1_report_path=args.v1_report,
+        area_report_path=args.area_report,
+        snapshot_path=args.snapshot,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Selected rule: {report['decision']['selected_rule']}")
+    print(f"Recommended beam width: {report['decision']['recommended_beam_width']}")
+    return 0
+
+
+def _perception_appearance_geometry(args: argparse.Namespace) -> int:
+    report = run_appearance_geometry(
+        snapshot_path=args.snapshot,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        v1_report_path=args.v1_report,
+        v2_report_path=args.v2_report,
+        output_base=args.output_base,
+    )
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Appearance geometry gate: {report['decision']['status']}")
+    print(f"Selected rule: {report['decision']['selected_rule']}")
+    print(f"Recommended beam: {report['decision']['recommended_beam']}")
+    return 0
+
+
+def _perception_compare(args: argparse.Namespace) -> int:
+    try:
+        report = compare_report_files(args.baseline, args.candidate)
+    except BenchmarkComparisonError as exc:
+        print(f"Comparison validation error: {exc}")
+        return 2
+    output = write_comparison_report(report, args.output)
+    print(f"Comparison: {output}")
+    for delta in report["deltas"]:
+        print(f"{delta['metric']}: {delta['delta']:+.6g}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1307,6 +1617,32 @@ def main(argv: list[str] | None = None) -> int:
             return _realtime_benchmark(args)
         if args.command == "perception-capture":
             return _perception_capture(args)
-    except (AdbError, AdbUnavailable, ValueError) as exc:
+        if args.command == "perception-subset":
+            return _perception_subset(args)
+        if args.command == "perception-label":
+            return _perception_label(args)
+        if args.command == "perception-benchmark":
+            return _perception_benchmark(args)
+        if args.command == "perception-dev-baseline":
+            return _perception_dev_baseline(args)
+        if args.command == "perception-dev-diagnose":
+            return _perception_dev_diagnose(args)
+        if args.command == "perception-component-topology":
+            return _perception_component_topology(args)
+        if args.command == "perception-candidate-feasibility":
+            return _perception_candidate_feasibility(args)
+        if args.command == "perception-v1-calibrate":
+            return _perception_v1_calibrate(args)
+        if args.command == "perception-v1-baseline":
+            return _perception_v1_baseline(args)
+        if args.command == "perception-multi-hypothesis-feasibility":
+            return _perception_multi_hypothesis(args)
+        if args.command == "perception-v2-beam-feasibility":
+            return _perception_v2_beam(args)
+        if args.command == "perception-appearance-geometry":
+            return _perception_appearance_geometry(args)
+        if args.command == "perception-compare":
+            return _perception_compare(args)
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
         parser.error(str(exc))
     return 2
