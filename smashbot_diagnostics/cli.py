@@ -32,6 +32,7 @@ from .perception_component_topology import ComponentTopologyError, run_component
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
 from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest, build_train_candidate_manifest
 from .perception_candidate_svm import CandidateSVMError, run_candidate_svm
+from .perception_candidate_cnn import CandidateCNNError, run_candidate_cnn
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
@@ -418,6 +419,15 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_svm.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     candidate_svm.add_argument("--ffmpeg", default="ffmpeg")
     candidate_svm.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c1"))
+    candidate_cnn = subparsers.add_parser(
+        "perception-candidate-cnn",
+        help="run the frozen Task 010 C2d1 tiny-CNN LOBO evaluator",
+    )
+    candidate_cnn.add_argument("--dev-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
+    candidate_cnn.add_argument("--train-manifest", type=Path, default=Path("data/task010/candidate_manifest_train.json"))
+    candidate_cnn.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_cnn.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    candidate_cnn.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c2d1"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1772,6 +1782,24 @@ def _perception_candidate_svm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_cnn(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_cnn(
+            args.dev_manifest,
+            args.train_manifest,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateCNNError as exc:
+        print(f"Candidate CNN error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C2d1: {report['status']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1826,6 +1854,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_candidate_dataset_train(args)
         if args.command == "perception-candidate-svm":
             return _perception_candidate_svm(args)
+        if args.command == "perception-candidate-cnn":
+            return _perception_candidate_cnn(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
     except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
