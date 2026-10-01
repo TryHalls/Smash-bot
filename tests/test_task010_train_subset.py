@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+import urllib.request
 from unittest.mock import patch
 
-from smashbot_diagnostics.perception_annotations import AnnotationHTTPServer, TrainSourceCache, _html
+from smashbot_diagnostics.perception_annotations import AnnotationHTTPServer, TrainSourceCache, _html, atomic_write_json
 from smashbot_diagnostics.perception_train_subset import (
     FROZEN_GUARD_FRAMES,
     MIN_SPACING_FRAMES,
@@ -112,6 +114,89 @@ class Task010TrainSubsetTests(unittest.TestCase):
                 cache.ensure("B", records_b)
                 self.assertEqual(len(list((root / "cache" / "images").glob("*.png"))), 60)
                 self.assertFalse((root / "cache" / "images" / "a0.png").exists())
+
+    def _server_fixture(self, root: Path) -> tuple[Path, Path, Path]:
+        record = {
+            "record_id": "train_A_0000_000000",
+            "schema_version": 1,
+            "split": "train",
+            "dataset_role": "train",
+            "train_group": "A",
+            "clip": "A",
+            "source_run": "source-A",
+            "burst_id": "TRAIN_A",
+            "frame_index": 0,
+            "pts_us": 1,
+            "active_rally": None,
+            "shuttle": {"visible": None, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False},
+            "tags": [],
+        }
+        manifest_path = root / "manifest.json"
+        annotations_path = root / "annotations.json"
+        atomic_write_json(manifest_path, {"schema_version": 1, "dataset_role": "train", "width": 864, "height": 1920, "records": [{key: value for key, value in record.items() if key not in {"active_rally", "shuttle", "tags"}}]})
+        atomic_write_json(annotations_path, {"schema_version": 1, "dataset_role": "train", "width": 864, "height": 1920, "record_count": 1, "records": [record]})
+        cache_dir = root / "cache"
+        return manifest_path, annotations_path, cache_dir
+
+    def test_real_http_handler_uses_train_branding_and_task009_default_is_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, annotations, cache_dir = self._server_fixture(root)
+            server = AnnotationHTTPServer(manifest, annotations, task008_root=root / "task008", cache_dir=cache_dir)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                page = urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/", timeout=2).read().decode()
+                self.assertIn("TASK 010 — TRAIN Labels", page)
+                self.assertNotIn("TASK 009 — Ground Truth", page)
+            finally:
+                server.shutdown()
+                thread.join(timeout=2)
+                server.server_close()
+
+            # A normal manifest still uses the historical Task 009 branding.
+            standard_manifest = root / "standard_manifest.json"
+            standard_annotations = root / "standard_annotations.json"
+            standard_record = {
+                "record_id": "record",
+                "schema_version": 1,
+                "split": "dev",
+                "clip": "A",
+                "source_run": "run",
+                "burst_id": "A_01",
+                "frame_index": 0,
+                "pts_us": 1,
+                "active_rally": None,
+                "shuttle": {"visible": None, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False},
+                "tags": [],
+            }
+            atomic_write_json(standard_manifest, {"schema_version": 1, "width": 864, "height": 1920, "records": [{key: value for key, value in standard_record.items() if key not in {"active_rally", "shuttle", "tags"}}]})
+            atomic_write_json(standard_annotations, {"schema_version": 1, "width": 864, "height": 1920, "record_count": 1, "records": [standard_record]})
+            standard = AnnotationHTTPServer(standard_manifest, standard_annotations)
+            standard_thread = threading.Thread(target=standard.serve_forever, daemon=True)
+            standard_thread.start()
+            try:
+                page = urllib.request.urlopen(f"http://127.0.0.1:{standard.server_address[1]}/", timeout=2).read().decode()
+                self.assertIn("TASK 009 — Ground Truth", page)
+            finally:
+                standard.shutdown()
+                standard_thread.join(timeout=2)
+                standard.server_close()
+
+    def test_train_cache_cleanup_on_server_close_is_idempotent_and_scoped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest, annotations, cache_dir = self._server_fixture(root)
+            cache_dir.mkdir(parents=True)
+            (cache_dir / "images").mkdir()
+            (cache_dir / "images" / "old.png").write_bytes(b"png")
+            outside = root / "outside.txt"
+            outside.write_text("keep", encoding="utf-8")
+            server = AnnotationHTTPServer(manifest, annotations, task008_root=root / "task008", cache_dir=cache_dir)
+            server.server_close()
+            server.server_close()
+            self.assertEqual(list(cache_dir.rglob("*")), [])
+            self.assertEqual(outside.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":

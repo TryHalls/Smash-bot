@@ -782,7 +782,10 @@ class _AnnotationHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            payload = _html(read_only=self.server.read_only).encode("utf-8")
+            payload = _html(
+                read_only=self.server.read_only,
+                dataset_role=self.server.dataset_role,
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
@@ -973,6 +976,17 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
         if not path.is_file():
             raise OSError(path)
         return path
+
+    def cleanup(self) -> None:
+        """Idempotently remove disposable TRAIN cache contents only."""
+        if self._train_cache is not None:
+            self._train_cache.clear()
+
+    def server_close(self) -> None:
+        try:
+            super().server_close()
+        finally:
+            self.cleanup()
 
     def apply(self, patch: dict[str, Any]) -> dict[str, Any]:
         if self.read_only:
