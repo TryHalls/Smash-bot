@@ -28,6 +28,7 @@ from .perception_compare import BenchmarkComparisonError, compare_report_files, 
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
+from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
@@ -347,6 +348,21 @@ def build_parser() -> argparse.ArgumentParser:
     appearance.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
     appearance.add_argument("--v2-report", type=Path, default=Path("artifacts/task009/v2_beam_feasibility/report.json"))
     appearance.add_argument("--output-base", type=Path, default=Path("artifacts/task009/appearance_geometry"))
+    candidate_dataset = subparsers.add_parser(
+        "perception-candidate-dataset",
+        help="build the deterministic Task 010 Gate B candidate manifest from DEV only",
+    )
+    candidate_dataset.add_argument("--snapshot", type=Path, required=True)
+    candidate_dataset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_dataset.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_dataset.add_argument("--output", type=Path, required=True)
+    candidate_dataset.add_argument("--report-base", type=Path, default=Path("artifacts/task010/gate_b"))
+    candidate_dataset.add_argument(
+        "--task009-report",
+        type=Path,
+        default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"),
+        help="historical Task 009 report used only for proposal equivalence diagnostics",
+    )
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1597,6 +1613,27 @@ def _perception_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_dataset(args: argparse.Namespace) -> int:
+    try:
+        manifest, report = build_candidate_manifest(
+            args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_path=args.output,
+            report_base=args.report_base,
+            task009_report=args.task009_report,
+        )
+    except CandidateDatasetError as exc:
+        print(f"Candidate dataset error: {exc}")
+        return 2
+    print(f"Manifest: {args.output}")
+    print(f"Report: {args.report_base / 'report.json'}")
+    print(f"Frames: {len(manifest['frames'])}")
+    print(f"Candidates: {len(manifest['candidates'])}")
+    print(f"Proposal equivalence: {report['provenance']['proposal_equivalence']['status']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1641,6 +1678,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_v2_beam(args)
         if args.command == "perception-appearance-geometry":
             return _perception_appearance_geometry(args)
+        if args.command == "perception-candidate-dataset":
+            return _perception_candidate_dataset(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
     except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
