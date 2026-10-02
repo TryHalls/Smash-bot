@@ -28,11 +28,28 @@ class Task011GateETests(unittest.TestCase):
 
     def test_gate_fails_closed_without_reusable_cnn(self):
         with tempfile.TemporaryDirectory() as directory:
-            report = run_gate_e(output_base=Path(directory) / "report")
+            report = run_gate_e(
+                output_base=Path(directory) / "report",
+                proposal_report={"pass": True, "frames": 63},
+            )
         self.assertEqual(report["verdict"], "STOP_MODEL_REPLAY")
         self.assertFalse(report["training_performed"])
         self.assertFalse(report["holdout_used"])
         self.assertEqual(report["cnn_transfer"]["missing_folds"], ["fold_A", "fold_B", "fold_C"])
+
+    def test_proposal_failure_precedes_model_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "models"
+            root.mkdir()
+            for fold in ("fold_A", "fold_B", "fold_C"):
+                (root / f"{fold}.onnx").write_bytes(b"placeholder")
+            report = run_gate_e(
+                output_base=Path(directory) / "report",
+                model_root=root,
+                proposal_report={"pass": False, "frames": 63},
+            )
+        self.assertEqual(report["verdict"], "STOP_HALFRES_PROPOSAL_SEMANTICS")
+        self.assertEqual(report["cnn_transfer"]["reusable_models_found"], {})
 
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV optional dependency is unavailable")
     def test_halfres_candidates_use_contract_and_do_not_accept_ground_truth(self):

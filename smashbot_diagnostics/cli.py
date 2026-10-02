@@ -451,6 +451,10 @@ def build_parser() -> argparse.ArgumentParser:
         "perception-halfres-acquisition",
         help="run the Task 011 Gate E half-resolution acquisition preflight",
     )
+    halfres.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    halfres.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    halfres.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    halfres.add_argument("--candidate-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
     halfres.add_argument("--model-root", type=Path, default=None, help="directory containing reusable fold_A/B/C CNN artifacts")
     halfres.add_argument("--output-base", type=Path, default=Path("artifacts/task011/gate_e"))
     compare = subparsers.add_parser(
@@ -1796,6 +1800,7 @@ def _perception_candidate_svm(args: argparse.Namespace) -> int:
             snapshot_path=args.snapshot,
             task008_root=args.task008_root,
             ffmpeg=args.ffmpeg,
+            candidate_manifest_path=args.candidate_manifest,
             output_base=args.output_base,
         )
     except CandidateSVMError as exc:
@@ -1862,7 +1867,13 @@ def _perception_native64_runtime(args: argparse.Namespace) -> int:
 
 def _perception_halfres_acquisition(args: argparse.Namespace) -> int:
     try:
-        report = run_gate_e(output_base=args.output_base, model_root=args.model_root)
+        report = run_gate_e(
+            snapshot_path=args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+            model_root=args.model_root,
+        )
     except GateEError as exc:
         print(f"Gate E error: {exc}")
         return 2
