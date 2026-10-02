@@ -35,6 +35,11 @@ class Task011GateBRegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             _local_equivalence([full[0]], [candidate(1, 100.0 + 2e-9, 200.0, 9.0)], (100.0, 200.0), context="centroid")
 
+    def test_local_equivalence_rejects_integer_center_change_at_rounding_boundary(self):
+        full = [candidate(1, 100.49999999995, 200.0, 9.0)]
+        with self.assertRaises(RuntimeError):
+            _local_equivalence([full[0]], [candidate(1, 100.50000000005, 200.0, 9.0)], (100.5, 200.0), context="integer-center")
+
     def test_tracking_uses_highest_logit_then_candidate_index(self):
         near = candidate(1, 100.0, 100.0, 9.0)
         far = candidate(1, 180.0, 100.0, 9.0)

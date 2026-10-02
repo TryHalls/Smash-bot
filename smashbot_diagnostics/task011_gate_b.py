@@ -270,6 +270,8 @@ def _local_equivalence(full_candidates: list[ShuttleCandidate], local_candidates
             raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: area mismatch at {context}[{index}]")
         if abs(left.x - right.x) > 1e-9 or abs(left.y - right.y) > 1e-9:
             raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: centroid mismatch at {context}[{index}]")
+        if math.floor(left.x + 0.5) != math.floor(right.x + 0.5) or math.floor(left.y + 0.5) != math.floor(right.y + 0.5):
+            raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: integer center mismatch at {context}[{index}]")
 
 
 def _patches_for_candidates(frame_bgr: Any, candidates: list[ShuttleCandidate]) -> list[Any]:
