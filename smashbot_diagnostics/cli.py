@@ -43,6 +43,7 @@ from .task012_phase_a import PointDetectorPhaseAError, run_phase_a
 from .task012_phase_b import PointDetectorPhaseBError, run_phase_b
 from .task012_phase_b_corrected import run_phase_b_corrected
 from .task012_phase_d import PointDetectorPhaseBError as PointDetectorPhaseDError, run_phase_d
+from .task013_teacher import Task013Error, run_phase_a as run_task013_phase_a
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -484,6 +485,14 @@ def build_parser() -> argparse.ArgumentParser:
     point_detector_d.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
     point_detector_d.add_argument("--output-base", type=Path, default=Path("artifacts/task012/phase_d"))
     point_detector_d.add_argument("--persist-models", type=Path, default=Path("models/task012/dev_lobo"))
+    task013_teacher = subparsers.add_parser(
+        "perception-task013-teacher",
+        help="run the Task 013 TRAIN-only teacher feasibility gate",
+    )
+    task013_teacher.add_argument("--train-ground-truth", type=Path, default=Path("data/task010/train_ground_truth.json"))
+    task013_teacher.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    task013_teacher.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    task013_teacher.add_argument("--output-base", type=Path, default=Path("artifacts/task013/phase_a"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1957,6 +1966,23 @@ def _perception_point_detector_phase_d(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_task013_teacher(args: argparse.Namespace) -> int:
+    try:
+        report = run_task013_phase_a(
+            train_ground_truth=args.train_ground_truth,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except Task013Error as exc:
+        print(f"Task 013 teacher error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Task 013 Phase A: {report['verdict']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -2025,8 +2051,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_point_detector_phase_b(args)
         if args.command == "perception-point-detector-phase-d":
             return _perception_point_detector_phase_d(args)
+        if args.command == "perception-task013-teacher":
+            return _perception_task013_teacher(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, PointDetectorPhaseAError, PointDetectorPhaseBError, PointDetectorPhaseDError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, PointDetectorPhaseAError, PointDetectorPhaseBError, PointDetectorPhaseDError, Task013Error, ValueError) as exc:
         parser.error(str(exc))
     return 2
