@@ -1,4 +1,4 @@
-"""Task 010 C2d2 runtime audit for the frozen tiny candidate CNN.
+"""Task 010 C2d2/C3a runtime audits for the frozen tiny candidate CNN.
 
 This module is an offline benchmark only.  It does not train, load holdout
 data, or alter the production detector.  The canonical patch implementation
@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import subprocess
 import time
 from collections import defaultdict
@@ -248,6 +249,319 @@ def batched_canonical_patches_v3(frame_bgr: Any, candidates: list[Any]) -> tuple
         for index in range(len(candidates))
     ]
     return patches, paddings
+
+
+NATIVE_PATCH_SIZE = 64
+NATIVE64_K_VALUES = (1, 8, 32)
+NATIVE64_ARCHITECTURES = {
+    "current": ((8, 16, 24), 32, 54089),
+    "half": ((4, 8, 12), 16, 13605),
+    "quarter": ((2, 4, 6), 8, 3443),
+}
+
+
+def native64_patches_batch(
+    frame_bgr: Any,
+    candidates: list[Any],
+    output_bgr: Any | None = None,
+) -> tuple[Any, list[dict[str, int]]]:
+    """Extract the frozen C3a native 64x64 RGB patches in candidate order."""
+
+    numpy = _numpy()
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise CandidateRuntimeError("C3a requires OpenCV") from exc
+    if getattr(frame_bgr, "ndim", None) != 3 or frame_bgr.shape[2] != 3:
+        raise CandidateRuntimeError("native64 source must be BGR three-channel")
+    height, width = frame_bgr.shape[:2]
+    shape = (len(candidates), NATIVE_PATCH_SIZE, NATIVE_PATCH_SIZE, 3)
+    if output_bgr is None or getattr(output_bgr, "shape", None) != shape or output_bgr.dtype != numpy.uint8:
+        output_bgr = numpy.empty(shape, dtype=numpy.uint8)
+    paddings: list[dict[str, int]] = []
+    for index, candidate in enumerate(candidates):
+        cx = math.floor(float(candidate.x) + 0.5)
+        cy = math.floor(float(candidate.y) + 0.5)
+        if not (0 <= cx < width and 0 <= cy < height):
+            raise CandidateRuntimeError("candidate center lies outside source frame")
+        left, top = cx - NATIVE_PATCH_SIZE // 2, cy - NATIVE_PATCH_SIZE // 2
+        right, bottom = left + NATIVE_PATCH_SIZE, top + NATIVE_PATCH_SIZE
+        padding = {
+            "pad_left": max(0, -left),
+            "pad_top": max(0, -top),
+            "pad_right": max(0, right - width),
+            "pad_bottom": max(0, bottom - height),
+        }
+        if any(padding.values()):
+            padded = cv2.copyMakeBorder(
+                frame_bgr,
+                padding["pad_top"],
+                padding["pad_bottom"],
+                padding["pad_left"],
+                padding["pad_right"],
+                cv2.BORDER_REFLECT_101,
+            )
+            roi = padded[
+                top + padding["pad_top"] : bottom + padding["pad_top"],
+                left + padding["pad_left"] : right + padding["pad_left"],
+            ]
+        else:
+            roi = frame_bgr[top:bottom, left:right]
+        if roi.shape[:2] != (NATIVE_PATCH_SIZE, NATIVE_PATCH_SIZE):
+            raise CandidateRuntimeError("native64 crop geometry did not produce 64x64")
+        output_bgr[index] = roi
+        paddings.append(padding)
+    return numpy.ascontiguousarray(output_bgr[:, :, :, ::-1]), paddings
+
+
+def _native64_r5_key(row: dict[str, Any]) -> tuple[float, float, float, float, float, int]:
+    area = max(float(row.get("area_px", 0.0)), 1e-12)
+    area_distance = abs(math.log(area / 78.0))
+    return (
+        -float(row.get("motion_score", 0.0)),
+        area_distance,
+        -float(row.get("confidence", 0.0)),
+        float(row["x"]),
+        float(row["y"]),
+        int(row["candidate_index"]),
+    )
+
+
+def _native64_active_groups(rows: list[dict[str, Any]]) -> list[tuple[str, int, list[dict[str, Any]]]]:
+    active = {"A_01", "B_01", "C_01"}
+    grouped: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("burst_id") in active:
+            grouped[(str(row["source_run"]), int(row["frame_index"]))].append(row)
+    if len(grouped) != 63:
+        raise CandidateRuntimeError(f"C3a expects 63 active DEV frames, got {len(grouped)}")
+    return [
+        (source_run, frame_index, sorted(values, key=lambda row: int(row["candidate_index"])))
+        for (source_run, frame_index), values in sorted(grouped.items())
+    ]
+
+
+def _make_native64_model(torch: Any, nn: Any, widths: tuple[int, int, int], hidden: int) -> Any:
+    class Native64CandidateCNN(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            c1, c2, c3 = widths
+            self.features = nn.Sequential(
+                nn.Conv2d(3, c1, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Conv2d(c1, c2, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+                nn.Conv2d(c2, c3, 3, padding=1), nn.ReLU(), nn.MaxPool2d(2),
+            )
+            self.classifier = nn.Sequential(
+                nn.Flatten(), nn.Linear(c3 * 8 * 8, hidden), nn.ReLU(), nn.Linear(hidden, 1)
+            )
+
+        def forward(self, x: Any) -> Any:
+            return self.classifier(self.features(x))
+
+    model = Native64CandidateCNN()
+    expected_by_shape = {
+        (architecture_widths, architecture_hidden): expected
+        for architecture_widths, architecture_hidden, expected in NATIVE64_ARCHITECTURES.values()
+    }
+    expected = expected_by_shape[(widths, hidden)]
+    actual = sum(int(parameter.numel()) for parameter in model.parameters())
+    if actual != expected:
+        raise CandidateRuntimeError(f"native64 model parameter count changed: expected {expected}, got {actual}")
+    return model
+
+
+def _benchmark_native64_config(
+    cv2: Any,
+    net: Any,
+    groups: list[tuple[str, int, list[dict[str, Any]]]],
+    *,
+    k: int,
+    threads: int,
+    task008_root: Path,
+    ffmpeg: str,
+) -> dict[str, Any]:
+    numpy = _numpy()
+    selected_groups = [
+        (source_run, frame_index, sorted(values, key=_native64_r5_key)[:k])
+        for source_run, frame_index, values in groups
+    ]
+    selected_rows = [row for _source_run, _frame_index, values in selected_groups for row in values]
+    decoded = iter(_iter_decoded_groups(selected_rows, task008_root, ffmpeg))
+    try:
+        first_group = next(decoded)
+    except StopIteration as exc:
+        raise CandidateRuntimeError("no decoded frames available for native64 benchmark") from exc
+    first_count = len(first_group[3])
+    output_bgr = numpy.empty((first_count, NATIVE_PATCH_SIZE, NATIVE_PATCH_SIZE, 3), dtype=numpy.uint8)
+    first_candidates = [_candidate_from_row(row) for row in first_group[3]]
+    warmup_patches, _ = native64_patches_batch(first_group[2], first_candidates, output_bgr=output_bgr)
+    warmup_blob = _blob_from_patches_preallocated(warmup_patches)
+    for _ in range(WARMUPS):
+        net.setInput(warmup_blob)
+        net.forward()
+
+    patch_times: list[float] = []
+    preprocessing_times: list[float] = []
+    dnn_times: list[float] = []
+    total_times: list[float] = []
+    counts: list[float] = []
+
+    def measure_group(frame_bgr: Any, current_rows: list[dict[str, Any]]) -> None:
+        candidates = [_candidate_from_row(row) for row in current_rows]
+        if len(candidates) != first_count:
+            raise CandidateRuntimeError("native64 benchmark changed candidate count within a fixed K")
+        total_start = time.perf_counter()
+        patch_start = time.perf_counter()
+        patches, _padding_values = native64_patches_batch(frame_bgr, candidates, output_bgr=output_bgr)
+        patch_ms = (time.perf_counter() - patch_start) * 1000.0
+        preprocessing_start = time.perf_counter()
+        blob = _blob_from_patches_preallocated(patches)
+        preprocessing_ms = (time.perf_counter() - preprocessing_start) * 1000.0
+        dnn_start = time.perf_counter()
+        net.setInput(blob)
+        net.forward()
+        dnn_ms = (time.perf_counter() - dnn_start) * 1000.0
+        total_ms = (time.perf_counter() - total_start) * 1000.0
+        patch_times.append(patch_ms)
+        preprocessing_times.append(preprocessing_ms)
+        dnn_times.append(dnn_ms)
+        total_times.append(total_ms)
+        counts.append(float(len(current_rows)))
+
+    measure_group(first_group[2], first_group[3])
+    for _source_run, _frame_index, frame_bgr, current_rows in decoded:
+        measure_group(frame_bgr, current_rows)
+    return {
+        "k": k,
+        "threads_requested": threads,
+        "threads_actual": int(cv2.getNumThreads()),
+        "frames": len(total_times),
+        "warmups": WARMUPS,
+        "candidates_per_frame": _summary(counts),
+        "timings": {
+            "native64_extraction_ms": _summary(patch_times),
+            "preprocessing_ms": _summary(preprocessing_times),
+            "opencv_dnn_forward_ms": _summary(dnn_times),
+            "scorer_total_ms": _summary(total_times),
+            "non_model_floor_ms": _summary(
+                [patch + preprocessing for patch, preprocessing in zip(patch_times, preprocessing_times)]
+            ),
+        },
+        "definition": (
+            "native 64x64 BGR crop with REFLECT_101 + BGR->RGB, then NCHW float32 "
+            "normalization and OpenCV DNN forward; excludes FFmpeg decode and yellow proposal generation"
+        ),
+        "decode_untimed": True,
+    }
+
+
+def _native64_free_bytes() -> int:
+    stat = os.statvfs("/")
+    return int(stat.f_bavail * stat.f_frsize)
+
+
+def run_native64_runtime(
+    dev_manifest_path: Path = Path("data/task010/candidate_manifest_dev.json"),
+    *,
+    task008_root: Path = Path("artifacts/task008"),
+    ffmpeg: str = "/usr/bin/ffmpeg",
+    output_base: Path = Path("artifacts/task010/gate_c3a"),
+) -> dict[str, Any]:
+    """Run the C3a native64 runtime-only architecture preflight."""
+
+    numpy = _numpy()
+    torch, nn = _torch()
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise CandidateRuntimeError("C3a requires OpenCV") from exc
+    dev = _load_manifest(Path(dev_manifest_path), "dev", EXPECTED_DEV_SHA256)
+    groups = _native64_active_groups(list(dev["candidates"]))
+    output = Path(output_base)
+    output.mkdir(parents=True, exist_ok=True)
+    _freeze_seeds(torch)
+    benchmarks: dict[str, dict[str, dict[str, Any]]] = {}
+    model_info: dict[str, Any] = {}
+    for architecture, (widths, hidden, parameter_count) in NATIVE64_ARCHITECTURES.items():
+        _freeze_seeds(torch)
+        model = _make_native64_model(torch, nn, widths, hidden).eval()
+        onnx_path = output / f"tiny_cnn_native64_{architecture}.onnx"
+        model_info[architecture] = {
+            "widths": list(widths),
+            "hidden": hidden,
+            "parameters": parameter_count,
+            "random_seed": 20261001,
+            "onnx": _export_onnx(torch, model, onnx_path),
+        }
+        benchmarks[architecture] = {}
+        for thread_count in (1, 2):
+            cv2.setNumThreads(thread_count)
+            thread_key = str(thread_count)
+            benchmarks[architecture][thread_key] = {}
+            for k in NATIVE64_K_VALUES:
+                cv2.setNumThreads(thread_count)
+                net = _new_dnn_net(cv2, onnx_path)
+                benchmarks[architecture][thread_key][str(k)] = _benchmark_native64_config(
+                    cv2,
+                    net,
+                    groups,
+                    k=k,
+                    threads=thread_count,
+                    task008_root=Path(task008_root),
+                    ffmpeg=ffmpeg,
+                )
+    passing: list[tuple[str, str, float]] = []
+    for architecture in NATIVE64_ARCHITECTURES:
+        for thread_key, values in benchmarks[architecture].items():
+            p95 = values["32"]["timings"]["scorer_total_ms"]["p95"]
+            if p95 is not None and float(p95) <= 8.0:
+                passing.append((architecture, thread_key, float(p95)))
+    selected = None
+    for architecture in NATIVE64_ARCHITECTURES:
+        candidates = [(thread, p95) for arch, thread, p95 in passing if arch == architecture]
+        if candidates:
+            thread, p95 = min(candidates, key=lambda item: item[1])
+            selected = {"architecture": architecture, "threads": int(thread), "r5_k32_p95_ms": p95}
+            break
+    status = "PASS_NATIVE64_RUNTIME_PREFLIGHT" if selected else "STOP_NATIVE64_RUNTIME"
+    report = {
+        "schema_version": 1,
+        "gate": "C3a",
+        "status": status,
+        "holdout_used": False,
+        "contract": {
+            "center_rounding": "floor(x + 0.5), floor(y + 0.5)",
+            "crop_size": [64, 64],
+            "border_mode": "BORDER_REFLECT_101",
+            "color": "BGR input -> RGB output",
+            "resize": "none",
+            "interpolation": "none",
+            "dtype": "uint8",
+            "normalization": "(pixel/255 - 0.5) / 0.5",
+            "ranking": "frozen R5, K32",
+            "legacy_96_to_64_hashes_modified": False,
+        },
+        "provenance": {
+            "code_commit": _git_commit(),
+            "dev_manifest_sha256": EXPECTED_DEV_SHA256,
+            "opencv_version": str(cv2.__version__),
+            "torch_version": str(torch.__version__),
+            "ffmpeg": str(ffmpeg),
+            "backend": "DNN_BACKEND_OPENCV",
+            "target": "DNN_TARGET_CPU",
+        },
+        "dataset": {"active_frames": len(groups), "active_bursts": ["A_01", "B_01", "C_01"]},
+        "models": model_info,
+        "benchmarks": benchmarks,
+        "selection": {
+            "criterion": "minimum real R5/K32 scorer_total p95 among threads, architecture priority current > half > quarter",
+            "threshold_ms": 8.0,
+            "selected": selected,
+        },
+        "storage": {"free_after_bytes": _native64_free_bytes(), "temporary_caches_removed": True},
+    }
+    _write_native64_outputs(report, output)
+    return report
 
 
 def _frame_groups(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, list[dict[str, Any]]]]]:
@@ -560,6 +874,21 @@ def _write_outputs(report: dict[str, Any], output_base: Path) -> None:
         f"Model equivalence: {report['model_equivalence']['status']}",
         f"Runtime scorer p95 ms: {report['runtime']['scorer_total_ms']['p95']}",
         "HOLDOUT used: false",
+    ]
+    (output_base / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
+
+
+def _write_native64_outputs(report: dict[str, Any], output_base: Path) -> None:
+    output_base.mkdir(parents=True, exist_ok=True)
+    (output_base / "report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    selected = report["selection"].get("selected")
+    selected_text = "none" if selected is None else json.dumps(selected, sort_keys=True)
+    summary = [
+        "Task 010 Gate C3a native64 runtime-only preflight",
+        f"Verdict: {report['status']}",
+        f"Selected: {selected_text}",
+        "HOLDOUT used: false",
+        "Training: false",
     ]
     (output_base / "summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
 
