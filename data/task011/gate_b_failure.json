@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "gate": "B",
+  "status": "STOP_LOCAL_PROPOSAL_EQUIVALENCE",
+  "holdout_used": false,
+  "provenance": {
+    "base_commit": "7849274d209120de9eb18ff7ed75742d9839c00a",
+    "dev_manifest_sha256": "d8dc160113cd09660c0ed84263fc24d404d2e3e09d4b05c4aae3db6bc51b7335",
+    "train_manifest_sha256": "3a0e1d205a03feddb8f8293d1122fa8b5b2a7e24837e887a3c02c16a58bc6138",
+    "torch_version": "2.14.1+cpu",
+    "proposal_path": "yellow HSV + frozen morphology + component area limits"
+  },
+  "model_replay": {
+    "status": "PASS",
+    "fold_counts": {
+      "fold_A": {"positive": 103, "negative": 7928},
+      "fold_B": {"positive": 107, "negative": 8491},
+      "fold_C": {"positive": 106, "negative": 8663}
+    },
+    "parameter_hashes": {
+      "fold_A": "920e9341f3dfee6a9e3b16ed11a4885c6744514a5759f8254e219c4b6d6c5010",
+      "fold_B": "2f52da204f96de3d35ed977107a8dcdc08a625741120cbc7f00016a3ce9b6e27",
+      "fold_C": "146033accc109da7cdc69b0dd5bdace01870422b222d9177e1f95eec27e8da0e"
+    },
+    "onnx_opencv_parity": "PASS"
+  },
+  "full_frame_proposal_equivalence": {
+    "status": "PASS",
+    "active_dev_frames": 63,
+    "candidate_count": 4064,
+    "gt_used_for_generation": false
+  },
+  "local_proposal_equivalence": {
+    "status": "FAIL",
+    "first_failure": {"burst": "A_01", "frame_index": 80, "full_count": 4, "local_count": 4},
+    "contract": {"acceptance_radius_px": 120, "processing_half_extent_px": 240, "comparison": "exact x/y/area order"},
+    "failure_type": "same cardinality but non-identical candidate tuple; exact equivalence contract fails",
+    "focused_reproduction_note": "A bounded single-frame reproduction showed one centroid y value differing by approximately 2.3e-13 after crop-local connected-components; this is still a mismatch under the exact contract and was not normalized or tolerated."
+  },
+  "semantic_evaluation": "NOT_RUN_AFTER_STOP",
+  "integrated_runtime": "NOT_RUN_AFTER_STOP"
+}
