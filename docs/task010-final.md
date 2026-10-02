@@ -130,8 +130,8 @@ decode, registration, and yellow proposal generation.
 | Gate / path | Measured condition | Scorer p95 |
 |---|---|---:|
 | C2d2-R | original 96→64 path, 247 DEV frames | 97.979 |
-| C2d3 | bounded cascade diagnostic, K32 | 79.038 |
-| C2d4 | exact ROI v2 + preallocated preprocessing, K32 | 50.878 |
+| C2d3 | real R5/K32 shortlist | 60.699 |
+| C2d4 | final selected preallocated preprocessing, OpenCV DNN CPU, 2 threads, K32 | 41.298 |
 | C2d5 | batched 96→64 mosaic, R5/K32, one thread | 26.460 |
 | C3a | native64, quarter graph, R5/K32, two threads | 28.144 |
 
@@ -196,4 +196,3 @@ These files contain no final checkpoint, no copied video, no PNG dataset, and
 no HOLDOUT result. The next task must decide whether to design an explicitly
 budgeted asynchronous/cascade runtime or revisit the architecture; it must
 not silently convert this closure verdict into a production PASS.
-
