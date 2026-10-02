@@ -1,0 +1,34 @@
+{
+  "gate": "Task012-Phase-B",
+  "head": "86f01baeeb954232d782f977adcf402729eddb96",
+  "holdout_used": false,
+  "protocol": {
+    "architecture": "H2",
+    "seed": 20261001,
+    "epochs": 40,
+    "batch_size": 8,
+    "loss": "CrossEntropy + SmoothL1",
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "torch_threads": 2,
+    "no_augmentation": true,
+    "no_early_stopping": true
+  },
+  "determinism": {
+    "fold_A_parameter_hash": "d8865df5866f987811042bddfd8b65ffb6a42662ffa643b52274975adf8fcfab",
+    "fold_A_second_parameter_hash": "d8865df5866f987811042bddfd8b65ffb6a42662ffa643b52274975adf8fcfab",
+    "parameter_hash_equal": true,
+    "loss_delta": 0.0,
+    "loss_equal": true
+  },
+  "semantic": {
+    "recall_at_20": "0/63",
+    "recall_at_10": "0/63",
+    "localization_count": 0,
+    "first_acquisition_pairs_passed": "0/3",
+    "negative_check_object_fp": "0/15"
+  },
+  "models_persisted": false,
+  "verdict": "STOP_POINT_DETECTOR_SEMANTICS"
+}
