@@ -43,6 +43,7 @@ TORCH_THREADS = 2
 ARCHITECTURE = "H2"
 FROZEN_DEV_BURSTS = ("A_01", "B_01", "C_01")
 FROZEN_NEGATIVE_BURSTS = ("C_NEG_01", "C_NEG_03", "C_NEG_05", "C_NEG_07", "C_NEG_09")
+ACQUISITION_REPORT = Path("data/task010/cnn_lobo_report.json")
 ACQUISITION_PAIRS = {"A_01": (78, 79), "B_01": (78, 79), "C_01": (351, 352)}
 GT_RADIUS_20 = 20.0
 GT_RADIUS_10 = 10.0
@@ -107,6 +108,22 @@ def _read_json(path: Path) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PointDetectorPhaseBError(f"cannot read {path}: {exc}") from exc
+
+
+def _acquisition_pairs(path: Path = ACQUISITION_REPORT) -> dict[str, tuple[int, int]]:
+    """Read the frozen first-pair evidence; never invent pair indices here."""
+
+    document = _read_json(path)
+    pairs: dict[str, tuple[int, int]] = {}
+    for fold_name, fold in FOLDS.items():
+        pair = document.get("folds", {}).get(fold_name, {}).get("first_acquisition_pair")
+        if not isinstance(pair, dict):
+            raise PointDetectorPhaseBError(f"missing acquisition pair for {fold_name}")
+        first, second = pair.get("frame_1"), pair.get("frame_2")
+        if not isinstance(first, int) or not isinstance(second, int) or second != first + 1:
+            raise PointDetectorPhaseBError(f"invalid acquisition pair for {fold_name}")
+        pairs[str(fold["validate"])] = (first, second)
+    return pairs
 
 
 def _records(train_path: Path, dev_path: Path) -> tuple[list[dict[str, Any]], dict[tuple[str, int], dict[str, Any]], list[dict[str, Any]]]:
@@ -200,12 +217,65 @@ def _batch_tensor(torch: Any, numpy: Any, values: list[Any]) -> Any:
     return tensor
 
 
+def _corrected_point_detector_model(torch: Any, nn: Any) -> Any:
+    """H2 detector with presence head and the frozen Phase B output contract."""
+
+    spec = ARCHITECTURES[ARCHITECTURE]
+
+    class PointDetector(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            layers: list[Any] = []
+            in_channels = 3
+            for channels, stride in zip(spec["channels"], spec["strides"]):
+                layers.extend([nn.Conv2d(in_channels, channels, kernel_size=3, stride=stride, padding=1), nn.ReLU()])
+                in_channels = channels
+            self.encoder = nn.Sequential(*layers)
+            self.heatmap = nn.Conv2d(16, 1, kernel_size=1)
+            self.offsets = nn.Sequential(nn.Conv2d(16, 2, kernel_size=1), nn.Sigmoid())
+            self.presence_pool = nn.AdaptiveAvgPool2d(1)
+            self.presence = nn.Linear(16, 1)
+            nn.init.constant_(self.heatmap.bias, -2.19)
+
+        def forward(self, value: Any) -> tuple[Any, Any, Any]:
+            feature = self.encoder(value)
+            pooled = self.presence_pool(feature).flatten(1)
+            return self.heatmap(feature), self.offsets(feature), self.presence(pooled)
+
+    return PointDetector()
+
+
+def _gaussian_heatmap(torch: Any, numpy: Any, records: list[dict[str, Any]], targets: dict[str, tuple[int, int | None, int | None, float | None, float | None]]) -> Any:
+    """Create one-sigma cell Gaussian center targets without image features."""
+
+    target = numpy.zeros((len(records), 1, GRID_HEIGHT, GRID_WIDTH), dtype=numpy.float32)
+    yy, xx = numpy.mgrid[0:GRID_HEIGHT, 0:GRID_WIDTH]
+    for index, record in enumerate(records):
+        _class, cell_x, cell_y, _off_x, _off_y = targets[str(record["record_id"])]
+        if cell_x is None or cell_y is None:
+            continue
+        target[index, 0] = numpy.exp(-((xx - cell_x) ** 2 + (yy - cell_y) ** 2) / (2.0 * 1.0 * 1.0)).astype(numpy.float32)
+    return torch.from_numpy(target)
+
+
+def _penalty_reduced_focal(torch: Any, heatmap: Any, target: Any) -> Any:
+    """CenterNet/CornerNet penalty-reduced focal loss, alpha=2 beta=4."""
+
+    probability = torch.sigmoid(heatmap).clamp(min=1e-4, max=1.0 - 1e-4)
+    positive = target.eq(1.0).to(dtype=heatmap.dtype)
+    negative = target.lt(1.0).to(dtype=heatmap.dtype)
+    negative_weight = torch.pow(1.0 - target, 4.0)
+    positive_loss = torch.log(probability) * torch.pow(1.0 - probability, 2.0) * positive
+    negative_loss = torch.log(1.0 - probability) * torch.pow(probability, 2.0) * negative_weight * negative
+    positive_count = positive.sum()
+    return -(positive_loss.sum() + negative_loss.sum()) / torch.clamp(positive_count, min=1.0)
+
+
 def _train_once(torch: Any, nn: Any, numpy: Any, records: list[dict[str, Any]], inputs: dict[str, Any]) -> tuple[Any, float]:
     _configure_torch(torch)
-    model = _point_detector_model(torch, nn, ARCHITECTURE)
+    model = _corrected_point_detector_model(torch, nn)
     model.train()
-    class_count = GRID_HEIGHT * GRID_WIDTH + 1
-    ce = nn.CrossEntropyLoss()
+    presence_loss = nn.BCEWithLogitsLoss()
     smooth = nn.SmoothL1Loss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     generator = torch.Generator(device="cpu")
@@ -221,12 +291,14 @@ def _train_once(torch: Any, nn: Any, numpy: Any, records: list[dict[str, Any]], 
         for start in range(0, len(order), BATCH_SIZE):
             batch = [records[index] for index in order[start : start + BATCH_SIZE]]
             value = _batch_tensor(torch, numpy, [inputs[str(row["record_id"])] for row in batch])
-            heat, offsets, no_object = model(value)
-            heat_flat = heat.reshape(len(batch), -1)
-            logits = torch.cat((heat_flat, no_object.reshape(len(batch), 1)), dim=1)
-            targets_class = torch.tensor([targets[str(row["record_id"])][0] for row in batch], dtype=torch.long)
+            heat, offsets, presence = model(value)
+            visible_targets = torch.tensor(
+                [1.0 if targets[str(row["record_id"])][1] is not None else 0.0 for row in batch],
+                dtype=torch.float32,
+            ).reshape(-1, 1)
             visible_indices = [index for index, row in enumerate(batch) if targets[str(row["record_id"])][1] is not None]
-            loss = ce(logits, targets_class)
+            heat_target = _gaussian_heatmap(torch, numpy, batch, targets)
+            loss = presence_loss(presence, visible_targets) + _penalty_reduced_focal(torch, heat, heat_target)
             if visible_indices:
                 offset_targets = torch.tensor(
                     [[targets[str(batch[index]["record_id"])][3], targets[str(batch[index]["record_id"])][4]] for index in visible_indices],
@@ -248,12 +320,13 @@ def _train_once(torch: Any, nn: Any, numpy: Any, records: list[dict[str, Any]], 
 
 
 def _decode_outputs(numpy: Any, outputs: tuple[Any, Any, Any]) -> dict[str, Any] | None:
-    heatmap, offsets, no_object = outputs
+    heatmap, offsets, presence = outputs
+    presence_logit = float(numpy.asarray(presence).reshape(-1)[0])
+    if presence_logit <= 0.0:
+        return None
     heat = numpy.asarray(heatmap)[0, 0]
     flat = heat.reshape(-1)
     index = int(numpy.argmax(flat))
-    if float(numpy.asarray(no_object).reshape(-1)[0]) > float(flat[index]):
-        return None
     cell_y, cell_x = divmod(index, GRID_WIDTH)
     offset = numpy.asarray(offsets)[0, :, cell_y, cell_x]
     return {
@@ -262,7 +335,7 @@ def _decode_outputs(numpy: Any, outputs: tuple[Any, Any, Any]) -> dict[str, Any]
         "cell_x": cell_x,
         "cell_y": cell_y,
         "heatmap_logit": float(flat[index]),
-        "no_object_logit": float(numpy.asarray(no_object).reshape(-1)[0]),
+        "presence_logit": presence_logit,
     }
 
 

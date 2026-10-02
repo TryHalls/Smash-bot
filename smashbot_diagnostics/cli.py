@@ -41,6 +41,7 @@ from .perception_appearance_geometry import AppearanceGeometryError, run_appeara
 from .task011_gate_e import GateEError, run_gate_e
 from .task012_phase_a import PointDetectorPhaseAError, run_phase_a
 from .task012_phase_b import PointDetectorPhaseBError, run_phase_b
+from .task012_phase_b_corrected import run_phase_b_corrected
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -1915,7 +1916,7 @@ def _perception_point_detector_phase_a(args: argparse.Namespace) -> int:
 
 def _perception_point_detector_phase_b(args: argparse.Namespace) -> int:
     try:
-        report = run_phase_b(
+        report = run_phase_b_corrected(
             task008_root=args.task008_root,
             ffmpeg=args.ffmpeg,
             output_base=args.output_base,

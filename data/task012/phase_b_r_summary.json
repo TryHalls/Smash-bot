@@ -1,0 +1,29 @@
+{
+  "gate": "Task012-Phase-B-R",
+  "head": "411ed8ac26c4fe0e7640e2d997da3f9fee63de3e",
+  "holdout_used": false,
+  "objective": {
+    "presence": "BCEWithLogitsLoss, visible=1/invisible=0, inference logit > 0",
+    "heatmap": "Gaussian sigma=1.0 cell + penalty-reduced focal alpha=2 beta=4, sigmoid clamp [1e-4,1-1e-4]",
+    "offset": "sigmoid [0,1] + SmoothL1 at visible target cell",
+    "heatmap_bias": -2.19,
+    "weights": {"presence": 1.0, "heatmap": 1.0, "offset": 1.0}
+  },
+  "acquisition_pairs_source": "data/task010/cnn_lobo_report.json",
+  "acquisition_pairs": {"A_01": [79, 80], "B_01": [78, 79], "C_01": [351, 352]},
+  "determinism": {
+    "fold_A_parameter_hash": "6c2594949acb5752ad0b1d4df3ceab097b2b62deddf475d2fd0cf48134784434",
+    "second_hash_equal": true,
+    "final_loss_delta": 0.0
+  },
+  "early_fold_A": {
+    "recall_at_20": "0/21",
+    "recall_at_10": "0/21",
+    "pair_79_80": "0/2",
+    "negative_fp": "0/5",
+    "localization_p50_px": 904.0707280421899,
+    "localization_p95_px": 906.1225179217321
+  },
+  "models_persisted": false,
+  "verdict": "STOP_POINT_DETECTOR_SEMANTICS"
+}
