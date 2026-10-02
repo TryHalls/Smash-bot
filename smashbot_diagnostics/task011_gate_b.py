@@ -211,8 +211,13 @@ def _yellow_components(frame_bgr: Any, frame_index: int, pts_us: int, *, origin:
 def _compare_candidate_sets(expected_rows: list[dict[str, Any]], candidates: list[ShuttleCandidate], *, context: str) -> None:
     expected = [(float(row["x"]), float(row["y"]), float(row["area_px"])) for row in sorted(expected_rows, key=lambda row: int(row["candidate_index"]))]
     actual = [(float(c.x), float(c.y), float(c.area_px or 0.0)) for c in candidates]
-    if expected != actual:
-        raise GateBError(f"STOP_PROPOSAL_EQUIVALENCE: candidate set mismatch at {context}: {len(expected)} != {len(actual)}")
+    if len(expected) != len(actual):
+        raise GateBError(f"STOP_PROPOSAL_EQUIVALENCE: candidate count mismatch at {context}: {len(expected)} != {len(actual)}")
+    for index, (left, right) in enumerate(zip(expected, actual)):
+        if left[2] != right[2]:
+            raise GateBError(f"STOP_PROPOSAL_EQUIVALENCE: area mismatch at {context}[{index}]: {left[2]} != {right[2]}")
+        if abs(left[0] - right[0]) > 1e-9 or abs(left[1] - right[1]) > 1e-9:
+            raise GateBError(f"STOP_PROPOSAL_EQUIVALENCE: centroid mismatch at {context}[{index}]: {left[:2]} != {right[:2]}")
 
 
 def _proposal_equivalence(dev: dict[str, Any], task008_root: Path, ffmpeg: str) -> dict[str, Any]:
@@ -251,10 +256,20 @@ def _local_candidates(frame_bgr: Any, frame_index: int, pts_us: int, prediction:
 def _local_equivalence(full_candidates: list[ShuttleCandidate], local_candidates: list[ShuttleCandidate], prediction: tuple[float, float], *, context: str) -> None:
     px, py = prediction
     expected = [c for c in full_candidates if math.hypot(c.x - px, c.y - py) <= LOCAL_RADIUS]
-    left = [(c.x, c.y, c.area_px) for c in expected]
-    right = [(c.x, c.y, c.area_px) for c in local_candidates]
-    if left != right:
-        raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: local mismatch at {context}: {len(left)} != {len(right)}")
+    if len(expected) != len(local_candidates):
+        raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: local count mismatch at {context}: {len(expected)} != {len(local_candidates)}")
+    # The local primitive must make the same inside/outside decision and keep
+    # the same spatial ordering. Centroids are allowed only the floating-point
+    # noise introduced by rebuilding the connected-components ROI.
+    full_decisions = [math.hypot(c.x - px, c.y - py) <= LOCAL_RADIUS for c in full_candidates]
+    local_decisions = [True] * len(local_candidates) + [False] * (len(full_candidates) - len(local_candidates))
+    if sum(full_decisions) != sum(local_decisions):
+        raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: radius decision mismatch at {context}")
+    for index, (left, right) in enumerate(zip(expected, local_candidates)):
+        if left.area_px != right.area_px:
+            raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: area mismatch at {context}[{index}]")
+        if abs(left.x - right.x) > 1e-9 or abs(left.y - right.y) > 1e-9:
+            raise GateBError(f"STOP_LOCAL_PROPOSAL_EQUIVALENCE: centroid mismatch at {context}[{index}]")
 
 
 def _patches_for_candidates(frame_bgr: Any, candidates: list[ShuttleCandidate]) -> list[Any]:
@@ -364,6 +379,15 @@ def _candidate_from_scored(value: tuple[int, ShuttleCandidate, float]) -> dict[s
     return {"index": index, "candidate": candidate, "logit": float(logit)}
 
 
+def _choose_tracking_candidate(scored: list[tuple[int, ShuttleCandidate, float]]) -> dict[str, Any] | None:
+    """Choose by learned score only; candidate index is the deterministic tie-break."""
+    eligible = [item for item in scored if item[2] > 0.0]
+    if not eligible:
+        return None
+    eligible.sort(key=lambda item: (-item[2], item[0]))
+    return _candidate_from_scored(eligible[0])
+
+
 def _observation(item: dict[str, Any]) -> ShuttleObservation:
     candidate = item["candidate"]
     return ShuttleObservation(candidate.frame_index, candidate.pts_us, candidate.x, candidate.y, 1.0)
@@ -394,7 +418,7 @@ class Cascade:
         self.tracker.step(first["candidate"].frame_index, first["candidate"].pts_us, _observation(first))
         return self.tracker.step(second["candidate"].frame_index, second["candidate"].pts_us, _observation(second))
 
-    def step(self, frame_bgr: Any, frame_index: int, pts_us: int, full_candidates: list[ShuttleCandidate], *, local_candidates: list[ShuttleCandidate] | None = None) -> dict[str, Any]:
+    def step(self, frame_bgr: Any, frame_index: int, pts_us: int, full_candidates: list[ShuttleCandidate] | None = None, *, local_candidates: list[ShuttleCandidate] | None = None) -> dict[str, Any]:
         start = time.perf_counter()
         proposal_ms = 0.0
         patch_ms = 0.0
@@ -405,6 +429,24 @@ class Cascade:
         local_calls = 0
         chosen: dict[str, Any] | None = None
         observation_result: Any = None
+
+        def full() -> list[ShuttleCandidate]:
+            nonlocal full_candidates, full_calls, proposal_ms
+            full_calls += 1
+            if full_candidates is None:
+                proposal_start = time.perf_counter()
+                full_candidates = _yellow_components(frame_bgr, frame_index, pts_us)
+                proposal_ms += (time.perf_counter() - proposal_start) * 1000.0
+            return full_candidates
+
+        def local(prediction: tuple[float, float]) -> list[ShuttleCandidate]:
+            nonlocal local_candidates, local_calls, proposal_ms
+            local_calls += 1
+            if local_candidates is None:
+                proposal_start = time.perf_counter()
+                local_candidates, _roi = _local_candidates(frame_bgr, frame_index, pts_us, prediction)
+                proposal_ms += (time.perf_counter() - proposal_start) * 1000.0
+            return local_candidates
 
         def score(candidates: list[ShuttleCandidate]) -> list[tuple[int, ShuttleCandidate, float]]:
             nonlocal patch_ms, dnn_ms
@@ -417,14 +459,12 @@ class Cascade:
             return _top8_logits(candidates, logits)
 
         if self.state == "ACQUIRE":
-            full_calls += 1
-            scored = score(full_candidates)
+            scored = score(full())
             eligible = [item for item in scored if item[2] > 0.0]
             self.pending = [_candidate_from_scored(item) for item in eligible]
             self.state = "TENTATIVE" if self.pending else "ACQUIRE"
         elif self.state == "TENTATIVE":
-            full_calls += 1
-            scored = score(full_candidates)
+            scored = score(full())
             eligible = [item for item in scored if item[2] > 0.0]
             current = [_candidate_from_scored(item) for item in eligible]
             pair = self._pair(self.pending, current)
@@ -442,14 +482,9 @@ class Cascade:
                 raise GateBError("TRACK state lacks tracker identity")
             dt = (pts_us - self.tracker.state.last_pts_us) / 1_000_000.0
             prediction = (self.tracker.state.x + self.tracker.state.vx * dt, self.tracker.state.y + self.tracker.state.vy * dt)
-            local_calls += 1
-            if local_candidates is None:
-                raise GateBError("TRACK requires a local candidate set")
-            scored = score(local_candidates)
-            eligible = [item for item in scored if item[2] > 0.0]
-            if eligible:
-                eligible.sort(key=lambda item: (math.hypot(item[1].x - prediction[0], item[1].y - prediction[1]), -item[2], item[0]))
-                chosen = _candidate_from_scored(eligible[0])
+            scored = score(local(prediction))
+            chosen = _choose_tracking_candidate(scored)
+            if chosen is not None:
                 t_start = time.perf_counter()
                 observation_result = self.tracker.step(frame_index, pts_us, _observation(chosen))
                 tracker_ms += (time.perf_counter() - t_start) * 1000.0
@@ -458,17 +493,18 @@ class Cascade:
                 observation_result = self.tracker.step(frame_index, pts_us, None)
                 tracker_ms += (time.perf_counter() - t_start) * 1000.0
                 self.state = "COAST"
-                full_calls += 1
-                full_scored = score(full_candidates)
+                full_scored = score(full())
                 self.pending = [_candidate_from_scored(item) for item in full_scored if item[2] > 0.0]
                 self.reacquire_misses = 0
                 self.state = "REACQUIRE"
         elif self.state == "REACQUIRE":
-            full_calls += 1
-            scored = score(full_candidates)
+            scored = score(full())
             current = [_candidate_from_scored(item) for item in scored if item[2] > 0.0]
             pair = self._pair(self.pending, current)
             if pair is None:
+                t_start = time.perf_counter()
+                observation_result = self.tracker.step(frame_index, pts_us, None)
+                tracker_ms += (time.perf_counter() - t_start) * 1000.0
                 self.pending = current
                 self.reacquire_misses += 1
                 if self.reacquire_misses > 1:
@@ -494,7 +530,7 @@ class Cascade:
             "state": self.state,
             "full_calls": full_calls,
             "local_calls": local_calls,
-            "candidate_count": len(full_candidates) if pre_state in {"ACQUIRE", "TENTATIVE", "REACQUIRE"} else len(local_candidates or []),
+            "candidate_count": len(full_candidates or []) if pre_state in {"ACQUIRE", "TENTATIVE", "REACQUIRE"} else len(local_candidates or []),
             "chosen": chosen,
             "observation": bool(observation_result is not None and observation_result.observed and observation_result.state == "tracking"),
             "tracker_kind": observation_result.kind if observation_result is not None else "none",
@@ -545,25 +581,39 @@ def _candidate_map_from_manifest(dev: dict[str, Any]) -> dict[tuple[str, int], l
 def _semantic_report(trace: dict[str, list[dict[str, Any]]], snapshot: dict[str, Any]) -> dict[str, Any]:
     gt = _active_records(snapshot)
     matches: list[float] = []
-    matches10: list[float] = []
     miss_runs: dict[str, int] = {}
     by_burst: dict[str, dict[str, Any]] = {}
+    reacquisition_frames: list[int] = []
+    reacquisition_ms: list[float] = []
+    stale_accepted = 0
     for burst, rows in trace.items():
         errors: list[float] = []
         misses = 0
         max_miss = 0
-        for row in rows:
+        loss_index: int | None = None
+        for row_index, row in enumerate(rows):
             record = gt[(burst, row["frame_index"])]
+            if row["chosen"] is not None:
+                candidate = row["chosen"]["candidate"]
+                if candidate.frame_index != row["frame_index"] or candidate.pts_us != row["pts_us"]:
+                    stale_accepted += 1
             if row["observation"] and row["chosen"] is not None:
                 candidate = row["chosen"]["candidate"]
                 error = math.hypot(candidate.x - record["shuttle"]["center_x"], candidate.y - record["shuttle"]["center_y"])
                 errors.append(error)
                 matches.append(error)
-                matches10.append(error)
                 misses = 0
             else:
                 misses += 1
                 max_miss = max(max_miss, misses)
+            if row["pre_state"] == "TRACK" and row["state"] == "REACQUIRE":
+                # Store the actual local row index separately; this avoids
+                # interpreting a prediction-only frame as a confirmed hit.
+                loss_index = row_index
+            elif row["pre_state"] == "REACQUIRE" and row["state"] == "TRACK" and loss_index is not None:
+                reacquisition_frames.append(row_index - loss_index)
+                reacquisition_ms.append((row["pts_us"] - rows[loss_index]["pts_us"]) / 1000.0)
+                loss_index = None
         miss_runs[burst] = max_miss
         by_burst[burst] = {
             "frames": len(rows),
@@ -580,6 +630,14 @@ def _semantic_report(trace: dict[str, list[dict[str, Any]]], snapshot: dict[str,
         "recall_at_10": sum(value <= 10 for value in matches) / 63,
         "localization": _summary(matches),
         "longest_miss_burst": max(miss_runs.values()) if miss_runs else 0,
+        "reacquisition": {
+            "count": len(reacquisition_frames),
+            "frames": _summary(reacquisition_frames),
+            "ms": _summary(reacquisition_ms),
+            "max_frames": max(reacquisition_frames) if reacquisition_frames else 0,
+            "max_ms": max(reacquisition_ms) if reacquisition_ms else 0.0,
+        },
+        "stale_accepted": stale_accepted,
         "by_burst": by_burst,
     }
 
@@ -601,12 +659,54 @@ def _json_trace(trace: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[s
                         "pts_us": candidate.pts_us,
                         "x": candidate.x,
                         "y": candidate.y,
+                        "center_x": math.floor(candidate.x + 0.5),
+                        "center_y": math.floor(candidate.y + 0.5),
                         "area_px": candidate.area_px,
                     },
                 }
             serial_rows.append(value)
         result[burst] = serial_rows
     return result
+
+
+def _trace_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    """The correctness trace deliberately ignores timing noise and floats."""
+    chosen = row.get("chosen")
+    if chosen is None:
+        chosen_signature = None
+    else:
+        candidate = chosen["candidate"]
+        chosen_signature = (
+            int(math.floor(candidate.x + 0.5)),
+            int(math.floor(candidate.y + 0.5)),
+            float(candidate.area_px or 0.0),
+        )
+    return (
+        row.get("pre_state"),
+        row.get("state"),
+        int(row.get("full_calls", 0)),
+        int(row.get("local_calls", 0)),
+        chosen_signature,
+        row.get("tracker_kind", "none"),
+    )
+
+
+def _compare_traces(left: dict[str, list[dict[str, Any]]], right: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    differences: list[dict[str, Any]] = []
+    for burst in ACTIVE_BURSTS:
+        left_rows = left.get(burst, [])
+        right_rows = right.get(burst, [])
+        if len(left_rows) != len(right_rows):
+            differences.append({"burst": burst, "reason": "frame_count", "left": len(left_rows), "right": len(right_rows)})
+            continue
+        for index, (left_row, right_row) in enumerate(zip(left_rows, right_rows)):
+            left_signature = _trace_signature(left_row)
+            right_signature = _trace_signature(right_row)
+            if left_signature != right_signature:
+                differences.append({"burst": burst, "frame_index": left_row.get("frame_index"), "left": left_signature, "right": right_signature})
+    if differences:
+        raise GateBError(f"STOP_IMPLEMENTATION: correctness/runtime trace mismatch: {differences[:3]}")
+    return {"status": "PASS", "frames": sum(len(rows) for rows in left.values()), "differences": 0}
 
 
 def run_gate_b(
@@ -632,7 +732,7 @@ def run_gate_b(
         fold_reports, models = _fit_and_export_models(dev, train, store, work_dir)
         frames = _decode_active(task008_root, ffmpeg)
         manifest_map = _candidate_map_from_manifest(dev)
-        trace: dict[str, list[dict[str, Any]]] = {}
+        correctness_trace: dict[str, list[dict[str, Any]]] = {}
         local_equivalence_calls = 0
         local_equivalence_candidates = 0
         for burst in ACTIVE_BURSTS:
@@ -643,39 +743,56 @@ def run_gate_b(
             net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
             cascade = Cascade(net)
             rows: list[dict[str, Any]] = []
-            previous_full: list[ShuttleCandidate] | None = None
             for frame_index, pts_us, frame in frames[burst]:
                 # Full-frame reference generation is required for the untimed
                 # local equivalence check. It is not counted as runtime work
                 # while TRACK uses the local primitive.
-                reference_start = time.perf_counter()
                 full_candidates = _yellow_components(frame, frame_index, pts_us)
-                reference_proposal_ms = (time.perf_counter() - reference_start) * 1000.0
-                if previous_full is not None:
-                    pass
                 local_candidates = None
                 prediction = None
-                local_proposal_ms = None
                 if cascade.state == "TRACK" and cascade.tracker.state is not None and cascade.tracker.state.last_pts_us is not None:
                     dt = (pts_us - cascade.tracker.state.last_pts_us) / 1_000_000.0
                     prediction = (cascade.tracker.state.x + cascade.tracker.state.vx * dt, cascade.tracker.state.y + cascade.tracker.state.vy * dt)
-                    local_start = time.perf_counter()
                     local_candidates, _roi = _local_candidates(frame, frame_index, pts_us, prediction)
-                    local_proposal_ms = (time.perf_counter() - local_start) * 1000.0
                     _local_equivalence(full_candidates, local_candidates, prediction, context=f"{burst}:{frame_index}")
                     local_equivalence_calls += 1
                     local_equivalence_candidates += len(local_candidates)
                 result = cascade.step(frame, frame_index, pts_us, full_candidates, local_candidates=local_candidates)
-                result["proposal_ms"] = local_proposal_ms if local_proposal_ms is not None else reference_proposal_ms
                 result["prediction"] = prediction
                 result["full_candidate_count"] = len(full_candidates)
                 result["local_candidate_count"] = len(local_candidates) if local_candidates is not None else None
                 rows.append(result)
-                previous_full = full_candidates
-            trace[burst] = rows
+            correctness_trace[burst] = rows
 
-        semantic = _semantic_report(trace, snapshot)
-        runtime_rows = [row for rows in trace.values() for row in rows]
+        # Pass 2 is the clean runtime path. Proposal generation is performed
+        # inside Cascade.step so the measured total contains the actual full
+        # proposal in ACQUIRE/TENTATIVE/REACQUIRE and the local/full fallback
+        # work in TRACK.
+        runtime_trace: dict[str, list[dict[str, Any]]] = {}
+        for burst in ACTIVE_BURSTS:
+            _model, _onnx_path = models[burst]
+            _numpy, cv2 = _numpy_cv2()
+            net = cv2.dnn.readNetFromONNX(str(work_dir / {"A_01": "fold_A", "B_01": "fold_B", "C_01": "fold_C"}[burst] / "fold.onnx"))
+            net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+            net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            cascade = Cascade(net)
+            rows = []
+            for frame_index, pts_us, frame in frames[burst]:
+                result = cascade.step(frame, frame_index, pts_us, None, local_candidates=None)
+                if result["pre_state"] in {"ACQUIRE", "TENTATIVE", "REACQUIRE"}:
+                    result["full_candidate_count"] = result["candidate_count"]
+                    result["local_candidate_count"] = None
+                else:
+                    result["full_candidate_count"] = None
+                    result["local_candidate_count"] = result["candidate_count"]
+                result["prediction"] = None
+                rows.append(result)
+            runtime_trace[burst] = rows
+
+        trace_comparison = _compare_traces(correctness_trace, runtime_trace)
+
+        semantic = _semantic_report(runtime_trace, snapshot)
+        runtime_rows = [row for rows in runtime_trace.values() for row in rows]
         runtime = {
             "total_ms": _summary(row["total_ms"] for row in runtime_rows),
             "proposal_ms": _summary(row["proposal_ms"] for row in runtime_rows),
@@ -694,7 +811,6 @@ def run_gate_b(
             values = [row["total_ms"] for row in runtime_rows if row["pre_state"] == state]
             runtime["by_state"][state] = {"frames": len(values), "total_ms": _summary(values)}
         runtime_pass = runtime["total_ms"]["p95"] is not None and runtime["total_ms"]["p95"] <= 33.0 and runtime["effective_fps"] >= 30.0
-        semantic_pass = semantic["recall_at_20"] >= 0.90 and semantic["recall_at_10"] >= 0.80 and semantic["localization"]["p50"] <= 10 and semantic["localization"]["p95"] <= 20 and semantic["longest_miss_burst"] <= 2
         negative_check = {"confirmed_fp_count": 0, "frames": len(NEGATIVE_BURSTS), "limitation": "single isolated negative frames do not validate an active-state temporal gate", "folds": {}}
         torch, _nn = cnn._torch()
         np = cnn._numpy()
@@ -705,6 +821,18 @@ def run_gate_b(
                 scores = _torch_scores(torch, model, [store.get(row["candidate_id"]) for row in rows])
                 negative_check["folds"][burst][fold_name] = {"candidate_count": len(scores), "eligible_at_logit_gt_0": sum(score > 0 for score in scores), "max_logit": max(scores) if scores else None}
 
+        semantic_pass = (
+            semantic["recall_at_20"] >= 0.90
+            and semantic["recall_at_10"] >= 0.80
+            and semantic["localization"]["p50"] <= 10
+            and semantic["localization"]["p95"] <= 20
+            and semantic["longest_miss_burst"] <= 2
+            and semantic["reacquisition"]["max_frames"] <= 2
+            and semantic["reacquisition"]["max_ms"] <= 70.0
+            and negative_check["confirmed_fp_count"] == 0
+            and semantic["stale_accepted"] == 0
+        )
+
         report = {
             "schema_version": 1,
             "gate": "B",
@@ -713,11 +841,11 @@ def run_gate_b(
             "proposal_equivalence": equivalence,
             "local_proposal_equivalence": {"status": "PASS", "calls": local_equivalence_calls, "candidates_checked": local_equivalence_candidates, "radius_px": LOCAL_RADIUS, "processing_half_extent_px": LOCAL_HALF_EXTENT},
             "model_replay": {name: {key: value for key, value in value.items() if key != "model"} for name, value in fold_reports.items()},
-            "cascade": {"acquisition_top_k": ACQUISITION_TOP_K, "logit_threshold": 0.0, "geometric_gate_px": LOCAL_RADIUS, "confirmations": 2, "max_prediction_only_misses": MAX_MISSES, "registration_used": False, "trace": _json_trace(trace)},
+            "cascade": {"acquisition_top_k": ACQUISITION_TOP_K, "logit_threshold": 0.0, "geometric_gate_px": LOCAL_RADIUS, "confirmations": 2, "max_prediction_only_misses": MAX_MISSES, "registration_used": False, "trace": _json_trace(runtime_trace), "correctness_trace": _json_trace(correctness_trace), "trace_comparison": trace_comparison},
             "semantic": semantic,
             "negative_check": negative_check,
             "runtime": runtime,
-            "gates": {"semantic_pass": semantic_pass, "runtime_pass": runtime_pass, "no_stale_result_accepted": True},
+            "gates": {"semantic_pass": semantic_pass, "runtime_pass": runtime_pass, "no_stale_result_accepted": semantic["stale_accepted"] == 0, "confirmed_negative_fp_zero": negative_check["confirmed_fp_count"] == 0},
             "provenance": {"base_commit": "7849274d209120de9eb18ff7ed75742d9839c00a", "dev_manifest_sha256": cnn.EXPECTED_DEV_SHA256, "train_manifest_sha256": cnn.EXPECTED_TRAIN_SHA256, "parameter_hashes": EXPECTED_PARAMETER_HASHES, "torch_version": str(torch.__version__)},
         }
         output = output_base
