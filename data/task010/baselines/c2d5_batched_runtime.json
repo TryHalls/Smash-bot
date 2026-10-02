@@ -1,0 +1,323 @@
+{
+  "batch_equivalence": {
+    "candidates_checked": 12877,
+    "equivalence_run_external": "C2d5 preflight",
+    "padding_mismatches": 0,
+    "patch_sha256_mismatches": 0,
+    "pixel_mismatches": 0,
+    "status": "PASS"
+  },
+  "benchmarks_by_threads": {
+    "1": {
+      "1": {
+        "candidates_per_frame": {
+          "max": 1.0,
+          "mean": 1.0,
+          "p50": 1.0,
+          "p95": 1.0
+        },
+        "frames": 63,
+        "k": 1,
+        "threads_actual": 1,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 14.870765007799491,
+            "p50": 0.19144399266224355,
+            "p95": 3.4059319033985935
+          },
+          "non_model_floor_ms": {
+            "max": 14.94925600127317,
+            "p50": 0.2653400006238371,
+            "p95": 4.039633905631489
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 45.19472099491395,
+            "p50": 0.43954300053883344,
+            "p95": 4.054441198240966
+          },
+          "preprocessing_ms": {
+            "max": 5.867718005902134,
+            "p50": 0.06980900070630014,
+            "p95": 0.10173890477744862
+          },
+          "scorer_total_ms": {
+            "max": 45.51449300197419,
+            "p50": 0.7772050012135878,
+            "p95": 8.943590299168134
+          }
+        },
+        "warmups": 20
+      },
+      "32": {
+        "candidates_per_frame": {
+          "max": 32.0,
+          "mean": 32.0,
+          "p50": 32.0,
+          "p95": 32.0
+        },
+        "frames": 63,
+        "k": 32,
+        "threads_actual": 1,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 18.34146100736689,
+            "p50": 4.868242991506122,
+            "p95": 15.046039497246962
+          },
+          "non_model_floor_ms": {
+            "max": 19.11143699544482,
+            "p50": 6.286061994615011,
+            "p95": 16.059692003182136
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 21.650884998962283,
+            "p50": 9.889624998322688,
+            "p95": 15.908856301393826
+          },
+          "preprocessing_ms": {
+            "max": 10.258989001158625,
+            "p50": 0.7653979992028326,
+            "p95": 2.3209679988212875
+          },
+          "scorer_total_ms": {
+            "max": 32.13172699906863,
+            "p50": 16.82306001021061,
+            "p95": 26.460391000728123
+          }
+        },
+        "warmups": 20
+      },
+      "8": {
+        "candidates_per_frame": {
+          "max": 8.0,
+          "mean": 8.0,
+          "p50": 8.0,
+          "p95": 8.0
+        },
+        "frames": 63,
+        "k": 8,
+        "threads_actual": 1,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 12.204912010929547,
+            "p50": 1.4554309891536832,
+            "p95": 6.187746796058487
+          },
+          "non_model_floor_ms": {
+            "max": 12.41963000211399,
+            "p50": 1.7179020069306716,
+            "p95": 6.831386104749981
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 12.95175199629739,
+            "p50": 2.434024994727224,
+            "p95": 4.109365891781636
+          },
+          "preprocessing_ms": {
+            "max": 8.239212009357288,
+            "p50": 0.20475700148381293,
+            "p95": 0.5347577971406279
+          },
+          "scorer_total_ms": {
+            "max": 14.694515004521236,
+            "p50": 4.283946997020394,
+            "p95": 12.25130769307725
+          }
+        },
+        "warmups": 20
+      }
+    },
+    "2": {
+      "1": {
+        "candidates_per_frame": {
+          "max": 1.0,
+          "mean": 1.0,
+          "p50": 1.0,
+          "p95": 1.0
+        },
+        "frames": 63,
+        "k": 1,
+        "threads_actual": 2,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 3.0768479919061065,
+            "p50": 0.1749820075929165,
+            "p95": 1.1184358998434618
+          },
+          "non_model_floor_ms": {
+            "max": 3.1549060076940805,
+            "p50": 0.24797899823170155,
+            "p95": 1.2183079117676243
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 11.22253701032605,
+            "p50": 0.43168400588911027,
+            "p95": 9.649439793429337
+          },
+          "preprocessing_ms": {
+            "max": 1.0315270046703517,
+            "p50": 0.06865299656055868,
+            "p95": 0.10516720503801479
+          },
+          "scorer_total_ms": {
+            "max": 14.32200700219255,
+            "p50": 0.7032080029603094,
+            "p95": 10.6633602961665
+          }
+        },
+        "warmups": 20
+      },
+      "32": {
+        "candidates_per_frame": {
+          "max": 32.0,
+          "mean": 32.0,
+          "p50": 32.0,
+          "p95": 32.0
+        },
+        "frames": 63,
+        "k": 32,
+        "threads_actual": 2,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 33.06519800389651,
+            "p50": 5.404670009738766,
+            "p95": 17.00044869357953
+          },
+          "non_model_floor_ms": {
+            "max": 48.25310800515581,
+            "p50": 6.864908005809411,
+            "p95": 19.95608659926802
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 123.54462798975874,
+            "p50": 10.669947994756512,
+            "p95": 82.6051533978898
+          },
+          "preprocessing_ms": {
+            "max": 46.229461004259065,
+            "p50": 0.7452970021404326,
+            "p95": 9.82971961057046
+          },
+          "scorer_total_ms": {
+            "max": 161.34247201262042,
+            "p50": 21.14281599642709,
+            "p95": 96.23147901147603
+          }
+        },
+        "warmups": 20
+      },
+      "8": {
+        "candidates_per_frame": {
+          "max": 8.0,
+          "mean": 8.0,
+          "p50": 8.0,
+          "p95": 8.0
+        },
+        "frames": 63,
+        "k": 8,
+        "threads_actual": 2,
+        "timings": {
+          "batched_canonicalization_ms": {
+            "max": 15.938708005705848,
+            "p50": 1.5440580027643591,
+            "p95": 7.782348297769204
+          },
+          "non_model_floor_ms": {
+            "max": 16.291912004817277,
+            "p50": 1.7364809900755063,
+            "p95": 8.00580119685037
+          },
+          "opencv_dnn_forward_ms": {
+            "max": 14.725198998348787,
+            "p50": 2.473382992320694,
+            "p95": 13.421232895052526
+          },
+          "preprocessing_ms": {
+            "max": 0.3492779942462221,
+            "p50": 0.2000660024350509,
+            "p95": 0.27626299852272496
+          },
+          "scorer_total_ms": {
+            "max": 22.061284995288588,
+            "p50": 4.28857900260482,
+            "p95": 18.613542098319154
+          }
+        },
+        "warmups": 20
+      }
+    }
+  },
+  "gate": "C2d5",
+  "holdout_used": false,
+  "preprocessing_parity": {
+    "candidates": 94,
+    "frame_index": 80,
+    "max_input_abs_delta": 0.0,
+    "max_logit_abs_delta": 0.0,
+    "pass": true,
+    "source_run": "20260930T191744Z",
+    "tolerance": 0.0001
+  },
+  "provenance": {
+    "c2d4_commit": "f14dad0f0455c36b3c548b077ef5ea47be290324",
+    "dev_manifest_sha256": "d8dc160113cd09660c0ed84263fc24d404d2e3e09d4b05c4aae3db6bc51b7335",
+    "git_commit": "7cd302b2e09440c5ea4c15825f68d2812ada21cc",
+    "onnx_graph_sha256": "11eed8807f0c2cf4ebdd7851fa9b859f323f86deb0aa74c2e84ac2081e5a36f9",
+    "opencv_backend": "DNN_BACKEND_OPENCV",
+    "opencv_target": "DNN_TARGET_CPU",
+    "opencv_version": "4.14.0"
+  },
+  "schema_version": 1,
+  "selected_real_R5_K32": {
+    "candidates_per_frame": {
+      "max": 32.0,
+      "mean": 32.0,
+      "p50": 32.0,
+      "p95": 32.0
+    },
+    "frames": 63,
+    "k": 32,
+    "threads_actual": 1,
+    "timings": {
+      "batched_canonicalization_ms": {
+        "max": 18.34146100736689,
+        "p50": 4.868242991506122,
+        "p95": 15.046039497246962
+      },
+      "non_model_floor_ms": {
+        "max": 19.11143699544482,
+        "p50": 6.286061994615011,
+        "p95": 16.059692003182136
+      },
+      "opencv_dnn_forward_ms": {
+        "max": 21.650884998962283,
+        "p50": 9.889624998322688,
+        "p95": 15.908856301393826
+      },
+      "preprocessing_ms": {
+        "max": 10.258989001158625,
+        "p50": 0.7653979992028326,
+        "p95": 2.3209679988212875
+      },
+      "scorer_total_ms": {
+        "max": 32.13172699906863,
+        "p50": 16.82306001021061,
+        "p95": 26.460391000728123
+      }
+    },
+    "warmups": 20
+  },
+  "selected_thread": "1",
+  "storage": {
+    "free_after_bytes": 1686994944,
+    "free_before_bytes": 1688698880,
+    "temporary_cache_policy": "runtime-only /dev/shm caches",
+    "temporary_caches_removed": true
+  },
+  "verdict": "STOP_PIPELINE_FLOOR",
+  "width_sweep": {
+    "reason": "non-model K32 p95 16.059692 ms > 8 ms",
+    "status": "SKIPPED"
+  }
+}
+
