@@ -1,0 +1,45 @@
+{
+  "gate": "Task012-Phase-D",
+  "head": "5a556b3d1eb9298c3a013763470b48a081b45fb5",
+  "holdout_used": false,
+  "training_started": false,
+  "verdict": "STOP_S2D_POINT_DETECTOR_RUNTIME_PREFLIGHT",
+  "protocol": {
+    "representation": "S2D2_lossless",
+    "source_slice": "frame_bgr[260:1920,0:864]",
+    "padding": "BORDER_REFLECT_101 bottom=4",
+    "color": "BGR_to_RGB",
+    "normalization": "(pixel/127.5)-1.0",
+    "channel_order": "R00G00B00,R01G01B01,R10G10B10,R11G11B11",
+    "input_shape": [1, 12, 832, 432],
+    "grid": [104, 54],
+    "warmups": 20,
+    "repetitions": 3,
+    "runtime_path": "slice+pad+RGB+normalize+S2D+OpenCV_DNN+decode"
+  },
+  "runtime_preflight": {
+    "random_onnx_bytes": 35962,
+    "random_onnx_sha256": "a799cbddd0d8ccc1ddf87a84ed5b24d929cb5757d273898306b7593b27655c3c",
+    "threads": {
+      "1": {
+        "repetitions": [
+          {"p50_ms": 57.90680102654733, "p95_ms": 72.01928768772632, "max_ms": 84.46917799301445, "effective_fps": 17.118080014261, "frames": 63},
+          {"p50_ms": 55.398035008693114, "p95_ms": 72.43463388294913, "max_ms": 80.27992700226605, "effective_fps": 17.23652410722405, "frames": 63},
+          {"p50_ms": 52.803634986048564, "p95_ms": 91.18112619034946, "max_ms": 112.82314200070687, "effective_fps": 16.864972703117566, "frames": 63}
+        ],
+        "pass": false
+      },
+      "2": {
+        "repetitions": [
+          {"p50_ms": 54.49232298997231, "p95_ms": 81.48972128110472, "max_ms": 97.65598599915393, "effective_fps": 16.836737874261782, "frames": 63},
+          {"p50_ms": 61.87254301039502, "p95_ms": 102.85830821085256, "max_ms": 124.3278389738407, "effective_fps": 15.031149107598877, "frames": 63},
+          {"p50_ms": 64.38734001130797, "p95_ms": 82.44399499672, "max_ms": 129.66291699558496, "effective_fps": 15.221936467943957, "frames": 63}
+        ],
+        "pass": false
+      }
+    },
+    "limits": {"p95_ms": 30.0, "fps": 30.0},
+    "selected_threads": null,
+    "pass": false
+  }
+}

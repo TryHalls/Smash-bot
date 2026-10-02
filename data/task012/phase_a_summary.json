@@ -1,0 +1,31 @@
+{
+  "gate": "Task012-Phase-A",
+  "head": "86f01baeeb954232d782f977adcf402729eddb96",
+  "holdout_used": false,
+  "selection": {
+    "architecture": "H2",
+    "opencv_threads": 1,
+    "policy": "H2 if any H2 config passes, otherwise H4; lower median passing p95"
+  },
+  "runtime_gate": {
+    "p95_limit_ms": 30.0,
+    "fps_limit": 30.0,
+    "warmups": 20,
+    "repetitions": 3,
+    "selected_total_p95_ms": [13.763978992938064, 14.11161961732432, 14.089384197723119],
+    "selected_effective_fps": [85.35565724329521, 88.32412258164517, 86.23379930309174],
+    "pass": true
+  },
+  "protocol": {
+    "train_records": 180,
+    "dev_active_records": 63,
+    "dev_negative_checks": 5,
+    "dev_negative_checks_in_fitting": 0,
+    "lobo": {
+      "fold_A": {"train_groups": ["B", "C"], "validate": "A_01"},
+      "fold_B": {"train_groups": ["A", "C"], "validate": "B_01"},
+      "fold_C": {"train_groups": ["A", "B"], "validate": "C_01"}
+    }
+  },
+  "verdict": "PASS_POINT_DETECTOR_RUNTIME_PREFLIGHT"
+}

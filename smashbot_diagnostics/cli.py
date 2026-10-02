@@ -39,6 +39,10 @@ from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothe
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
 from .perception_appearance_geometry import AppearanceGeometryError, run_appearance_geometry
 from .task011_gate_e import GateEError, run_gate_e
+from .task012_phase_a import PointDetectorPhaseAError, run_phase_a
+from .task012_phase_b import PointDetectorPhaseBError, run_phase_b
+from .task012_phase_b_corrected import run_phase_b_corrected
+from .task012_phase_d import PointDetectorPhaseBError as PointDetectorPhaseDError, run_phase_d
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -457,6 +461,29 @@ def build_parser() -> argparse.ArgumentParser:
     halfres.add_argument("--candidate-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
     halfres.add_argument("--model-root", type=Path, default=None, help="directory containing reusable fold_A/B/C CNN artifacts")
     halfres.add_argument("--output-base", type=Path, default=Path("artifacts/task011/gate_e"))
+    point_detector_a = subparsers.add_parser(
+        "perception-point-detector-phase-a",
+        help="run the Task 012 H2/H4 direct point-detector runtime preflight",
+    )
+    point_detector_a.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    point_detector_a.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    point_detector_a.add_argument("--output-base", type=Path, default=Path("artifacts/task012/phase_a"))
+    point_detector_b = subparsers.add_parser(
+        "perception-point-detector-phase-b",
+        help="run the Task 012 frozen direct point-detector semantic gate",
+    )
+    point_detector_b.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    point_detector_b.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    point_detector_b.add_argument("--output-base", type=Path, default=Path("artifacts/task012/phase_b"))
+    point_detector_b.add_argument("--persist-models", type=Path, default=Path("models/task012/dev_lobo"))
+    point_detector_d = subparsers.add_parser(
+        "perception-point-detector-phase-d",
+        help="run the Task 012 S2D2 direct point-detector gate",
+    )
+    point_detector_d.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    point_detector_d.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    point_detector_d.add_argument("--output-base", type=Path, default=Path("artifacts/task012/phase_d"))
+    point_detector_d.add_argument("--persist-models", type=Path, default=Path("models/task012/dev_lobo"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1883,6 +1910,53 @@ def _perception_halfres_acquisition(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_point_detector_phase_a(args: argparse.Namespace) -> int:
+    try:
+        report = run_phase_a(task008_root=args.task008_root, ffmpeg=args.ffmpeg, output_base=args.output_base)
+    except PointDetectorPhaseAError as exc:
+        print(f"Task 012 Phase A error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Phase A: {report['verdict']}")
+    print(f"Selected: {report['selection']['selected_architecture']}")
+    return 0
+
+
+def _perception_point_detector_phase_b(args: argparse.Namespace) -> int:
+    try:
+        report = run_phase_b_corrected(
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+            persist_models=args.persist_models,
+        )
+    except PointDetectorPhaseBError as exc:
+        print(f"Task 012 Phase B error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Phase B: {report['verdict']}")
+    return 0
+
+
+def _perception_point_detector_phase_d(args: argparse.Namespace) -> int:
+    try:
+        report = run_phase_d(
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+            persist_models=args.persist_models,
+        )
+    except PointDetectorPhaseDError as exc:
+        print(f"Task 012 Phase D error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Phase D: {report['verdict']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1945,8 +2019,14 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_native64_runtime(args)
         if args.command == "perception-halfres-acquisition":
             return _perception_halfres_acquisition(args)
+        if args.command == "perception-point-detector-phase-a":
+            return _perception_point_detector_phase_a(args)
+        if args.command == "perception-point-detector-phase-b":
+            return _perception_point_detector_phase_b(args)
+        if args.command == "perception-point-detector-phase-d":
+            return _perception_point_detector_phase_d(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, PointDetectorPhaseAError, PointDetectorPhaseBError, PointDetectorPhaseDError, ValueError) as exc:
         parser.error(str(exc))
     return 2
