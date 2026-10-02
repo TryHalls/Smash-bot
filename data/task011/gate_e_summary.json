@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "gate": "E",
+  "head": "45c4c262b6b7e8731665964b372545824273b3e0",
+  "verdict": "STOP_MODEL_REPLAY",
+  "holdout_used": false,
+  "training_performed": false,
+  "proposal_contract": {
+    "gameplay_y0": 260,
+    "input_dimensions": [864, 1920],
+    "coarse_dimensions": [432, 830],
+    "interpolation": "INTER_AREA",
+    "morphology": "MORPH_OPEN 3x3",
+    "coarse_area": [1, 125],
+    "mapping": {
+      "x_full": "2*cx+0.5",
+      "y_full": "260+2*cy+0.5"
+    },
+    "full_resolution_center_refinement": false
+  },
+  "cnn_transfer": {
+    "patch_contract": "task010_original_96_to_64",
+    "required_folds": ["fold_A", "fold_B", "fold_C"],
+    "reusable_models_found": {},
+    "missing_folds": ["fold_A", "fold_B", "fold_C"]
+  },
+  "runtime": {
+    "status": "NOT_RUN_MODEL_REPLAY_STOP",
+    "repetitions": 3,
+    "opencv_threads": 1
+  },
+  "provenance": {
+    "random_preflight_models_rejected": true,
+    "rejected_random_preflight_artifacts": [
+      "tiny_cnn_random_opset17.onnx",
+      "tiny_cnn_native64_current.onnx",
+      "tiny_cnn_native64_half.onnx",
+      "tiny_cnn_native64_quarter.onnx"
+    ],
+    "reason": "accepted C2d1 fold weights are not reusable artifacts"
+  }
+}

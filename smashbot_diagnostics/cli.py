@@ -38,6 +38,7 @@ from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
 from .perception_appearance_geometry import AppearanceGeometryError, run_appearance_geometry
+from .task011_gate_e import GateEError, run_gate_e
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -446,6 +447,12 @@ def build_parser() -> argparse.ArgumentParser:
     candidate_native64.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     candidate_native64.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
     candidate_native64.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c3a"))
+    halfres = subparsers.add_parser(
+        "perception-halfres-acquisition",
+        help="run the Task 011 Gate E half-resolution acquisition preflight",
+    )
+    halfres.add_argument("--model-root", type=Path, default=None, help="directory containing reusable fold_A/B/C CNN artifacts")
+    halfres.add_argument("--output-base", type=Path, default=Path("artifacts/task011/gate_e"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1853,6 +1860,18 @@ def _perception_native64_runtime(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_halfres_acquisition(args: argparse.Namespace) -> int:
+    try:
+        report = run_gate_e(output_base=args.output_base, model_root=args.model_root)
+    except GateEError as exc:
+        print(f"Gate E error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate E: {report['verdict']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1913,8 +1932,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_candidate_runtime(args)
         if args.command == "perception-native64-runtime":
             return _perception_native64_runtime(args)
+        if args.command == "perception-halfres-acquisition":
+            return _perception_halfres_acquisition(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, ValueError) as exc:
         parser.error(str(exc))
     return 2
