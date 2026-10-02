@@ -1,0 +1,300 @@
+{
+  "dev_used_for_fitting": false,
+  "eligible_intervals": {
+    "A": {
+      "frame_gaps": {
+        "count": 53,
+        "max": 20.0,
+        "mean": 17.641509433962263,
+        "min": 12.0,
+        "p50": 20.0,
+        "p95": 20.0
+      },
+      "interior_frames": 882,
+      "invisible": 11,
+      "pts_gaps_us": {
+        "count": 53,
+        "max": 368548.0,
+        "mean": 298969.0566037736,
+        "min": 200143.0,
+        "p50": 336076.0,
+        "p95": 354869.2
+      },
+      "total": 53,
+      "visible": 42
+    },
+    "B": {
+      "frame_gaps": {
+        "count": 55,
+        "max": 20.0,
+        "mean": 17.527272727272727,
+        "min": 12.0,
+        "p50": 20.0,
+        "p95": 20.0
+      },
+      "interior_frames": 909,
+      "invisible": 9,
+      "pts_gaps_us": {
+        "count": 55,
+        "max": 387657.0,
+        "mean": 297463.9090909091,
+        "min": 201051.0,
+        "p50": 335891.0,
+        "p95": 353178.2
+      },
+      "total": 55,
+      "visible": 46
+    },
+    "C": {
+      "frame_gaps": {
+        "count": 53,
+        "max": 20.0,
+        "mean": 17.547169811320753,
+        "min": 12.0,
+        "p50": 20.0,
+        "p95": 20.0
+      },
+      "interior_frames": 877,
+      "invisible": 12,
+      "pts_gaps_us": {
+        "count": 53,
+        "max": 369449.0,
+        "mean": 297749.8301886792,
+        "min": 200853.0,
+        "p50": 335772.0,
+        "p95": 352532.0
+      },
+      "total": 53,
+      "visible": 41
+    }
+  },
+  "gate": "Task013-Phase-A",
+  "head": "0fe67bc710c80514a7e4f93b97fb05b6357896cd",
+  "holdout_used": false,
+  "protocol": {
+    "hidden_anchor_policy": "interior anchor bracketed by two same-state eligible intervals; target label withheld from teacher",
+    "max_interval_gap_frames": 24,
+    "snap_radius_px": 20.0
+  },
+  "schema_version": 1,
+  "source_ground_truth_sha256": "d2f74c51117a7c496859c85a628fb64eba3f8428a5d4d9079a3e18028f94cd72",
+  "source_provenance": {
+    "A": {
+      "frame_count": 1180,
+      "frame_index_max": 1179,
+      "frame_index_min": 0,
+      "pts_max": 545705683442,
+      "pts_min": 545685668405,
+      "source_run": "20260930T191744Z"
+    },
+    "B": {
+      "frame_count": 1180,
+      "frame_index_max": 1179,
+      "frame_index_min": 0,
+      "pts_max": 546302717463,
+      "pts_min": 546282715788,
+      "source_run": "20260930T192742Z"
+    },
+    "C": {
+      "frame_count": 1176,
+      "frame_index_max": 1175,
+      "frame_index_min": 0,
+      "pts_max": 546714921698,
+      "pts_min": 546694919357,
+      "source_run": "20260930T193433Z"
+    }
+  },
+  "t2_provenance": {
+    "models": {
+      "A": {
+        "final_loss": 0.09703964966249537,
+        "fit_rows": 5797,
+        "negative": 5734,
+        "parameter_hash": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+        "positive": 63,
+        "positive_weight": 91.01587301587301
+      },
+      "B": {
+        "final_loss": 0.003839857444355466,
+        "fit_rows": 5572,
+        "negative": 5504,
+        "parameter_hash": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+        "positive": 68,
+        "positive_weight": 80.94117647058823
+      },
+      "C": {
+        "final_loss": 0.003245783169407052,
+        "fit_rows": 5943,
+        "negative": 5878,
+        "parameter_hash": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372",
+        "positive": 65,
+        "positive_weight": 90.43076923076923
+      }
+    },
+    "patch_cache_bytes": 107421696
+  },
+  "teacher": {
+    "T1": {
+      "by_group": {
+        "A": {
+          "coverage": 0.21052631578947367,
+          "emitted_visible": 8,
+          "errors": {
+            "count": 8,
+            "max": 323.3305006739694,
+            "mean": 46.5000742499284,
+            "min": 0.6856623110762246,
+            "p50": 2.318156246895496,
+            "p95": 223.37993278319732
+          },
+          "hidden_records": 47,
+          "invisible": 9,
+          "precision_at_10": 0.75,
+          "precision_at_20": 0.75,
+          "recall_at_10": 0.15789473684210525,
+          "recall_at_20": 0.15789473684210525,
+          "visible": 38
+        },
+        "B": {
+          "coverage": 0.20930232558139536,
+          "emitted_visible": 9,
+          "errors": {
+            "count": 9,
+            "max": 132.3314613796724,
+            "mean": 55.99987216889401,
+            "min": 1.2012916942105072,
+            "p50": 31.443315451882842,
+            "p95": 120.80098254632102
+          },
+          "hidden_records": 51,
+          "invisible": 8,
+          "precision_at_10": 0.2222222222222222,
+          "precision_at_20": 0.3333333333333333,
+          "recall_at_10": 0.046511627906976744,
+          "recall_at_20": 0.06976744186046512,
+          "visible": 43
+        },
+        "C": {
+          "coverage": 0.3333333333333333,
+          "emitted_visible": 12,
+          "errors": {
+            "count": 12,
+            "max": 116.43903109978379,
+            "mean": 14.811536804415084,
+            "min": 0.22021296479201194,
+            "p50": 1.216695745867042,
+            "p95": 73.4123847160688
+          },
+          "hidden_records": 46,
+          "invisible": 10,
+          "precision_at_10": 0.75,
+          "precision_at_20": 0.8333333333333334,
+          "recall_at_10": 0.25,
+          "recall_at_20": 0.2777777777777778,
+          "visible": 36
+        }
+      },
+      "coverage": 0.24786324786324787,
+      "emitted_visible": 29,
+      "errors": {
+        "count": 29,
+        "max": 323.3305006739694,
+        "mean": 36.33578914387773,
+        "min": 0.22021296479201194,
+        "p50": 2.7393889755801792,
+        "p95": 125.97448926771698
+      },
+      "hidden_invisible": 27,
+      "hidden_records": 144,
+      "hidden_visible": 117,
+      "invisible_fp": 0,
+      "invisible_fp_rate": 0.0,
+      "precision_at_10": 0.5862068965517241,
+      "precision_at_20": 0.6551724137931034,
+      "recall_at_10": 0.1452991452991453,
+      "recall_at_20": 0.1623931623931624
+    },
+    "T2": {
+      "by_group": {
+        "A": {
+          "coverage": 0.15789473684210525,
+          "emitted_visible": 6,
+          "errors": {
+            "count": 6,
+            "max": 3.2022241391661583,
+            "mean": 1.8187739613300824,
+            "min": 0.6856623110762246,
+            "p50": 1.7728564474346302,
+            "p95": 3.0865153482696637
+          },
+          "hidden_records": 47,
+          "invisible": 9,
+          "precision_at_10": 1.0,
+          "precision_at_20": 1.0,
+          "recall_at_10": 0.15789473684210525,
+          "recall_at_20": 0.15789473684210525,
+          "visible": 38
+        },
+        "B": {
+          "coverage": 0.046511627906976744,
+          "emitted_visible": 2,
+          "errors": {
+            "count": 2,
+            "max": 10.888471101861382,
+            "mean": 6.347685032208159,
+            "min": 1.8068989625549359,
+            "p50": 6.347685032208159,
+            "p95": 10.43439249489606
+          },
+          "hidden_records": 51,
+          "invisible": 8,
+          "precision_at_10": 0.5,
+          "precision_at_20": 1.0,
+          "recall_at_10": 0.023255813953488372,
+          "recall_at_20": 0.046511627906976744,
+          "visible": 43
+        },
+        "C": {
+          "coverage": 0.1388888888888889,
+          "emitted_visible": 5,
+          "errors": {
+            "count": 5,
+            "max": 1.9499279142806154,
+            "mean": 1.1062047388580436,
+            "min": 0.49652700322449883,
+            "p50": 0.8318998290215431,
+            "p95": 1.8615794343311158
+          },
+          "hidden_records": 46,
+          "invisible": 10,
+          "precision_at_10": 1.0,
+          "precision_at_20": 1.0,
+          "recall_at_10": 0.1388888888888889,
+          "recall_at_20": 0.1388888888888889,
+          "visible": 36
+        }
+      },
+      "coverage": 0.1111111111111111,
+      "emitted_visible": 13,
+      "errors": {
+        "count": 13,
+        "max": 10.888471101861382,
+        "mean": 2.2414644251297715,
+        "min": 0.49652700322449883,
+        "p50": 1.648789376658447,
+        "p95": 6.27672292424425
+      },
+      "hidden_invisible": 27,
+      "hidden_records": 144,
+      "hidden_visible": 117,
+      "invisible_fp": 0,
+      "invisible_fp_rate": 0.0,
+      "precision_at_10": 0.9230769230769231,
+      "precision_at_20": 1.0,
+      "recall_at_10": 0.10256410256410256,
+      "recall_at_20": 0.1111111111111111
+    },
+    "selected": null
+  },
+  "verdict": "STOP_TEACHER_PRECISION"
+}
