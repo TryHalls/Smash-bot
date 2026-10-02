@@ -110,6 +110,18 @@ def _compact_gate_b_r2(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_model_replay(fold_reports: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Keep replay evidence portable; model files themselves are ignored artifacts."""
+    compact: dict[str, dict[str, Any]] = {}
+    for fold, data in fold_reports.items():
+        value = {key: item for key, item in data.items() if key != "model"}
+        parity = dict(value.get("onnx_parity", {}))
+        parity.pop("path", None)
+        value["onnx_parity"] = parity
+        compact[fold] = value
+    return compact
+
+
 def _direct_yellow_only_components(frame_bgr: Any, frame_index: int, pts_us: int, *, origin: tuple[int, int] = (0, 0)) -> list[ShuttleCandidate]:
     """Direct yellow proposal primitive; no white/cyan/body/motion work."""
     numpy, cv2 = _numpy_cv2()
@@ -350,6 +362,12 @@ def _run_protocol(frames: dict[str, list[tuple[int, int, Any]]], nets: dict[str,
 
 
 def _compact_trace_row(row: dict[str, Any]) -> dict[str, Any]:
+    failure_explanation = None
+    if row["failure_category"] == "OTHER":
+        failure_explanation = (
+            "No frozen-policy attribution bucket matched: the measured evaluator predicates "
+            "did not establish a more specific invariant-level cause for the missing observation."
+        )
     return {
         "burst": row["burst"],
         "frame_index": row["frame_index"],
@@ -357,6 +375,7 @@ def _compact_trace_row(row: dict[str, Any]) -> dict[str, Any]:
         "pre_state": row["pre_state"],
         "state": row["state"],
         "failure_category": row["failure_category"],
+        "failure_explanation": failure_explanation,
         "full_positive": row["full_positive"],
         "local_positive": row["local_positive"],
         "runtime_positive": row["runtime_positive"],
@@ -581,7 +600,7 @@ def run_gate_c(*, repo_root: Path = BASE_DIR, task008_root: Path = BASE_DIR / "a
             "head": EXPECTED_GATE_B_HEAD,
             "holdout_used": False,
             "gate_b_summary_sha256": _path_free_digest(summary_path),
-            "model_replay": {fold: {key: value for key, value in data.items() if key != "model"} for fold, data in fold_reports.items()},
+            "model_replay": _compact_model_replay(fold_reports),
             "yellow_only_equivalence": direct_equivalence,
             "failure_attribution": {"global": failure["failure_categories"]["global"], "by_burst": failure["failure_categories"]["by_burst"], "rank_diagnostics": failure["rank_diagnostics"]},
             "proposal_floor": proposal_floor,

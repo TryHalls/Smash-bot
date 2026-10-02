@@ -5,6 +5,8 @@ from smashbot_diagnostics.perception_models import ShuttleCandidate
 from smashbot_diagnostics.task011_gate_c import (
     _assert_yellow_equivalent,
     _classify_failure,
+    _compact_model_replay,
+    _compact_trace_row,
     _direct_yellow_only_components,
 )
 
@@ -36,6 +38,31 @@ class Task011GateCTests(unittest.TestCase):
             "chosen": None,
         }
         self.assertEqual(_classify_failure(row), "POSITIVE_OUTSIDE_LOCAL_RADIUS")
+
+    def test_compact_gate_c_evidence_is_path_free_and_explains_other(self):
+        replay = _compact_model_replay({"fold_A": {"model": {"path": "/dev/shm/model.onnx"}, "onnx_parity": {"path": "/dev/shm/model.onnx", "max_abs_delta": 0.0}}})
+        self.assertNotIn("path", replay["fold_A"]["onnx_parity"])
+        row = {
+            "burst": "B_01",
+            "frame_index": 96,
+            "pts_us": 1,
+            "pre_state": "REACQUIRE",
+            "state": "REACQUIRE",
+            "failure_category": "OTHER",
+            "full_positive": True,
+            "local_positive": True,
+            "runtime_positive": True,
+            "best_positive_logit": 1.0,
+            "best_positive_rank": 1,
+            "chosen": None,
+            "selected_error": None,
+            "prediction_error": None,
+            "observation": False,
+            "tracker_kind": "prediction",
+            "correct_pair_exists": False,
+        }
+        compact = _compact_trace_row(row)
+        self.assertTrue(compact["failure_explanation"])
 
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV optional dependency is unavailable")
     def test_direct_yellow_path_does_not_require_gt(self):
