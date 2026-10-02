@@ -484,15 +484,17 @@ def _scorer_runtime(frames: dict[str, list[tuple[int, int, Any]]], protocol_rows
         for threads in (1, 2):
             cv2.setNumThreads(threads)
             by_k: dict[str, Any] = {}
-            for k in (1, 4, 8, 16, 32, "actual"):
+            for k in (1, 4, 8, 16, 32, "actual", "local_actual"):
                 samples: list[tuple[Any, list[ShuttleCandidate], str]] = []
                 for burst in ACTIVE_BURSTS:
                     frame_map = {frame_index: frame for frame_index, _pts_us, frame in frames[burst]}
                     for row in protocol_rows[burst]:
                         candidates = [candidate for _index, candidate, _logit in row["runtime_all"]]
-                        if k != "actual" and len(candidates) < int(k):
+                        if k == "local_actual" and row["prediction"] is None:
                             continue
-                        selected = candidates if k == "actual" else candidates[: int(k)]
+                        if k not in {"actual", "local_actual"} and len(candidates) < int(k):
+                            continue
+                        selected = candidates if k in {"actual", "local_actual"} else candidates[: int(k)]
                         samples.append((frame_map[row["frame_index"]], selected, burst))
                 if not samples:
                     by_k[str(k)] = {"frames": 0}
@@ -567,9 +569,11 @@ def run_gate_c(*, repo_root: Path = BASE_DIR, task008_root: Path = BASE_DIR / "a
         semantic = b_report["semantic"]
         selected_threads = min((1, 2), key=lambda thread: scorer_runtime[str(thread)]["by_k"]["actual"]["stages_ms"]["total_ms"]["p95"])
         selected_runtime = scorer_runtime[str(selected_threads)]["by_k"]
-        track_floor = {"proposal": proposal_floor["by_threads"][str(selected_threads)]["local_direct_ms"], "scorer_actual": selected_runtime["actual"]["stages_ms"], "tracker_scheduler_p95_ms": semantic.get("runtime_tracker_scheduler_p95_ms")}
+        track_floor = {"proposal": proposal_floor["by_threads"][str(selected_threads)]["local_direct_ms"], "scorer_local_actual": selected_runtime["local_actual"]["stages_ms"], "tracker_scheduler_p95_ms": b_report["runtime"]["tracker_scheduler_ms"]["p95"]}
         full_floor = {"proposal": proposal_floor["by_threads"][str(selected_threads)]["full_direct_ms"], "scorer_actual": selected_runtime["actual"]["stages_ms"]}
-        recommendation = "NEED_BOUNDED_ACQUISITION_SHORTLIST" if track_floor["scorer_actual"]["total_ms"]["p95"] <= 33.0 and full_floor["scorer_actual"]["total_ms"]["p95"] > 33.0 else "CONTINUE_CASCADE_POLICY_RESEARCH" if track_floor["scorer_actual"]["total_ms"]["p95"] <= 33.0 else "STOP_STATEFUL_CASCADE"
+        track_floor["p95_stage_sum_upper_bound_ms"] = track_floor["proposal"]["p95"] + track_floor["scorer_local_actual"]["total_ms"]["p95"] + (track_floor["tracker_scheduler_p95_ms"] or 0.0)
+        full_floor["p95_stage_sum_upper_bound_ms"] = full_floor["proposal"]["p95"] + full_floor["scorer_actual"]["total_ms"]["p95"]
+        recommendation = "NEED_BOUNDED_ACQUISITION_SHORTLIST" if track_floor["p95_stage_sum_upper_bound_ms"] <= 33.0 and full_floor["p95_stage_sum_upper_bound_ms"] > 33.0 else "CONTINUE_CASCADE_POLICY_RESEARCH" if track_floor["p95_stage_sum_upper_bound_ms"] <= 33.0 else "STOP_STATEFUL_CASCADE"
         compact = {
             "schema_version": 1,
             "gate": "C",
