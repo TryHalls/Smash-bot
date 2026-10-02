@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "gate": "E",
+  "head": "45c4c262b6b7e8731665964b372545824273b3e0",
+  "verdict": "STOP_HALFRES_PROPOSAL_SEMANTICS",
+  "holdout_used": false,
+  "training_performed": false,
+  "proposal_contract": {
+    "gameplay_y0": 260,
+    "input_dimensions": [864, 1920],
+    "coarse_dimensions": [432, 830],
+    "interpolation": "INTER_AREA",
+    "morphology": "MORPH_OPEN 3x3",
+    "coarse_area": [1, 125],
+    "mapping": {
+      "x_full": "2*cx+0.5",
+      "y_full": "260+2*cy+0.5"
+    },
+    "full_resolution_center_refinement": false
+  },
+  "cnn_transfer": {
+    "patch_contract": "task010_original_96_to_64",
+    "required_folds": ["fold_A", "fold_B", "fold_C"],
+    "reusable_models_found": {},
+    "missing_folds": ["fold_A", "fold_B", "fold_C"]
+  },
+  "proposal_semantics": {
+    "frozen_positive_coverage_at_20": {
+      "matched": 34,
+      "total": 60,
+      "rate": 0.5666666666666667
+    },
+    "frozen_positive_coverage_at_10": {
+      "matched": 31,
+      "total": 60,
+      "rate": 0.5166666666666667
+    },
+    "coverage_at_20_by_burst": {
+      "A_01": {"matched": 5, "total": 20, "rate": 0.25},
+      "B_01": {"matched": 11, "total": 21, "rate": 0.5238095238095238},
+      "C_01": {"matched": 18, "total": 19, "rate": 0.9473684210526315}
+    },
+    "all_63_task009_visibility_coverage": {
+      "matched": 35,
+      "total": 63,
+      "rate": 0.5555555555555556
+    },
+    "first_acquisition_pair_coverage": {
+      "endpoints": 5,
+      "required_endpoints": 6,
+      "pairs": 2,
+      "required_pairs": 3
+    },
+    "candidate_cardinality": {"count": 63, "p50": 16.0, "p95": 23.0, "max": 26.0},
+    "nearest_positive_distance_px": {
+      "count": 60,
+      "p50": 5.1669088800501735,
+      "p95": 405.8564349840418,
+      "max": 408.4861302561796
+    },
+    "first_acquisition_pairs": {
+      "A_01": {"frame_1": 78, "frame_2": 79, "frame_1_within_20": true, "frame_2_within_20": false, "pair_within_20": false},
+      "B_01": {"frame_1": 78, "frame_2": 79, "frame_1_within_20": true, "frame_2_within_20": true, "pair_within_20": true},
+      "C_01": {"frame_1": 351, "frame_2": 352, "frame_1_within_20": true, "frame_2_within_20": true, "pair_within_20": true}
+    }
+  },
+  "runtime": {
+    "status": "NOT_RUN_MODEL_REPLAY_STOP",
+    "repetitions": 3,
+    "opencv_threads": 1
+  },
+  "provenance": {
+    "random_preflight_models_rejected": true,
+    "rejected_random_preflight_artifacts": [
+      "tiny_cnn_random_opset17.onnx",
+      "tiny_cnn_native64_current.onnx",
+      "tiny_cnn_native64_half.onnx",
+      "tiny_cnn_native64_quarter.onnx"
+    ],
+    "reason": "accepted C2d1 fold weights are not reusable artifacts"
+  }
+}
