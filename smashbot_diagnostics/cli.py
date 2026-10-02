@@ -22,12 +22,18 @@ from .perception import (
     validate_capture_duration,
 )
 from .perception_annotations import build_ground_truth_subset, run_annotation_ui
+from .perception_train_subset import TrainSubsetError, build_train_subset
+from .perception_train_ground_truth import TrainGroundTruthError, audit_train_labels, build_train_ground_truth_snapshot
 from .perception_benchmark import benchmark_report, write_benchmark_report
 from .perception_baseline import BaselineError, run_dev_baseline
 from .perception_compare import BenchmarkComparisonError, compare_report_files, write_comparison_report
 from .perception_diagnose import DiagnosisError, run_dev_diagnosis, write_diagnosis_outputs
 from .perception_component_topology import ComponentTopologyError, run_component_topology
 from .perception_candidate_feasibility import CandidateFeasibilityError, run_candidate_feasibility
+from .perception_candidate_dataset import CandidateDatasetError, build_candidate_manifest, build_train_candidate_manifest
+from .perception_candidate_svm import CandidateSVMError, run_candidate_svm
+from .perception_candidate_cnn import CandidateCNNError, run_candidate_cnn
+from .perception_candidate_runtime import CandidateRuntimeError, run_candidate_runtime, run_native64_runtime
 from .perception_v1 import V1Error, calibrate_v1, run_v1_dev
 from .perception_multi_hypothesis import MultiHypothesisError, run_multi_hypothesis_feasibility
 from .perception_v2_beam import V2BeamError, run_v2_beam_feasibility
@@ -261,6 +267,27 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("--annotations", type=Path, required=True)
     label.add_argument("--port", type=_nonnegative_int, default=0)
     label.add_argument("--read-only", action="store_true", help="serve labels without enabling save endpoints")
+    label.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"), help="Task 008 root for TRAIN on-demand cache")
+    label.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable for TRAIN on-demand cache")
+    label.add_argument("--cache-dir", type=Path, default=Path("artifacts/task010/train_annotation/cache"), help="disposable one-source TRAIN cache")
+
+    train_subset = subparsers.add_parser(
+        "perception-train-subset",
+        help="generate the deterministic Task 010 TRAIN subset and unlabeled annotation skeleton",
+    )
+    train_subset.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    train_subset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    train_subset.add_argument("--output", type=Path, default=Path("data/task010/train_subset.json"))
+    train_subset.add_argument("--annotations-output", type=Path, default=Path("artifacts/task010/train_annotation/annotations.json"))
+
+    train_ground_truth = subparsers.add_parser(
+        "perception-train-ground-truth",
+        help="validate completed Task 010 TRAIN labels and write an immutable snapshot",
+    )
+    train_ground_truth.add_argument("--subset", type=Path, default=Path("data/task010/train_subset.json"))
+    train_ground_truth.add_argument("--annotations", type=Path, default=Path("artifacts/task010/train_annotation/annotations.json"))
+    train_ground_truth.add_argument("--task009-snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    train_ground_truth.add_argument("--output", type=Path, default=Path("data/task010/train_ground_truth.json"))
 
     benchmark = subparsers.add_parser(
         "perception-benchmark",
@@ -347,6 +374,78 @@ def build_parser() -> argparse.ArgumentParser:
     appearance.add_argument("--v1-report", type=Path, default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"))
     appearance.add_argument("--v2-report", type=Path, default=Path("artifacts/task009/v2_beam_feasibility/report.json"))
     appearance.add_argument("--output-base", type=Path, default=Path("artifacts/task009/appearance_geometry"))
+    candidate_dataset = subparsers.add_parser(
+        "perception-candidate-dataset",
+        help="build the deterministic Task 010 Gate B candidate manifest from DEV only",
+    )
+    candidate_dataset.add_argument("--snapshot", type=Path, required=True)
+    candidate_dataset.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_dataset.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_dataset.add_argument("--output", type=Path, required=True)
+    candidate_dataset.add_argument("--report-base", type=Path, default=Path("artifacts/task010/gate_b"))
+    candidate_dataset.add_argument(
+        "--task009-report",
+        type=Path,
+        default=Path("artifacts/task009/v1_baseline_fixed_75db6f1/report.json"),
+        help="historical Task 009 report used only for proposal equivalence diagnostics",
+    )
+    candidate_dataset_train = subparsers.add_parser(
+        "perception-candidate-dataset-train",
+        help="build the deterministic Task 010 Gate C2c candidate manifest from frozen TRAIN only",
+    )
+    candidate_dataset_train.add_argument(
+        "--snapshot",
+        type=Path,
+        default=Path("data/task010/train_ground_truth.json"),
+        help="frozen TRAIN ground-truth snapshot",
+    )
+    candidate_dataset_train.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_dataset_train.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_dataset_train.add_argument(
+        "--output",
+        type=Path,
+        default=Path("data/task010/candidate_manifest_train.json"),
+    )
+    candidate_dataset_train.add_argument(
+        "--report-base",
+        type=Path,
+        default=Path("artifacts/task010/gate_c2c"),
+    )
+    candidate_svm = subparsers.add_parser(
+        "perception-candidate-svm",
+        help="run the Task 010 Gate C1 OpenCV HOG + linear SVM DEV scorer",
+    )
+    candidate_svm.add_argument("--manifest", type=Path, required=True)
+    candidate_svm.add_argument("--snapshot", type=Path, default=Path("data/task009/ground_truth.json"))
+    candidate_svm.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_svm.add_argument("--ffmpeg", default="ffmpeg")
+    candidate_svm.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c1"))
+    candidate_cnn = subparsers.add_parser(
+        "perception-candidate-cnn",
+        help="run the frozen Task 010 C2d1 tiny-CNN LOBO evaluator",
+    )
+    candidate_cnn.add_argument("--dev-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
+    candidate_cnn.add_argument("--train-manifest", type=Path, default=Path("data/task010/candidate_manifest_train.json"))
+    candidate_cnn.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_cnn.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    candidate_cnn.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c2d1"))
+    candidate_runtime = subparsers.add_parser(
+        "perception-candidate-runtime",
+        help="run the Task 010 C2d2 OpenCV DNN runtime audit",
+    )
+    candidate_runtime.add_argument("--dev-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
+    candidate_runtime.add_argument("--train-manifest", type=Path, default=Path("data/task010/candidate_manifest_train.json"))
+    candidate_runtime.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_runtime.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    candidate_runtime.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c2d2"))
+    candidate_native64 = subparsers.add_parser(
+        "perception-native64-runtime",
+        help="run the Task 010 C3a native64 runtime-only preflight",
+    )
+    candidate_native64.add_argument("--dev-manifest", type=Path, default=Path("data/task010/candidate_manifest_dev.json"))
+    candidate_native64.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    candidate_native64.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
+    candidate_native64.add_argument("--output-base", type=Path, default=Path("artifacts/task010/gate_c3a"))
     compare = subparsers.add_parser(
         "perception-compare",
         help="compare two completed Task 009 reports without choosing a winner",
@@ -1435,7 +1534,50 @@ def _perception_subset(args: argparse.Namespace) -> int:
 
 
 def _perception_label(args: argparse.Namespace) -> int:
-    run_annotation_ui(args.manifest, args.annotations, port=args.port, read_only=args.read_only)
+    run_annotation_ui(
+        args.manifest,
+        args.annotations,
+        port=args.port,
+        read_only=args.read_only,
+        task008_root=args.task008_root,
+        ffmpeg=args.ffmpeg,
+        cache_dir=args.cache_dir,
+    )
+    return 0
+
+
+def _perception_train_subset(args: argparse.Namespace) -> int:
+    try:
+        manifest = build_train_subset(
+            repo_root=Path.cwd(),
+            snapshot_path=args.snapshot,
+            task008_root=args.task008_root,
+            output_path=args.output,
+            annotations_path=args.annotations_output,
+        )
+    except TrainSubsetError as exc:
+        print(f"TRAIN subset error: {exc}")
+        return 2
+    print(f"Subset: {args.output}")
+    print(f"Annotations: {args.annotations_output}")
+    print(f"Records: {len(manifest['records'])}")
+    return 0
+
+
+def _perception_train_ground_truth(args: argparse.Namespace) -> int:
+    try:
+        snapshot = build_train_ground_truth_snapshot(
+            subset_path=args.subset,
+            annotations_path=args.annotations,
+            task009_snapshot_path=args.task009_snapshot,
+            output_path=args.output,
+        )
+    except TrainGroundTruthError as exc:
+        print(f"TRAIN ground-truth error: {exc}")
+        return 2
+    print(f"Snapshot: {args.output}")
+    print(f"Records: {snapshot['dataset']['record_count']}")
+    print(json.dumps(audit_train_labels({"records": snapshot["records"]}), sort_keys=True))
     return 0
 
 
@@ -1597,6 +1739,120 @@ def _perception_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_candidate_dataset(args: argparse.Namespace) -> int:
+    try:
+        manifest, report = build_candidate_manifest(
+            args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_path=args.output,
+            report_base=args.report_base,
+            task009_report=args.task009_report,
+        )
+    except CandidateDatasetError as exc:
+        print(f"Candidate dataset error: {exc}")
+        return 2
+    print(f"Manifest: {args.output}")
+    print(f"Report: {args.report_base / 'report.json'}")
+    print(f"Frames: {len(manifest['frames'])}")
+    print(f"Candidates: {len(manifest['candidates'])}")
+    print(f"Proposal equivalence: {report['provenance']['proposal_equivalence']['status']}")
+    return 0
+
+
+def _perception_candidate_dataset_train(args: argparse.Namespace) -> int:
+    try:
+        manifest, report = build_train_candidate_manifest(
+            args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_path=args.output,
+            report_base=args.report_base,
+        )
+    except CandidateDatasetError as exc:
+        print(f"TRAIN candidate dataset error: {exc}")
+        return 2
+    print(f"Manifest: {args.output}")
+    print(f"Report: {args.report_base / 'report.json'}")
+    print(f"Frames: {len(manifest['frames'])}")
+    print(f"Candidates: {len(manifest['candidates'])}")
+    print(f"Labels: {json.dumps(report['labels'], sort_keys=True)}")
+    print("DEV negative-check used for fit: false")
+    print("HOLDOUT decoded: false")
+    return 0
+
+
+def _perception_candidate_svm(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_svm(
+            args.manifest,
+            snapshot_path=args.snapshot,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateSVMError as exc:
+        print(f"Candidate SVM error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C1: {report['status']}")
+    return 0
+
+
+def _perception_candidate_cnn(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_cnn(
+            args.dev_manifest,
+            args.train_manifest,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateCNNError as exc:
+        print(f"Candidate CNN error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C2d1: {report['status']}")
+    return 0
+
+
+def _perception_candidate_runtime(args: argparse.Namespace) -> int:
+    try:
+        report = run_candidate_runtime(
+            args.dev_manifest,
+            args.train_manifest,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateRuntimeError as exc:
+        print(f"Candidate runtime error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C2d2: {report['status']}")
+    return 0
+
+
+def _perception_native64_runtime(args: argparse.Namespace) -> int:
+    try:
+        report = run_native64_runtime(
+            args.dev_manifest,
+            task008_root=args.task008_root,
+            ffmpeg=args.ffmpeg,
+            output_base=args.output_base,
+        )
+    except CandidateRuntimeError as exc:
+        print(f"Native64 runtime error: {exc}")
+        return 2
+    print(f"Report: {args.output_base / 'report.json'}")
+    print(f"Summary: {args.output_base / 'summary.txt'}")
+    print(f"Gate C3a: {report['status']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1621,6 +1877,10 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_subset(args)
         if args.command == "perception-label":
             return _perception_label(args)
+        if args.command == "perception-train-subset":
+            return _perception_train_subset(args)
+        if args.command == "perception-train-ground-truth":
+            return _perception_train_ground_truth(args)
         if args.command == "perception-benchmark":
             return _perception_benchmark(args)
         if args.command == "perception-dev-baseline":
@@ -1641,8 +1901,20 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_v2_beam(args)
         if args.command == "perception-appearance-geometry":
             return _perception_appearance_geometry(args)
+        if args.command == "perception-candidate-dataset":
+            return _perception_candidate_dataset(args)
+        if args.command == "perception-candidate-dataset-train":
+            return _perception_candidate_dataset_train(args)
+        if args.command == "perception-candidate-svm":
+            return _perception_candidate_svm(args)
+        if args.command == "perception-candidate-cnn":
+            return _perception_candidate_cnn(args)
+        if args.command == "perception-candidate-runtime":
+            return _perception_candidate_runtime(args)
+        if args.command == "perception-native64-runtime":
+            return _perception_native64_runtime(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, ValueError) as exc:
         parser.error(str(exc))
     return 2

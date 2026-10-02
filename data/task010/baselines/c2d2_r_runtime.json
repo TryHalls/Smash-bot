@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "gate": "C2d2-R",
+  "status": "STOP_RUNTIME_NEEDS_CASCADE",
+  "holdout_used": false,
+  "source_artifact": "artifacts/task010/gate_c2d2_r/report.json",
+  "ranking_audit": {
+    "source_run": "20260930T191744Z",
+    "frame_index": 91,
+    "candidate_count": 93,
+    "inversions": [
+      {
+        "torch_earlier_candidate_id": "A_A_01_000091:candidate:43",
+        "torch_earlier_candidate_index": 43,
+        "torch_later_candidate_id": "A_A_01_000091:candidate:49",
+        "torch_later_candidate_index": 49,
+        "torch_pairwise_margin": 0.0,
+        "opencv_pairwise_margin": -1.4901161193847656e-08,
+        "error_budget": 1.4901161193847656e-08,
+        "classification": "NUMERICALLY_UNRESOLVED_TIE"
+      }
+    ],
+    "all_inversions_numeric_ties": true,
+    "top_membership_changes": {"top1": false, "top3": false, "top8": false, "top16": false, "top32": false}
+  },
+  "runtime": {
+    "frames": 247,
+    "candidates_per_frame": {"p50": 53.0, "p95": 89.0, "max": 94.0},
+    "warmups": 20,
+    "fast_patch_extraction_ms": {"p50": 11.073408008087426, "p95": 28.75372140697436, "max": 65.15583999862429},
+    "blob_preprocessing_ms": {"p50": 1.686571995378472, "p95": 9.755826396576595, "max": 25.02934900985565},
+    "opencv_dnn_forward_ms": {"p50": 25.300362991401926, "p95": 63.18981310032537, "max": 101.27321899926756},
+    "scorer_total_ms": {"p50": 41.42439700081013, "p95": 97.9793419028283, "max": 163.56904500571545}
+  }
+}

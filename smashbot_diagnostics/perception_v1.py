@@ -411,9 +411,15 @@ def _add_acquisition_evaluator_distances(
     return enriched
 
 
-def _iter_dev_frames(snapshot: dict[str, Any], task008_root: Path, ffmpeg: str):
+def _iter_records_frames(records: list[dict[str, Any]], task008_root: Path, ffmpeg: str):
+    """Decode an explicitly supplied record set with the frozen frame path.
+
+    The caller is responsible for selecting and validating the split before
+    this iterator is entered.  This keeps the decoder reusable for Gate B DEV
+    and Task 010 TRAIN while retaining the same masks and frame identity path.
+    """
+
     cv2, numpy = _opencv_numpy()
-    records = _dev_records(snapshot)
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         grouped[(record["source_run"], record["burst_id"])].append(record)
@@ -451,6 +457,10 @@ def _iter_dev_frames(snapshot: dict[str, Any], task008_root: Path, ffmpeg: str):
                     "source_run": source_run,
                 }
                 previous = frame
+
+
+def _iter_dev_frames(snapshot: dict[str, Any], task008_root: Path, ffmpeg: str):
+    yield from _iter_records_frames(_dev_records(snapshot), task008_root, ffmpeg)
 
 
 def _oracle(candidates: Iterable[ShuttleCandidate], record: dict[str, Any], radius: float) -> bool:
