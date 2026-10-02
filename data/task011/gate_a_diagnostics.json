@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "gate": "A",
+  "holdout_used": false,
+  "provenance": {
+    "base_commit": "04f836af12ccce074d4b2db6923ae2b4bc2eb842",
+    "snapshot": "data/task009/ground_truth.json",
+    "snapshot_sha256": "c41b88b97f962faa4863b6187d44c6837ed422bfc5b69b8c82b8e53a77148455",
+    "candidate_manifest": "data/task010/candidate_manifest_dev.json",
+    "candidate_manifest_sha256": "d8dc160113cd09660c0ed84263fc24d404d2e3e09d4b05c4aae3db6bc51b7335",
+    "v1_report": "artifacts/task009/v1_baseline_fixed_75db6f1/report.json",
+    "v1_report_sha256": "f425d7fe5cd65fb5f2a754ddc5dfd237c9f984d7dbcd0fe305f1e8b602057438",
+    "dev_bursts": ["A_01", "B_01", "C_01"],
+    "dev_frames": 63
+  },
+  "runtime_inventory": {
+    "v1_algorithm_p95_ms": 218.499705049544,
+    "v1_effective_fps": 6.748081263470672,
+    "v1_stage_p95_ms": {
+      "registration": 144.0234663503361,
+      "mask_build": 73.38011925457977,
+      "yellow_components": 26.080966051085852,
+      "tracker": 0.051867296861018965,
+      "association": 0.0011891490430571137
+    },
+    "task010_runtime_bounds": {
+      "c2d5_r5_k32_scorer_p95_ms": 26.460391000728123,
+      "c3a_quarter_native64_r5_k32_two_threads_p95_ms": 28.14381180651253,
+      "c3a_quarter_native64_r5_k8_two_threads_p95_ms": 15.090291303931735,
+      "c3a_quarter_native64_r5_k1_two_threads_p95_ms": 6.752438207331577
+    }
+  },
+  "v1_acquisition": {
+    "configuration": {
+      "candidate_family": "yellow_only",
+      "area_gate": [16.0, 424.2],
+      "ranking": "R5",
+      "confirmations": 2,
+      "geometric_gate_px": 120.0,
+      "tracker_status": "UNCALIBRATED"
+    },
+    "A_01": {"pair": [78, 79], "candidate_step_px": 0.0, "first_gt_distance_px": 386.9899658223819, "second_gt_distance_px": 378.22915685524515, "originated_correct": false},
+    "B_01": {"pair": [79, 80], "candidate_step_px": 8.40688293843904, "first_gt_distance_px": 2.313163836170797, "second_gt_distance_px": 3.210359739178854, "originated_correct": true},
+    "C_01": {"pair": [355, 356], "candidate_step_px": 6.5853888980663795, "first_gt_distance_px": 428.3263682612449, "second_gt_distance_px": 452.2601842772931, "originated_correct": false},
+    "selected_recall_at_20": {"matched": 19, "total": 63},
+    "negative_diagnostic": {"confirmed_fp": 0, "unconfirmed_candidates": 4, "frames": 5}
+  },
+  "candidate_population": {
+    "raw_yellow": {"A_01": 1818, "B_01": 1027, "C_01": 1219, "total": 4064},
+    "quality_gated": {"A_01": 1546, "B_01": 864, "C_01": 1079, "total": 3489},
+    "full_frame_raw_per_frame": {"mean": 64.5079365079365, "p50": 60.0, "p95": 94.0, "min": 35, "max": 94},
+    "full_frame_quality_per_frame": {"mean": 55.38095238095238, "p50": 53.0, "p95": 78.0, "min": 31, "max": 83}
+  },
+  "gt_centered_local": {
+    "definition": "Evaluator-only counts around the human GT center after candidate generation; not a runtime input.",
+    "raw": {
+      "20": {"count_mean": 1.14, "count_p50": 1.0, "count_max": 5, "positive_survival": "61/63"},
+      "40": {"count_mean": 2.14, "count_p50": 2.0, "count_max": 8, "positive_survival": "61/63"},
+      "60": {"count_mean": 4.06, "count_p50": 4.0, "count_max": 10, "positive_survival": "63/63"},
+      "80": {"count_mean": 4.32, "count_p50": 4.0, "count_max": 11, "positive_survival": "63/63"},
+      "120": {"count_mean": 5.35, "count_p50": 5.0, "count_max": 14, "positive_survival": "63/63"}
+    },
+    "quality_gated": {
+      "20": {"count_mean": 1.06, "count_p50": 1.0, "count_max": 5, "positive_survival": "57/63"},
+      "40": {"count_mean": 1.87, "count_p50": 2.0, "count_max": 7, "positive_survival": "57/63"},
+      "60": {"count_mean": 3.52, "count_p50": 3.0, "count_max": 9, "positive_survival": "63/63"},
+      "80": {"count_mean": 3.73, "count_p50": 4.0, "count_max": 10, "positive_survival": "63/63"},
+      "120": {"count_mean": 4.70, "count_p50": 4.0, "count_max": 13, "positive_survival": "63/63"}
+    }
+  },
+  "prediction_centered_local": {
+    "definition": "Evaluator-only TemporalTracker initialized with GT observations for the first two frames of each burst; 60 subsequent frames. GT is used only after generation to score coverage.",
+    "raw": {
+      "20": {"count_mean": 1.15, "count_p50": 1.0, "count_p95": 2.0, "count_max": 5, "bins": {"0": 4, "1": 47, "2-4": 8, "5-8": 1, ">8": 0}, "positive_survival": "46/60"},
+      "40": {"count_mean": 2.683333333333333, "count_p50": 2.0, "count_p95": 6.0, "count_max": 8, "bins": {"0": 2, "1": 5, "2-4": 47, "5-8": 6, ">8": 0}, "positive_survival": "56/60"},
+      "60": {"count_mean": 4.2, "count_p50": 4.0, "count_p95": 8.05, "count_max": 10, "bins": {"0": 0, "1": 2, "2-4": 35, "5-8": 20, ">8": 3}, "positive_survival": "56/60"},
+      "80": {"count_mean": 4.383333333333334, "count_p50": 4.0, "count_p95": 8.05, "count_max": 11, "bins": {"0": 0, "1": 2, "2-4": 32, "5-8": 23, ">8": 3}, "positive_survival": "57/60"},
+      "120": {"count_mean": 5.35, "count_p50": 5.0, "count_p95": 9.05, "count_max": 13, "bins": {"0": 0, "1": 0, "2-4": 26, "5-8": 27, ">8": 7}, "positive_survival": "58/60"}
+    },
+    "quality_gated": {
+      "20": {"count_mean": 1.05, "count_p50": 1.0, "count_p95": 2.0, "count_max": 5, "bins": {"0": 9, "1": 43, "2-4": 7, "5-8": 1, ">8": 0}, "positive_survival": "42/60"},
+      "40": {"count_mean": 2.35, "count_p50": 2.0, "count_p95": 5.05, "count_max": 7, "bins": {"0": 5, "1": 7, "2-4": 44, "5-8": 4, ">8": 0}, "positive_survival": "52/60"},
+      "60": {"count_mean": 3.65, "count_p50": 3.0, "count_p95": 7.1, "count_max": 9, "bins": {"0": 0, "1": 6, "2-4": 39, "5-8": 12, ">8": 3}, "positive_survival": "52/60"},
+      "80": {"count_mean": 3.8333333333333335, "count_p50": 4.0, "count_p95": 7.1, "count_max": 10, "bins": {"0": 0, "1": 5, "2-4": 38, "5-8": 14, ">8": 3}, "positive_survival": "53/60"},
+      "120": {"count_mean": 4.766666666666667, "count_p50": 4.0, "count_p95": 9.0, "count_max": 12, "bins": {"0": 0, "1": 0, "2-4": 36, "5-8": 19, ">8": 5}, "positive_survival": "54/60"}
+    }
+  },
+  "motion_and_prediction": {
+    "gt_displacement_px": {
+      "A_01": {"p50": 2.630985194042459, "p95": 82.20831849038014, "max": 86.31841397073626},
+      "B_01": {"p50": 9.014464801870728, "p95": 12.051564954004506, "max": 12.403196599684627},
+      "C_01": {"p50": 30.056155244196603, "p95": 48.39079490367279, "max": 49.76050887887512}
+    },
+    "gt_initialized_prediction_error_px": {
+      "global": {"p50": 6.070805988119918, "p95": 32.92362164168483, "max": 93.94465431285006},
+      "A_01": {"p50": 2.684749598700457, "p95": 81.97546994518582, "max": 93.94465431285006},
+      "B_01": {"p50": 5.695634025014214, "p95": 11.268415213394883, "max": 11.552594302131036},
+      "C_01": {"p50": 20.224570936537262, "p95": 32.92362164168483, "max": 33.03894624475823}
+    },
+    "occluded_visible_frames": {"B_01": [95, 96, 97, 98]},
+    "invisible_visible_frames": 0
+  },
+  "reacquisition_estimate": {
+    "initial_full_acquisition": "3/3 bursts",
+    "prediction_centered_quality_120_candidate_available": "60/60",
+    "prediction_centered_raw_120_candidate_available": "60/60",
+    "estimated_full_reacquisition_triggers_after_correct_initialization": "0/60",
+    "positive_coverage_misses_that_need_ranking_or_fallback": {"raw": "2/60", "quality_gated": "6/60"},
+    "caveat": "This is an evaluator-only, correctly initialized-track estimate; it is not a production reacquisition result. Existing V1 had one measured reacquisition of 2 frames/66.291 ms and a longest miss burst of 5 frames."
+  },
+  "architecture_decision": {
+    "recommended": "C",
+    "name": "synchronous stateful cascade",
+    "local_primitive": "prediction-centered ROI candidate path",
+    "reason": "It explicitly separates ACQUIRE, TENTATIVE, TRACK, COAST, and REACQUIRE, keeps observations distinct from predictions, makes full-frame work bounded and observable, and avoids asynchronous stale-result identity risks.",
+    "next_gate": "Gate B — DEV-only synchronous cascade trace and integrated budget probe",
+    "next_gate_contract": [
+      "Use only A_01/B_01/C_01 DEV data and PTS; reject HOLDOUT before loading.",
+      "Do not modify production modules; implement a diagnostic scheduler/trace harness.",
+      "Use frozen 120 px geometric gate, two confirmations, max three coasts, and existing PTS identity rules; no new threshold search.",
+      "Measure full-frame calls, local ROI calls, state transitions, stale/late identities, observation-versus-prediction counts, p95 latency, effective FPS, longest miss, and reacquisition frames/ms.",
+      "PASS only if integrated p95 <=33 ms/frame, >=30 FPS, miss <=2 frames, reacquisition <=2 frames and <=70 ms, with no stale result accepted; otherwise STOP without tuning."
+    ]
+  }
+}
