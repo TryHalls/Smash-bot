@@ -11,6 +11,7 @@ from smashbot_diagnostics.perception_candidate_runtime import (
     _blob_from_patches_preallocated,
     _padding,
     _rank_indices,
+    batched_canonical_patches_v3,
     fast_canonical_patches_v2,
     fast_canonical_patches,
 )
@@ -53,6 +54,18 @@ class Task010CandidateRuntimeTests(unittest.TestCase):
             self.assertTrue(numpy.array_equal(reference, patch))
             self.assertEqual(reference_padding, padding)
             self.assertEqual(reference_hash, __import__("hashlib").sha256(patch.tobytes(order="C")).hexdigest())
+
+    def test_v3_mosaic_attempt_is_exposed_for_equivalence_gate(self) -> None:
+        try:
+            import numpy
+        except ImportError:
+            self.skipTest("NumPy is unavailable")
+        frame = numpy.arange(140 * 180 * 3, dtype=numpy.uint8).reshape((140, 180, 3))
+        candidates = [candidate(60.0, 70.0), candidate(120.0, 90.0)]
+        patches, paddings = batched_canonical_patches_v3(frame, candidates)
+        self.assertEqual(len(patches), 2)
+        self.assertEqual(len(paddings), 2)
+        self.assertEqual(patches[0].shape, (64, 64, 3))
 
     def test_blob_is_nchw_float32_and_supports_variable_batch(self) -> None:
         try:

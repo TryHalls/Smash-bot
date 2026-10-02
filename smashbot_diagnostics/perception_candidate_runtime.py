@@ -181,6 +181,75 @@ def fast_canonical_patches_v2(frame_bgr: Any, candidates: list[Any]) -> tuple[li
     return patches, paddings
 
 
+def batched_canonical_patches_v3(frame_bgr: Any, candidates: list[Any]) -> tuple[list[Any], list[dict[str, int]]]:
+    """Canonicalize candidates through the C2d5 single-mosaic experiment.
+
+    Each exact 96x96 BGR ROI is copied into one horizontal mosaic, resized
+    once, converted to RGB once, and split back into contiguous 64x64 patches.
+    The operation is intentionally kept separate from v2 so equivalence can
+    fail closed if interpolation crosses a tile boundary.
+    """
+
+    try:
+        import cv2  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise CandidateRuntimeError("C2d5 requires OpenCV") from exc
+    numpy = _numpy()
+    if getattr(frame_bgr, "ndim", None) != 3 or frame_bgr.shape[2] != 3:
+        raise CandidateRuntimeError("batched canonical source must be BGR three-channel")
+    height, width = frame_bgr.shape[:2]
+    if not candidates:
+        return [], []
+    mosaic = numpy.empty((PATCH_SOURCE_SIZE, PATCH_SOURCE_SIZE * len(candidates), 3), dtype=numpy.uint8)
+    paddings: list[dict[str, int]] = []
+    for index, candidate in enumerate(candidates):
+        cx = math.floor(float(candidate.x) + 0.5)
+        cy = math.floor(float(candidate.y) + 0.5)
+        if not (0 <= cx < width and 0 <= cy < height):
+            raise CandidateRuntimeError("candidate center lies outside source frame")
+        left, top = cx - PATCH_PAD, cy - PATCH_PAD
+        right, bottom = left + PATCH_SOURCE_SIZE, top + PATCH_SOURCE_SIZE
+        padding = {
+            "pad_left": max(0, -left),
+            "pad_top": max(0, -top),
+            "pad_right": max(0, right - width),
+            "pad_bottom": max(0, bottom - height),
+        }
+        if any(padding.values()):
+            source_frame = cv2.copyMakeBorder(
+                frame_bgr,
+                padding["pad_top"],
+                padding["pad_bottom"],
+                padding["pad_left"],
+                padding["pad_right"],
+                cv2.BORDER_REFLECT_101,
+            )
+            roi = source_frame[
+                top + padding["pad_top"] : bottom + padding["pad_top"],
+                left + padding["pad_left"] : right + padding["pad_left"],
+            ]
+        else:
+            roi = frame_bgr[top:bottom, left:right]
+        if roi.shape[:2] != (PATCH_SOURCE_SIZE, PATCH_SOURCE_SIZE):
+            raise CandidateRuntimeError("batched canonical ROI is not 96x96")
+        mosaic[:, index * PATCH_SOURCE_SIZE : (index + 1) * PATCH_SOURCE_SIZE] = roi
+        paddings.append(padding)
+    resized_mosaic = cv2.resize(
+        mosaic,
+        (PATCH_OUTPUT_SIZE * len(candidates), PATCH_OUTPUT_SIZE),
+        interpolation=cv2.INTER_AREA,
+    )
+    rgb_mosaic = cv2.cvtColor(resized_mosaic, cv2.COLOR_BGR2RGB)
+    patches = [
+        numpy.ascontiguousarray(
+            rgb_mosaic[:, index * PATCH_OUTPUT_SIZE : (index + 1) * PATCH_OUTPUT_SIZE],
+            dtype=numpy.uint8,
+        )
+        for index in range(len(candidates))
+    ]
+    return patches, paddings
+
+
 def _frame_groups(rows: list[dict[str, Any]]) -> dict[str, list[tuple[int, list[dict[str, Any]]]]]:
     grouped: dict[str, dict[int, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     for row in rows:
