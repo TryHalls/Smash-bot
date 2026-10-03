@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "task": "018-temporal-confirmed-perception",
+  "head": "d3f4ea0f1e1709bb7425c04ab873e6cea59b0544",
+  "verdict": "STOP_TEMPORAL_ACQUIRE_CONFIRMATION",
+  "holdout_used": false,
+  "dev_used_for_fitting_or_selection": false,
+  "phase_a": {
+    "benchmarks_reused": true,
+    "local_worst_p95_ms": 12.158181103586683,
+    "local_min_mean_fps": 171.16714262846415,
+    "global_worst_p95_ms": 39.41012330615194,
+    "global_worst_mean_ms": 25.453192381685348,
+    "parity": {
+      "h2_max_tensor_delta": 4.291534423828125e-05,
+      "h2_max_offset_delta": 5.8710575103759766e-06,
+      "same_h2_top8_identities": true,
+      "same_appearance_ordering": true,
+      "same_appearance_positive_decision": true
+    },
+    "h2_parameter_hash": {
+      "A": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+      "B": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+      "C": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3"
+    },
+    "appearance_parameter_hash": {
+      "A": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+      "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+      "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
+    }
+  },
+  "phase_b": {
+    "pass": true,
+    "state_machine": "TemporalConfirmedStateMachine",
+    "seed_never_emitted": true,
+    "latest_frame_only": true,
+    "fifo_backlog": false,
+    "focused_tests": 5
+  },
+  "phase_c": {
+    "starts_from_cnn_lobo_report": {
+      "A_01": 79,
+      "B_01": 78,
+      "C_01": 351
+    },
+    "max_heavy_attempts": 2,
+    "max_processed_frames": 3,
+    "endpoints": [
+      {
+        "burst_id": "A_01",
+        "processed_frames": 2,
+        "heavy_attempts": 1,
+        "first_emitted_frame": 80,
+        "first_emitted_error_px": 1.7601055558784786,
+        "pass": true
+      },
+      {
+        "burst_id": "B_01",
+        "processed_frames": 2,
+        "heavy_attempts": 2,
+        "first_emitted_frame": null,
+        "first_emitted_error_px": null,
+        "pass": false
+      },
+      {
+        "burst_id": "C_01",
+        "processed_frames": 2,
+        "heavy_attempts": 2,
+        "first_emitted_frame": null,
+        "first_emitted_error_px": null,
+        "pass": false
+      }
+    ],
+    "global_seed_emitted": false,
+    "pass": false
+  },
+  "phase_d_executed": false
+}
