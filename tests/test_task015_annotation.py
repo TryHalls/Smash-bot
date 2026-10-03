@@ -204,6 +204,42 @@ class Task015AnnotationTests(unittest.TestCase):
             with self.assertRaises(Task015Error):
                 Task015QAHTTPServer(qa, root / "qa2.json", root / "qa-cache2", task008, "ffmpeg", host="0.0.0.0")
 
+    def test_qa_image_adapts_qa_record_id_for_frame_cache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ground_truth, task008, report = _fixture(root)
+            queue = build_train_annotation_queue(ground_truth, task008, task014_report=report)
+            main_path = root / "session.json"
+            main = _empty_session(queue)
+            for group in "ABC":
+                for record in [r for r in queue["records"] if r["train_group"] == group][:10]:
+                    main["labels"][record["record_id"]] = {
+                        "visible": True,
+                        "center_x": 1.0,
+                        "center_y": 2.0,
+                        "source": "human_click",
+                    }
+            _atomic_session_write(main_path, main)
+            qa = build_task015_qa_queue(main_path, queue)
+            qa_id = qa["records"][0]["qa_record_id"]
+
+            class RecordingCache:
+                def __init__(self):
+                    self.record = None
+
+                def read(self, record):
+                    self.record = dict(record)
+                    return b"PNG"
+
+                def clear(self):
+                    return None
+
+            cache = RecordingCache()
+            session = Task015QASession(qa, root / "qa.json", cache)
+            self.assertEqual(session.image(qa_id), b"PNG")
+            self.assertEqual(cache.record["record_id"], qa_id)
+            self.assertEqual(cache.record["qa_record_id"], qa_id)
+
 
 if __name__ == "__main__":
     unittest.main()

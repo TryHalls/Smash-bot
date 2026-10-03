@@ -715,7 +715,9 @@ class Task015QASession:
                 record = self.by_id[qa_record_id]
             except KeyError as exc:
                 raise Task015Error("unknown QA record") from exc
-            return self.cache.read(record)
+            cache_record = dict(record)
+            cache_record["record_id"] = record["qa_record_id"]
+            return self.cache.read(cache_record)
 
     def annotate(self, qa_record_id: str, action: str, *, x: Any = None, y: Any = None, request_id: str | None = None) -> dict[str, Any]:
         with self._lock:
