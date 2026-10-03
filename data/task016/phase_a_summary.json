@@ -1,0 +1,66 @@
+{
+  "schema_version": 3,
+  "gate": "Task016-Phase-A-R2",
+  "base_head": "2a06c2a729a738162a83556f5ca40d5863c947bf",
+  "verdict": "STOP_TOP8_CASCADE_RUNTIME_PREFLIGHT",
+  "holdout_used": false,
+  "dev_used_for_fitting_or_selection": false,
+  "h2_parameter_hashes_verified": {
+    "A": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+    "B": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+    "C": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3"
+  },
+  "appearance_parameter_hashes_verified": {
+    "A": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+    "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+    "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
+  },
+  "optimization_equivalence": {
+    "frames": 63,
+    "patches": 504,
+    "synthetic_cases": 3,
+    "local_maxima_exact": true,
+    "valid_top8_exact": true,
+    "patch_bytes_exact": true,
+    "padding_exact": true
+  },
+  "valid_domain_filter": {
+    "domain": "0 <= x < 864 and 260 <= y < 1920",
+    "discarded_total": 13,
+    "no_clipping": true,
+    "diagnostics": "artifacts/task016/report.json phase_a.valid_domain_filter.frames"
+  },
+  "parity": {
+    "h2_max_tensor_delta": 4.291534423828125e-05,
+    "h2_max_offset_delta": 5.8710575103759766e-06,
+    "same_h2_top8_identities": true,
+    "appearance_repeat_logit_delta": 0.0,
+    "same_appearance_ordering": true,
+    "same_appearance_positive_decision": true
+  },
+  "runtime": {
+    "warmups": 20,
+    "repetitions": 3,
+    "frames": 63,
+    "target_p95_ms": 33.0,
+    "target_mean_fps": 30.0,
+    "threads": {
+      "1": {
+        "p95_ms": [36.01912020385498, 34.523865301162004, 33.019698804127984],
+        "mean_ms": [26.126799000878005, 26.44523385831798, 25.95631781058194],
+        "mean_fps": [38.27487630483912, 37.813997235099656, 38.52626583237154],
+        "pass": false
+      },
+      "2": {
+        "p95_ms": [63.120209699263796, 74.39461980393389, 59.70872069301549],
+        "mean_ms": [32.135689412363774, 41.92983290427254, 33.769619127269834],
+        "mean_fps": [31.118050313719532, 23.849367639576325, 29.612415711034014],
+        "pass": false
+      }
+    }
+  },
+  "phase_b_executed": false,
+  "phase_c_executed": false,
+  "phase_d_executed": false,
+  "source_report": "artifacts/task016/report.json"
+}
