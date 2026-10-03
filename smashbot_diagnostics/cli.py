@@ -45,6 +45,7 @@ from .task012_phase_b_corrected import run_phase_b_corrected
 from .task012_phase_d import PointDetectorPhaseBError as PointDetectorPhaseDError, run_phase_d
 from .task013_teacher import Task013Error, run_phase_a as run_task013_phase_a
 from .task014_teacher import Task014Error, run_phase_a as run_task014_phase_a
+from .task015_annotation import Task015Error, run_task015_ui
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -277,6 +278,18 @@ def build_parser() -> argparse.ArgumentParser:
     label.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"), help="Task 008 root for TRAIN on-demand cache")
     label.add_argument("--ffmpeg", default="ffmpeg", help="FFmpeg executable for TRAIN on-demand cache")
     label.add_argument("--cache-dir", type=Path, default=Path("artifacts/task010/train_annotation/cache"), help="disposable one-source TRAIN cache")
+
+    task015_label = subparsers.add_parser(
+        "perception-task015-label",
+        help="serve the resumable TRAIN-only Task 015 human annotation UI on localhost",
+    )
+    task015_label.add_argument("--train-ground-truth", type=Path, default=Path("data/task010/train_ground_truth.json"))
+    task015_label.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    task015_label.add_argument("--task014-report", type=Path, default=Path("artifacts/task014/phase_a/report.json"))
+    task015_label.add_argument("--session", type=Path, default=Path("artifacts/task015/session.json"))
+    task015_label.add_argument("--cache-dir", type=Path, default=Path("artifacts/task015/cache"))
+    task015_label.add_argument("--ffmpeg", default="ffmpeg")
+    task015_label.add_argument("--port", type=_nonnegative_int, default=0)
 
     train_subset = subparsers.add_parser(
         "perception-train-subset",
@@ -1603,6 +1616,23 @@ def _perception_label(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_task015_label(args: argparse.Namespace) -> int:
+    try:
+        run_task015_ui(
+            train_ground_truth=args.train_ground_truth,
+            task008_root=args.task008_root,
+            task014_report=args.task014_report,
+            session_path=args.session,
+            cache_dir=args.cache_dir,
+            ffmpeg=args.ffmpeg,
+            port=args.port,
+        )
+    except Task015Error as exc:
+        print(f"Task 015 annotation error: {exc}")
+        return 2
+    return 0
+
+
 def _perception_train_subset(args: argparse.Namespace) -> int:
     try:
         manifest = build_train_subset(
@@ -2035,6 +2065,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_subset(args)
         if args.command == "perception-label":
             return _perception_label(args)
+        if args.command == "perception-task015-label":
+            return _perception_task015_label(args)
         if args.command == "perception-train-subset":
             return _perception_train_subset(args)
         if args.command == "perception-train-ground-truth":
@@ -2085,6 +2117,6 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_task014_teacher(args)
         if args.command == "perception-compare":
             return _perception_compare(args)
-    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, PointDetectorPhaseAError, PointDetectorPhaseBError, PointDetectorPhaseDError, Task013Error, Task014Error, ValueError) as exc:
+    except (AdbError, AdbUnavailable, BaselineError, DiagnosisError, ComponentTopologyError, CandidateFeasibilityError, V1Error, MultiHypothesisError, V2BeamError, AppearanceGeometryError, CandidateRuntimeError, GateEError, PointDetectorPhaseAError, PointDetectorPhaseBError, PointDetectorPhaseDError, Task013Error, Task014Error, Task015Error, ValueError) as exc:
         parser.error(str(exc))
     return 2
