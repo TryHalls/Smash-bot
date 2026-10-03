@@ -9,6 +9,8 @@ from smashbot_diagnostics.task015_annotation import (
     TRAIN_RUNS,
     Task015Error,
     Task015HTTPServer,
+    Task015QAHTTPServer,
+    Task015QASession,
     Task015Session,
     TrainFrameCache,
     _atomic_session_write,
@@ -16,6 +18,7 @@ from smashbot_diagnostics.task015_annotation import (
     _load_session_with_recovery,
     _sha256,
     build_train_annotation_queue,
+    build_task015_qa_queue,
     display_to_frame_coordinates,
 )
 
@@ -142,6 +145,64 @@ class Task015AnnotationTests(unittest.TestCase):
                 server.server_close()
             with self.assertRaises(Task015Error):
                 Task015HTTPServer(queue, root / "session2.json", root / "cache2", task008, "ffmpeg", host="0.0.0.0")
+
+    def test_blinded_qa_selects_ten_per_group_without_original_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ground_truth, task008, report = _fixture(root)
+            queue = build_train_annotation_queue(ground_truth, task008, task014_report=report)
+            main_session_path = root / "session.json"
+            main = _empty_session(queue)
+            for group in "ABC":
+                selected = [r for r in queue["records"] if r["train_group"] == group][:10]
+                for record in selected:
+                    main["labels"][record["record_id"]] = {
+                        "visible": True,
+                        "center_x": 111.0,
+                        "center_y": 222.0,
+                        "source": "human_click",
+                    }
+            _atomic_session_write(main_session_path, main)
+            original_sha = main_session_path.read_bytes()
+            qa = build_task015_qa_queue(main_session_path, queue)
+            self.assertEqual(qa["record_count"], 30)
+            self.assertEqual({g: sum(r["train_group"] == g for r in qa["records"]) for g in "ABC"}, {"A": 10, "B": 10, "C": 10})
+            for record in qa["records"]:
+                self.assertNotIn("center_x", record)
+                self.assertNotIn("suggestion", record)
+                self.assertNotIn("left_anchor", record)
+                self.assertNotIn("right_anchor", record)
+            qa_session_path = root / "qa_session.json"
+            qa_session = Task015QASession(qa, qa_session_path, TrainFrameCache(root / "cache", task008, "ffmpeg"))
+            self.assertIsNone(qa_session.state()["annotation"])
+            qa_id = qa["records"][0]["qa_record_id"]
+            qa_session.annotate(qa_id, "click", x=300.0, y=400.0, request_id="qa-click")
+            self.assertEqual(qa_session.state()["annotation"]["source"], "qa_human_click")
+            self.assertEqual(main_session_path.read_bytes(), original_sha)
+            resumed = Task015QASession(qa, qa_session_path, TrainFrameCache(root / "cache2", task008, "ffmpeg"))
+            self.assertEqual(resumed.state()["annotation"]["center_x"], 300.0)
+            resumed.annotate(qa_id, "undo", request_id="qa-undo")
+            self.assertIsNone(resumed.state()["annotation"])
+
+    def test_blinded_qa_server_is_localhost_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ground_truth, task008, report = _fixture(root)
+            queue = build_train_annotation_queue(ground_truth, task008, task014_report=report)
+            main_session = _empty_session(queue)
+            for group in "ABC":
+                for record in [r for r in queue["records"] if r["train_group"] == group][:10]:
+                    main_session["labels"][record["record_id"]] = {"visible": True, "center_x": 1.0, "center_y": 2.0, "source": "human_click"}
+            main_path = root / "session.json"
+            _atomic_session_write(main_path, main_session)
+            qa = build_task015_qa_queue(main_path, queue)
+            server = Task015QAHTTPServer(qa, root / "qa.json", root / "qa-cache", task008, "ffmpeg")
+            try:
+                self.assertEqual(server.server_address[0], "127.0.0.1")
+            finally:
+                server.server_close()
+            with self.assertRaises(Task015Error):
+                Task015QAHTTPServer(qa, root / "qa2.json", root / "qa-cache2", task008, "ffmpeg", host="0.0.0.0")
 
 
 if __name__ == "__main__":

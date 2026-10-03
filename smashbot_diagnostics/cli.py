@@ -45,7 +45,7 @@ from .task012_phase_b_corrected import run_phase_b_corrected
 from .task012_phase_d import PointDetectorPhaseBError as PointDetectorPhaseDError, run_phase_d
 from .task013_teacher import Task013Error, run_phase_a as run_task013_phase_a
 from .task014_teacher import Task014Error, run_phase_a as run_task014_phase_a
-from .task015_annotation import Task015Error, run_task015_ui
+from .task015_annotation import Task015Error, run_task015_qa_ui, run_task015_ui
 from .reporting import new_run_directory, write_json, write_summary
 from .realtime import (
     DECODER_PROFILES,
@@ -290,6 +290,19 @@ def build_parser() -> argparse.ArgumentParser:
     task015_label.add_argument("--cache-dir", type=Path, default=Path("artifacts/task015/cache"))
     task015_label.add_argument("--ffmpeg", default="ffmpeg")
     task015_label.add_argument("--port", type=_nonnegative_int, default=0)
+
+    task015_qa = subparsers.add_parser(
+        "perception-task015-qa",
+        help="serve the blinded, resumable Task 015 duplicate QA UI on localhost",
+    )
+    task015_qa.add_argument("--train-ground-truth", type=Path, default=Path("data/task010/train_ground_truth.json"))
+    task015_qa.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
+    task015_qa.add_argument("--task014-report", type=Path, default=Path("artifacts/task014/phase_a/report.json"))
+    task015_qa.add_argument("--session", type=Path, default=Path("artifacts/task015/session.json"))
+    task015_qa.add_argument("--qa-session", type=Path, default=Path("artifacts/task015/qa_session.json"))
+    task015_qa.add_argument("--cache-dir", type=Path, default=Path("artifacts/task015/qa_cache"))
+    task015_qa.add_argument("--ffmpeg", default="ffmpeg")
+    task015_qa.add_argument("--port", type=_nonnegative_int, default=0)
 
     train_subset = subparsers.add_parser(
         "perception-train-subset",
@@ -1633,6 +1646,24 @@ def _perception_task015_label(args: argparse.Namespace) -> int:
     return 0
 
 
+def _perception_task015_qa(args: argparse.Namespace) -> int:
+    try:
+        run_task015_qa_ui(
+            train_ground_truth=args.train_ground_truth,
+            task008_root=args.task008_root,
+            task014_report=args.task014_report,
+            train_session=args.session,
+            qa_session=args.qa_session,
+            cache_dir=args.cache_dir,
+            ffmpeg=args.ffmpeg,
+            port=args.port,
+        )
+    except Task015Error as exc:
+        print(f"Task 015 QA error: {exc}")
+        return 2
+    return 0
+
+
 def _perception_train_subset(args: argparse.Namespace) -> int:
     try:
         manifest = build_train_subset(
@@ -2067,6 +2098,8 @@ def main(argv: list[str] | None = None) -> int:
             return _perception_label(args)
         if args.command == "perception-task015-label":
             return _perception_task015_label(args)
+        if args.command == "perception-task015-qa":
+            return _perception_task015_qa(args)
         if args.command == "perception-train-subset":
             return _perception_train_subset(args)
         if args.command == "perception-train-ground-truth":

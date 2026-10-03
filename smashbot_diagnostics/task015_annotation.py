@@ -576,6 +576,297 @@ class Task015Session:
             self.cache.clear()
 
 
+def _load_main_session_readonly(path: Path, queue_document: dict[str, Any]) -> dict[str, Any]:
+    """Read the completed human session without recovery or replacement."""
+
+    path = Path(path).resolve()
+    if path.with_name(path.name + ".tmp").exists():
+        raise Task015Error("main TRAIN session has an unresolved temporary file; refusing QA")
+    try:
+        session = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise Task015Error(f"cannot read completed TRAIN session: {path}") from exc
+    if not isinstance(session, dict):
+        raise Task015Error("completed TRAIN session must be a JSON object")
+    _validate_session(session, queue_document)
+    return session
+
+
+def build_task015_qa_queue(
+    train_session: Path,
+    queue_document: dict[str, Any],
+) -> dict[str, Any]:
+    """Select the blinded 10-per-group QA set without copying human centers."""
+
+    session = _load_main_session_readonly(train_session, queue_document)
+    labels = session["labels"]
+    selected: list[dict[str, Any]] = []
+    for group in TRAIN_GROUPS:
+        visible = [
+            record
+            for record in queue_document["records"]
+            if record["train_group"] == group
+            and record["record_id"] in labels
+            and labels[record["record_id"]].get("visible") is True
+        ]
+        if len(visible) < 10:
+            raise Task015Error(f"group {group} has fewer than 10 completed visible labels for QA")
+        for record in visible[:10]:
+            selected.append({
+                "qa_record_id": f"qa_{group}_{len([item for item in selected if item['train_group'] == group]):02d}",
+                "source_record_id": record["record_id"],
+                "train_group": group,
+                "clip": record["clip"],
+                "source_run": record["source_run"],
+                "frame_index": record["frame_index"],
+                "pts_us": record["pts_us"],
+                "queue_index": record["queue_index"],
+            })
+    selected.sort(key=lambda item: (TRAIN_GROUPS.index(item["train_group"]), item["queue_index"]))
+    for index, item in enumerate(selected):
+        item["qa_index"] = index
+    return {
+        "schema_version": SESSION_SCHEMA_VERSION,
+        "dataset_role": "train_qa",
+        "width": FRAME_WIDTH,
+        "height": FRAME_HEIGHT,
+        "record_count": len(selected),
+        "selection_policy": {
+            "per_group": 10,
+            "ordering": "first ten visible human labels by frozen TRAIN queue order",
+            "original_centers_included": False,
+            "original_suggestions_included": False,
+            "source_session_sha256": _sha256_file(train_session),
+        },
+        "records": selected,
+    }
+
+
+def _empty_qa_session(qa_manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": SESSION_SCHEMA_VERSION,
+        "dataset_role": "train_qa",
+        "qa_manifest_sha256": _sha256(qa_manifest),
+        "source_session_sha256": qa_manifest["selection_policy"]["source_session_sha256"],
+        "cursor": 0,
+        "labels": {},
+        "history": [],
+        "processed_request_ids": [],
+        "records": qa_manifest["records"],
+    }
+
+
+def _validate_qa_session(session: dict[str, Any], qa_manifest: dict[str, Any]) -> None:
+    expected = _empty_qa_session(qa_manifest)
+    if session.get("schema_version") != SESSION_SCHEMA_VERSION or session.get("dataset_role") != "train_qa":
+        raise Task015Error("QA session schema or role is invalid")
+    if session.get("qa_manifest_sha256") != expected["qa_manifest_sha256"] or session.get("records") != expected["records"]:
+        raise Task015Error("QA session queue does not match the deterministic QA selection")
+    ids = {record["qa_record_id"] for record in qa_manifest["records"]}
+    if set(session.get("labels", {})) - ids:
+        raise Task015Error("QA session contains a label outside the QA queue")
+    if not isinstance(session.get("cursor"), int) or not 0 <= session["cursor"] < len(ids):
+        raise Task015Error("QA session cursor is invalid")
+
+
+class Task015QASession:
+    def __init__(self, qa_manifest: dict[str, Any], session_path: Path, cache: TrainFrameCache):
+        self.qa_manifest = qa_manifest
+        self.session_path = Path(session_path).resolve()
+        self.cache = cache
+        self._lock = RLock()
+        if self.session_path.exists() or self.session_path.with_name(self.session_path.name + ".tmp").exists():
+            self.session = _load_session_with_recovery(self.session_path)
+            _validate_qa_session(self.session, qa_manifest)
+        else:
+            self.session = _empty_qa_session(qa_manifest)
+            _atomic_session_write(self.session_path, self.session)
+        self.records = qa_manifest["records"]
+        self.by_id = {record["qa_record_id"]: record for record in self.records}
+
+    def _persist(self) -> None:
+        _atomic_session_write(self.session_path, self.session)
+
+    def state(self, *, move: int = 0) -> dict[str, Any]:
+        with self._lock:
+            if move not in {-1, 0, 1}:
+                raise Task015Error("move must be -1, 0, or 1")
+            if move:
+                self.session["cursor"] = max(0, min(len(self.records) - 1, self.session["cursor"] + move))
+                self._persist()
+            record = self.records[self.session["cursor"]]
+            labels = self.session["labels"]
+            by_group = {
+                group: sum(self.by_id[rid]["train_group"] == group for rid in labels)
+                for group in TRAIN_GROUPS
+            }
+            return {
+                "index": self.session["cursor"],
+                "count": len(self.records),
+                "record": record,
+                "annotation": deepcopy(labels.get(record["qa_record_id"])),
+                "storage_path": str(self.session_path),
+                "progress": {"labeled": len(labels), "remaining": len(self.records) - len(labels), "by_group": by_group},
+            }
+
+    def image(self, qa_record_id: str) -> bytes:
+        with self._lock:
+            try:
+                record = self.by_id[qa_record_id]
+            except KeyError as exc:
+                raise Task015Error("unknown QA record") from exc
+            return self.cache.read(record)
+
+    def annotate(self, qa_record_id: str, action: str, *, x: Any = None, y: Any = None, request_id: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            if qa_record_id not in self.by_id:
+                raise Task015Error("QA record is not in the selected queue")
+            if qa_record_id != self.records[self.session["cursor"]]["qa_record_id"]:
+                raise Task015Error("stale QA record_id: navigate back to the current frame")
+            if request_id and request_id in self.session["processed_request_ids"]:
+                return self.state()
+            previous = deepcopy(self.session["labels"].get(qa_record_id))
+            if action == "click":
+                label = {
+                    "visible": True,
+                    "center_x": Task015Session._validate_coordinate(x, "x", FRAME_WIDTH),
+                    "center_y": Task015Session._validate_coordinate(y, "y", FRAME_HEIGHT),
+                    "source": "qa_human_click",
+                }
+            elif action == "not_visible":
+                label = {"visible": False, "center_x": None, "center_y": None, "source": "qa_human_click"}
+            elif action == "undo":
+                if not self.session["history"]:
+                    raise Task015Error("there is no QA annotation to undo")
+                entry = self.session["history"].pop()
+                if entry["previous"] is None:
+                    self.session["labels"].pop(entry["qa_record_id"], None)
+                else:
+                    self.session["labels"][entry["qa_record_id"]] = entry["previous"]
+                if request_id:
+                    self.session["processed_request_ids"].append(request_id)
+                self._persist()
+                return self.state()
+            else:
+                raise Task015Error("QA action must be click, not_visible, or undo")
+            self.session["labels"][qa_record_id] = label
+            self.session["history"].append({"qa_record_id": qa_record_id, "previous": previous, "current": deepcopy(label), "action": action, "request_id": request_id})
+            if request_id:
+                self.session["processed_request_ids"].append(request_id)
+            self._persist()
+            return self.state()
+
+    def close(self) -> None:
+        with self._lock:
+            self.cache.clear()
+
+
+def _qa_html() -> str:
+    return r'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Task 015 — Blinded QA</title><style>
+body{margin:0;padding:16px;background:#f6f8fb;color:#17202a;font:15px/1.4 system-ui,sans-serif}.app{max-width:1250px;margin:auto}.header{position:sticky;top:0;background:#f6f8fb;padding-bottom:10px;z-index:3}.headline{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}.headline strong{font-size:1.5rem}.layout{display:grid;grid-template-columns:minmax(350px,1fr) 300px;gap:16px}.card{background:white;border:1px solid #d6dee8;border-radius:10px;padding:13px}.stage{position:relative;width:min(100%,620px);margin:auto}.stage img{display:block;width:100%;height:auto;cursor:crosshair}.marker{position:absolute;transform:translate(-50%,-50%);width:22px;height:22px;border:3px solid #f43f5e;border-radius:50%;pointer-events:none}.actions{display:flex;gap:7px;flex-wrap:wrap}button{font:inherit;border:1px solid #b8c4d1;border-radius:7px;background:#fff;padding:9px 12px;cursor:pointer}.small{color:#617083}.error{display:none;color:#b42318;background:#fee4e2;padding:8px;border-radius:6px}@media(max-width:800px){.layout{grid-template-columns:1fr}}
+</style></head><body><main class="app"><header class="header"><div>Task 015 — BLINDED QA</div><div class="headline"><strong id="position">Frame — / —</strong><span id="context"></span><span id="progress">QA 0 / 30</span></div></header><div class="layout"><section class="card"><div class="stage"><img id="frame" alt="QA frame"><span id="marker" class="marker" hidden></span></div></section><aside class="card"><div class="actions"><button id="prev">← Previous</button><button id="next">Next →</button><button id="not-visible">N — not visible</button><button id="undo">U / Backspace — undo</button></div><p class="small">Blinded audit: original click and suggestion are hidden. Click the shuttle point, or mark not visible.</p><p id="saved" class="small"></p><div id="error" class="error"></div></aside></div></main><script>
+let state=null,ready=false,seq=0;const $=id=>document.getElementById(id);function render(){const r=state.record,a=state.annotation;$('position').textContent=`Frame ${state.index+1} / ${state.count}`;$('context').textContent=`${r.train_group} · frame ${r.frame_index} · PTS ${r.pts_us}`;$('progress').textContent=`QA ${state.progress.labeled} / 30 · A ${state.progress.by_group.A} · B ${state.progress.by_group.B} · C ${state.progress.by_group.C}`;$('saved').textContent=`QA session saved at ${state.storage_path}`;const m=$('marker');if(a&&a.visible){m.hidden=false;m.style.left=(a.center_x/864*100)+'%';m.style.top=(a.center_y/1920*100)+'%'}else m.hidden=true;const img=$('frame');ready=false;img.src=`/frame/${encodeURIComponent(r.qa_record_id)}.png?${++seq}`;img.onload=()=>{ready=true};img.onerror=()=>showError('Frame load failed; QA is disabled')}
+function showError(x){$('error').textContent=x;$('error').style.display='block'}async function load(url='/state'){try{const r=await fetch(url);if(!r.ok)throw Error('state request failed');state=await r.json();$('error').style.display='none';render()}catch(e){showError(e.message)}}async function act(action,extra={}){if(!state||!ready)return;try{const r=await fetch('/qa',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qa_record_id:state.record.qa_record_id,action,request_id:`qa-${Date.now()}-${++seq}`,...extra})});const x=await r.json();if(!r.ok)throw Error(x.error||'save failed');state=x;render()}catch(e){showError('Save failed: '+e.message)}}$('frame').onclick=e=>{if(!ready)return;const b=e.currentTarget.getBoundingClientRect();act('click',{x:(e.clientX-b.left)*864/b.width,y:(e.clientY-b.top)*1920/b.height})};$('prev').onclick=()=>load('/state?move=-1');$('next').onclick=()=>load('/state?move=1');$('not-visible').onclick=()=>act('not_visible');$('undo').onclick=()=>act('undo');document.addEventListener('keydown',e=>{if(e.key==='ArrowLeft')load('/state?move=-1');else if(e.key==='ArrowRight')load('/state?move=1');else if(e.key.toLowerCase()==='n')act('not_visible');else if(e.key.toLowerCase()==='u'||e.key==='Backspace')act('undo')});load();
+</script></body></html>'''
+
+
+class _Task015QAHandler(BaseHTTPRequestHandler):
+    server: "Task015QAHTTPServer"
+
+    def _json(self, value: Any, status: int = 200) -> None:
+        payload = json.dumps(value, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/":
+                payload = _qa_html().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if parsed.path == "/state":
+                query = parsed.query
+                move = int(query.split("=", 1)[1]) if query.startswith("move=") else 0
+                self._json(self.server.session.state(move=move))
+                return
+            if parsed.path.startswith("/frame/") and parsed.path.endswith(".png"):
+                qa_record_id = unquote(parsed.path[len("/frame/") : -len(".png")])
+                payload = self.server.session.image(qa_record_id)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            self.send_error(404)
+        except (Task015Error, OSError, ValueError) as exc:
+            self._json({"error": str(exc)}, status=400 if parsed.path == "/state" else 404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        if urlparse(self.path).path != "/qa":
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 16 * 1024:
+                raise Task015Error("QA request is too large")
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(body, dict) or not isinstance(body.get("qa_record_id"), str):
+                raise Task015Error("QA requires an explicit qa_record_id")
+            self._json(self.server.session.annotate(body["qa_record_id"], str(body.get("action", "")), x=body.get("x"), y=body.get("y"), request_id=body.get("request_id")))
+        except (Task015Error, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            self._json({"error": str(exc)}, status=400)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
+
+
+class Task015QAHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+    def __init__(self, qa_manifest: dict[str, Any], session_path: Path, cache_dir: Path, task008_root: Path, ffmpeg: str, *, host: str = "127.0.0.1", port: int = 0):
+        if host != "127.0.0.1":
+            raise Task015Error("Task 015 QA must bind exclusively to 127.0.0.1")
+        self.session = Task015QASession(qa_manifest, session_path, TrainFrameCache(cache_dir, task008_root, ffmpeg))
+        super().__init__((host, port), _Task015QAHandler)
+
+    def server_close(self) -> None:
+        try:
+            super().server_close()
+        finally:
+            self.session.close()
+
+
+def run_task015_qa_ui(
+    *,
+    train_ground_truth: Path = Path("data/task010/train_ground_truth.json"),
+    task008_root: Path = Path("artifacts/task008"),
+    task014_report: Path = Path("artifacts/task014/phase_a/report.json"),
+    train_session: Path = Path("artifacts/task015/session.json"),
+    qa_session: Path = Path("artifacts/task015/qa_session.json"),
+    cache_dir: Path = Path("artifacts/task015/qa_cache"),
+    ffmpeg: str = "ffmpeg",
+    port: int = 0,
+) -> None:
+    queue = build_train_annotation_queue(train_ground_truth, task008_root, task014_report=task014_report)
+    qa_manifest = build_task015_qa_queue(train_session, queue)
+    server = Task015QAHTTPServer(qa_manifest, qa_session, cache_dir, task008_root, ffmpeg, host="127.0.0.1", port=port)
+    print(f"Task 015 blinded QA: http://127.0.0.1:{server.server_address[1]}/", flush=True)
+    print(f"QA session: {Path(qa_session).resolve()}", flush=True)
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+
+
 def _html() -> str:
     return r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
