@@ -1,0 +1,362 @@
+{
+  "acquisition_endpoints": [
+    {
+      "burst_id": "A_01",
+      "endpoint_pass_at_20px": true,
+      "error_px": 3.276893518890919,
+      "frame_index": 79,
+      "pair_pass": true
+    },
+    {
+      "burst_id": "A_01",
+      "endpoint_pass_at_20px": true,
+      "error_px": 4.262495717239944,
+      "frame_index": 80,
+      "pair_pass": true
+    },
+    {
+      "burst_id": "B_01",
+      "endpoint_pass_at_20px": true,
+      "error_px": 2.2613037500548354,
+      "frame_index": 78,
+      "pair_pass": true
+    },
+    {
+      "burst_id": "B_01",
+      "endpoint_pass_at_20px": true,
+      "error_px": 5.047288165764635,
+      "frame_index": 79,
+      "pair_pass": true
+    },
+    {
+      "burst_id": "C_01",
+      "endpoint_pass_at_20px": false,
+      "error_px": 20.483840543338218,
+      "frame_index": 351,
+      "pair_pass": false
+    },
+    {
+      "burst_id": "C_01",
+      "endpoint_pass_at_20px": true,
+      "error_px": 2.445964093553947,
+      "frame_index": 352,
+      "pair_pass": false
+    }
+  ],
+  "by_burst": {
+    "A_01": {
+      "errors": {
+        "count": 21,
+        "max": 9.328498521106182,
+        "mean": 4.573965741715585,
+        "p50": 4.27584333239196,
+        "p95": 7.732575997354731
+      },
+      "frames": 21,
+      "hits_at_10": 21,
+      "hits_at_20": 21
+    },
+    "B_01": {
+      "errors": {
+        "count": 21,
+        "max": 41.532206083838915,
+        "mean": 7.473409641369358,
+        "p50": 5.047288165764635,
+        "p95": 23.597006662801693
+      },
+      "frames": 21,
+      "hits_at_10": 19,
+      "hits_at_20": 19
+    },
+    "C_01": {
+      "errors": {
+        "count": 21,
+        "max": 49.72193525439562,
+        "mean": 12.35769556782661,
+        "p50": 3.4712783466597674,
+        "p95": 47.80181484728541
+      },
+      "frames": 21,
+      "hits_at_10": 16,
+      "hits_at_20": 16
+    }
+  },
+  "determinism": {
+    "fold_A_loss_delta": 0.0,
+    "fold_A_run1_parameter_hash": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+    "fold_A_run2_parameter_hash": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+    "fold_B_parameter_hash": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+    "fold_C_parameter_hash": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3",
+    "loss_equal": true,
+    "parameter_hash_equal": true
+  },
+  "global_metrics": {
+    "localization": {
+      "count": 63,
+      "max": 49.72193525439562,
+      "mean": 8.13502365030385,
+      "p50": 4.262495717239944,
+      "p95": 42.2771849364435
+    },
+    "recall_at_10": {
+      "matched": 56,
+      "rate": 0.8888888888888888,
+      "total": 63
+    },
+    "recall_at_20": {
+      "matched": 56,
+      "rate": 0.8888888888888888,
+      "total": 63
+    }
+  },
+  "negative_checks": {
+    "negative_fp_count": 9,
+    "negative_fp_rate": 0.6,
+    "negative_fp_total": 15,
+    "rows": [
+      {
+        "burst_id": "C_NEG_01",
+        "fold": "fold_A",
+        "frame_index": 69,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "fold": "fold_A",
+        "frame_index": 208,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "fold": "fold_A",
+        "frame_index": 369,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "fold": "fold_A",
+        "frame_index": 525,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "fold": "fold_A",
+        "frame_index": 649,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_01",
+        "fold": "fold_B",
+        "frame_index": 69,
+        "object": true,
+        "output": {
+          "cell_x": 39,
+          "cell_y": 30,
+          "heatmap_logit": 1.7060247659683228,
+          "presence_logit": 1.6188621520996094,
+          "x": 629.6226582527161,
+          "y": 742.8219392299652
+        }
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "fold": "fold_B",
+        "frame_index": 208,
+        "object": true,
+        "output": {
+          "cell_x": 4,
+          "cell_y": 38,
+          "heatmap_logit": -3.845398426055908,
+          "presence_logit": 2.292332887649536,
+          "x": 79.36609554290771,
+          "y": 869.4439351558685
+        }
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "fold": "fold_B",
+        "frame_index": 369,
+        "object": true,
+        "output": {
+          "cell_x": 4,
+          "cell_y": 38,
+          "heatmap_logit": -3.704704523086548,
+          "presence_logit": 2.360147714614868,
+          "x": 79.35724353790283,
+          "y": 869.5371533632278
+        }
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "fold": "fold_B",
+        "frame_index": 525,
+        "object": true,
+        "output": {
+          "cell_x": 4,
+          "cell_y": 38,
+          "heatmap_logit": -3.727238416671753,
+          "presence_logit": 2.3596272468566895,
+          "x": 79.34720230102539,
+          "y": 869.5406595468521
+        }
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "fold": "fold_B",
+        "frame_index": 649,
+        "object": true,
+        "output": {
+          "cell_x": 27,
+          "cell_y": 42,
+          "heatmap_logit": -5.733117580413818,
+          "presence_logit": 2.32106614112854,
+          "x": 442.1997585296631,
+          "y": 943.0812244415283
+        }
+      },
+      {
+        "burst_id": "C_NEG_01",
+        "fold": "fold_C",
+        "frame_index": 69,
+        "object": false,
+        "output": null
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "fold": "fold_C",
+        "frame_index": 208,
+        "object": true,
+        "output": {
+          "cell_x": 22,
+          "cell_y": 21,
+          "heatmap_logit": 0.31419795751571655,
+          "presence_logit": 3.7231369018554688,
+          "x": 357.7819085121155,
+          "y": 606.7368669509888
+        }
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "fold": "fold_C",
+        "frame_index": 369,
+        "object": true,
+        "output": {
+          "cell_x": 22,
+          "cell_y": 21,
+          "heatmap_logit": 0.3141995966434479,
+          "presence_logit": 3.5539002418518066,
+          "x": 357.78192138671875,
+          "y": 606.7369346618652
+        }
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "fold": "fold_C",
+        "frame_index": 525,
+        "object": true,
+        "output": {
+          "cell_x": 22,
+          "cell_y": 21,
+          "heatmap_logit": 0.3141995966434479,
+          "presence_logit": 3.5530314445495605,
+          "x": 357.78192138671875,
+          "y": 606.7369346618652
+        }
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "fold": "fold_C",
+        "frame_index": 649,
+        "object": true,
+        "output": {
+          "cell_x": 26,
+          "cell_y": 45,
+          "heatmap_logit": -4.182582855224609,
+          "presence_logit": 4.804031848907471,
+          "x": 423.6595735549927,
+          "y": 985.8500604629517
+        }
+      }
+    ]
+  },
+  "protocol": {
+    "architecture": "H2",
+    "batch_size": 8,
+    "epochs": 40,
+    "learning_rate": 0.001,
+    "lobo": {
+      "fold_A": {
+        "train_groups": [
+          "B",
+          "C"
+        ],
+        "validate": "A_01"
+      },
+      "fold_B": {
+        "train_groups": [
+          "A",
+          "C"
+        ],
+        "validate": "B_01"
+      },
+      "fold_C": {
+        "train_groups": [
+          "A",
+          "B"
+        ],
+        "validate": "C_01"
+      }
+    },
+    "loss": "presence_BCE + sigma=1 alpha=2 beta=4 penalty-reduced focal + offset SmoothL1",
+    "no_augmentation": true,
+    "no_early_stopping": true,
+    "normalization": "H2 Task012 crop/pad + INTER_AREA 432x832 + RGB + [-1,1]",
+    "optimizer": "Adam",
+    "seed": 20261001,
+    "threads": 2,
+    "weight_decay": 0.0001
+  },
+  "provenance_flags": {
+    "dev_used_for_fitting": false,
+    "dev_used_for_selection": false,
+    "holdout_used": false,
+    "phase_c_executed": false
+  },
+  "schema_version": 1,
+  "snapshot": {
+    "path": "data/task015/human_dense_train.json",
+    "records": 781,
+    "sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3"
+  },
+  "source_report": "artifacts/task015/dense_h2/report.json",
+  "source_report_sha256": "cf52f99a0befd1855c079cda082351eaa2f5669c8f0611f1f40961d7ed368f1b",
+  "train_counts_by_fold": {
+    "fold_A": {
+      "train_invisible": 25,
+      "train_records": 520,
+      "train_visible": 495,
+      "validation_burst": "A_01",
+      "validation_records": 21
+    },
+    "fold_B": {
+      "train_invisible": 27,
+      "train_records": 521,
+      "train_visible": 494,
+      "validation_burst": "B_01",
+      "validation_records": 21
+    },
+    "fold_C": {
+      "train_invisible": 24,
+      "train_records": 521,
+      "train_visible": 497,
+      "validation_burst": "C_01",
+      "validation_records": 21
+    }
+  },
+  "verdict": "STOP_HUMAN_DENSE_H2_SEMANTICS"
+}
