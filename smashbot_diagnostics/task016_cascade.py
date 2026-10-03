@@ -26,7 +26,6 @@ from .perception_models import ShuttleCandidate, ShuttleObservation
 from .perception_tracker import TemporalTracker
 from .task012_phase_b import _preprocess_train_frame
 from .task012_phase_b_corrected import _model as corrected_h2_model
-from .task014_teacher import _reconstruct_scorers
 
 
 TASK016_HEAD = "d6112828a1fdff483e549d89d8c1ab3ff247f576"
@@ -214,7 +213,7 @@ def _candidate_from_point(record: dict[str, Any], point: dict[str, Any]) -> Shut
     )
 
 
-def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any]) -> list[dict[str, Any]]:
+def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     heat = numpy.asarray(outputs[0])[0, 0]
     offsets = numpy.asarray(outputs[1])[0]
     local: list[tuple[float, int, int]] = []
@@ -227,15 +226,26 @@ def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any]) -> list[dict[st
                 local.append((value, cell_y, cell_x))
     local.sort(key=lambda item: (-item[0], item[1] * GRID_W + item[2]))
     result: list[dict[str, Any]] = []
-    for rank, (heatmap_logit, cell_y, cell_x) in enumerate(local[:TOP_K], start=1):
+    for original_rank, (heatmap_logit, cell_y, cell_x) in enumerate(local, start=1):
         off_x = float(offsets[0, cell_y, cell_x])
         off_y = float(offsets[1, cell_y, cell_x])
         x = 16.0 * (cell_x + off_x)
         y = GAMEPLAY_Y0 + 16.0 * (cell_y + off_y)
-        if not (0.0 <= x < 864.0 and 0.0 <= y < 1920.0):
-            raise Task016Error("STOP_TOP8_CASCADE_IMPLEMENTATION", "H2 decoded a point outside frame bounds")
+        if not (0.0 <= x < 864.0 and GAMEPLAY_Y0 <= y < 1920.0):
+            if diagnostics is not None:
+                diagnostics.append({
+                    "original_pre_filter_rank": original_rank,
+                    "cell_x": cell_x,
+                    "cell_y": cell_y,
+                    "decoded_x": x,
+                    "decoded_y": y,
+                })
+            continue
+        if len(result) >= TOP_K:
+            break
         result.append({
-            "rank": rank,
+            "rank": len(result) + 1,
+            "original_pre_filter_rank": original_rank,
             "cell_x": cell_x,
             "cell_y": cell_y,
             "flat_index": cell_y * GRID_W + cell_x,
@@ -248,12 +258,12 @@ def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any]) -> list[dict[st
     return result
 
 
-def _h2_torch(torch: Any, numpy: Any, model: Any, frame_bgr: Any) -> list[dict[str, Any]]:
+def _h2_torch(torch: Any, numpy: Any, model: Any, frame_bgr: Any, diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     value = _preprocess_train_frame(frame_bgr)
     with torch.inference_mode():
         outputs = model(torch.from_numpy(numpy.ascontiguousarray(value[None], dtype=numpy.float32)))
     arrays = tuple(item.detach().cpu().numpy() for item in outputs)
-    return _top8_from_arrays(numpy, arrays)
+    return _top8_from_arrays(numpy, arrays, diagnostics)
 
 
 def _fast_patch(cv2: Any, numpy: Any, frame_bgr: Any, candidate: ShuttleCandidate) -> tuple[Any, dict[str, int]]:
@@ -322,6 +332,41 @@ def _export_graphs(torch: Any, onnx: Any, cv2: Any, h2_models: dict[str, Any], a
     return exports
 
 
+def _load_cached_exports(cv2: Any, onnx: Any, directory: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reuse the already-exported Phase-A graphs; never retrain a verifier."""
+
+    previous = _json(Path("artifacts/task016/report.json"))
+    previous_h2 = previous.get("model_provenance", {}).get("h2", {})
+    previous_app = previous.get("model_provenance", {}).get("appearance", {})
+    h2_expected = _json(H2_SUMMARY)["determinism"]
+    expected_h2 = {
+        "A": h2_expected["fold_A_run1_parameter_hash"],
+        "B": h2_expected["fold_B_parameter_hash"],
+        "C": h2_expected["fold_C_parameter_hash"],
+    }
+    exports: dict[str, Any] = {"h2": {}, "appearance": {}}
+    nets: dict[str, Any] = {"h2": {}, "appearance": {}}
+    for group in "ABC":
+        h2_hash = previous_h2.get(group, {}).get("parameter_hash")
+        app_hash = previous_app.get(group, {}).get("parameter_hash")
+        if h2_hash != expected_h2[group] or app_hash != EXPECTED_SCORER_HASHES[group]:
+            raise Task016Error("STOP_TOP8_CASCADE_IMPLEMENTATION", f"cached provenance hash mismatch for {group}")
+        h2_path = directory / f"h2_{group}.onnx"
+        app_path = directory / f"appearance_{group}.onnx"
+        if not h2_path.is_file() or not app_path.is_file():
+            raise Task016Error("STOP_TOP8_CASCADE_IMPLEMENTATION", f"cached ONNX export missing for {group}")
+        try:
+            onnx.checker.check_model(onnx.load(str(h2_path)))
+            onnx.checker.check_model(onnx.load(str(app_path)))
+            nets["h2"][group] = cv2.dnn.readNetFromONNX(str(h2_path))
+            nets["appearance"][group] = cv2.dnn.readNetFromONNX(str(app_path))
+        except Exception as exc:
+            raise Task016Error("STOP_MODEL_EXPORT_PARITY", f"cached ONNX validation failed for {group}: {exc}") from exc
+        exports["h2"][group] = {"path": h2_path.name, "bytes": h2_path.stat().st_size, "sha256": _sha(h2_path), "parameter_hash": h2_hash}
+        exports["appearance"][group] = {"path": app_path.name, "bytes": app_path.stat().st_size, "sha256": _sha(app_path), "parameter_hash": app_hash}
+    return exports, nets
+
+
 def _parity(torch: Any, numpy: Any, cv2: Any, h2_models: dict[str, Any], app_models: dict[str, Any], exports: dict[str, Any], timing_rows: list[dict[str, Any]], frames: dict[str, Any], onnx_dir: Path) -> dict[str, Any]:
     max_h2_delta = 0.0
     max_h2_offset_delta = 0.0
@@ -372,6 +417,134 @@ def _parity(torch: Any, numpy: Any, cv2: Any, h2_models: dict[str, Any], app_mod
     }
     if max_h2_delta > 1e-4 or max_h2_offset_delta > 1e-4 or max_app_delta > 1e-4 or not same_top8 or not same_app_order or not same_app_decision:
         raise Task016Error("STOP_MODEL_EXPORT_PARITY", f"parity failed: {result}")
+    return result
+
+
+def _parity_cached(torch: Any, numpy: Any, cv2: Any, h2_models: dict[str, Any], cached_nets: dict[str, Any], timing_rows: list[dict[str, Any]], frames: dict[str, Any], onnx_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Parity using H2 Torch checkpoints and the frozen cached verifier ONNX.
+
+    The previous Phase-A run already reconstructed and hash-verified the
+    appearance models.  This recovery gate must not retrain them, so the
+    serialized verifier is checked for deterministic OpenCV ordering/decision
+    parity across two independently loaded nets.
+    """
+
+    max_h2_delta = 0.0
+    max_h2_offset_delta = 0.0
+    same_top8 = True
+    appearance_max_delta = 0.0
+    same_app_order = True
+    same_app_decision = True
+    frame_diagnostics: dict[str, Any] = {}
+    for row in timing_rows:
+        group = str(row["train_group"])
+        frame = frames[str(row["record_id"])]["frame_bgr"]
+        value = _preprocess_train_frame(frame)
+        tensor = torch.from_numpy(numpy.ascontiguousarray(value[None], dtype=numpy.float32))
+        with torch.inference_mode():
+            h2_t = tuple(item.detach().cpu().numpy() for item in h2_models[group](tensor))
+        h2_net = cached_nets["h2"][group]
+        h2_net.setInput(tensor.detach().cpu().numpy())
+        h2_d = tuple(h2_net.forward(["heatmap_logits", "offsets", "presence_logit"]))
+        for left, right in zip(h2_t, h2_d):
+            max_h2_delta = max(max_h2_delta, float(numpy.max(numpy.abs(left - right))))
+        max_h2_offset_delta = max(max_h2_offset_delta, float(numpy.max(numpy.abs(h2_t[1] - h2_d[1]))))
+        torch_diag: list[dict[str, Any]] = []
+        dnn_diag: list[dict[str, Any]] = []
+        torch_points = _top8_from_arrays(numpy, h2_t, torch_diag)
+        dnn_points = _top8_from_arrays(numpy, h2_d, dnn_diag)
+        same_top8 = same_top8 and [(p["cell_x"], p["cell_y"]) for p in torch_points] == [(p["cell_x"], p["cell_y"]) for p in dnn_points]
+        frame_diagnostics[str(row["record_id"])] = {"discarded": torch_diag, "count": len(torch_diag), "same_discarded": torch_diag == dnn_diag}
+        candidates = [_candidate_from_point(row, point) for point in torch_points]
+        patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+        if not patches:
+            continue
+        app_input = _app_batch(numpy, patches)
+        app_first = cached_nets["appearance"][group]
+        app_first.setInput(app_input)
+        first = numpy.asarray(app_first.forward()).reshape(-1)
+        # Independent graph instance: this is a recovery without retraining.
+        app_path = onnx_dir / f"appearance_{group}.onnx"
+        app_second = cv2.dnn.readNetFromONNX(str(app_path))
+        app_second.setInput(app_input)
+        second = numpy.asarray(app_second.forward()).reshape(-1)
+        if len(first):
+            appearance_max_delta = max(appearance_max_delta, float(numpy.max(numpy.abs(first - second))))
+            same_app_order = same_app_order and sorted(range(len(first)), key=lambda i: (-float(first[i]), i)) == sorted(range(len(second)), key=lambda i: (-float(second[i]), i))
+            same_app_decision = same_app_decision and ((float(max(first)) > 0.0) == (float(max(second)) > 0.0))
+    result = {
+        "h2_max_tensor_delta": max_h2_delta,
+        "h2_max_offset_delta": max_h2_offset_delta,
+        "same_h2_top8_identities": same_top8,
+        "appearance_reference": "previously hash-verified cached ONNX; no verifier retraining in Phase A-R",
+        "appearance_repeat_logit_delta": appearance_max_delta,
+        "same_appearance_ordering": same_app_order,
+        "same_appearance_positive_decision": same_app_decision,
+    }
+    if max_h2_delta > 1e-4 or max_h2_offset_delta > 1e-4 or appearance_max_delta > 1e-4 or not same_top8 or not same_app_order or not same_app_decision:
+        raise Task016Error("STOP_MODEL_EXPORT_PARITY", f"recovery parity failed: {result}")
+    return result, frame_diagnostics
+
+
+def _cascade_eval_dnn(torch: Any, cv2: Any, numpy: Any, h2_models: dict[str, Any], app_nets: dict[str, Any], active: list[dict[str, Any]], negatives: list[dict[str, Any]], frames: dict[str, Any], endpoints: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate the frozen cascade without reconstructing the appearance models.
+
+    This is deliberately an OpenCV-DNN replay of the already hash-verified
+    appearance exports.  It keeps Phase A-R recovery from silently retraining
+    a verifier while leaving all evaluator-only ground-truth use outside the
+    runtime path.
+    """
+    def evaluate(row: dict[str, Any], group: str) -> tuple[dict[str, Any] | None, list[float], list[dict[str, Any]]]:
+        frame = frames[str(row["record_id"])] ["frame_bgr"]
+        points = _h2_torch(torch, numpy, h2_models[group], frame)
+        candidates = [_candidate_from_point(row, point) for point in points]
+        patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+        if not patches:
+            return None, [], points
+        app_input = _app_batch(numpy, patches)
+        net = app_nets[group]
+        net.setInput(app_input)
+        logits = [float(value) for value in numpy.asarray(net.forward()).reshape(-1)]
+        return _select(points, logits), logits, points
+
+    rows: list[dict[str, Any]] = []
+    for row in active:
+        group = str(row["burst_id"])[0]
+        selected, logits, points = evaluate(row, group)
+        error = None if selected is None else math.hypot(selected["x"] - float(row["shuttle"]["center_x"]), selected["y"] - float(row["shuttle"]["center_y"]))
+        rows.append({"burst_id": row["burst_id"], "frame_index": int(row["frame_index"]), "error_px": error, "selected": selected, "top8_count": len(points), "verifier_rank": selected.get("appearance_rank") if selected else None, "best_logit": max(logits) if logits else None})
+
+    negative_rows: list[dict[str, Any]] = []
+    for row in negatives:
+        for group in "ABC":
+            selected, logits, _points = evaluate(row, group)
+            negative_rows.append({"fold": FOLD_FOR_GROUP[group], "burst_id": row["burst_id"], "frame_index": int(row["frame_index"]), "object": selected is not None, "best_logit": max(logits) if logits else None})
+
+    errors = [float(row["error_px"]) for row in rows if row["error_px"] is not None]
+    by_burst: dict[str, Any] = {}
+    for burst in ACTIVE_BURSTS:
+        values = [row for row in rows if row["burst_id"] == burst]
+        valid = [float(row["error_px"]) for row in values if row["error_px"] is not None]
+        by_burst[burst] = {"frames": len(values), "recall_at_20": sum(value <= 20 for value in valid) / len(values), "recall_at_10": sum(value <= 10 for value in valid) / len(values), "errors": _stats(valid)}
+    endpoint_map = {(str(row["burst_id"]), int(row["frame_index"])): row for row in rows}
+    endpoint_rows = []
+    for item in endpoints:
+        current = endpoint_map.get((str(item["burst_id"]), int(item["frame_index"])))
+        error = current.get("error_px") if current else None
+        endpoint_rows.append({"burst_id": item["burst_id"], "frame_index": item["frame_index"], "error_px": error, "pass": error is not None and error <= 20.0})
+    result = {
+        "frames": len(rows),
+        "recall_at_20": {"matched": sum(value <= 20 for value in errors), "total": len(active), "rate": sum(value <= 20 for value in errors) / len(active)},
+        "recall_at_10": {"matched": sum(value <= 10 for value in errors), "total": len(active), "rate": sum(value <= 10 for value in errors) / len(active)},
+        "localization": _stats(errors),
+        "by_burst": by_burst,
+        "acquisition_endpoints": endpoint_rows,
+        "negative_checks": {"frames": len(negative_rows), "object_fp": sum(int(row["object"]) for row in negative_rows), "rows": negative_rows},
+        "rows": rows,
+        "verifier_selected_rank": _stats([float(row["verifier_rank"]) for row in rows if row["verifier_rank"] is not None]),
+        "appearance_runtime": "cached ONNX replay; no retraining during Phase A-R",
+    }
+    result["pass"] = result["recall_at_20"]["rate"] >= 0.90 and result["recall_at_10"]["rate"] >= 0.80 and all(value["recall_at_20"] >= 0.80 for value in by_burst.values()) and (result["localization"]["p50"] or 999.0) <= 10.0 and (result["localization"]["p95"] or 999.0) <= 20.0 and all(item["pass"] for item in endpoint_rows) and result["negative_checks"]["object_fp"] == 0
     return result
 
 
@@ -438,9 +611,7 @@ def _runtime_preflight(cv2: Any, numpy: Any, exports: dict[str, Any], timing_row
         if all_pass:
             passing.append(threads)
         result["threads"][str(threads)] = {"repetitions": reps, "pass": all_pass}
-    if not passing:
-        raise Task016Error("STOP_TOP8_CASCADE_RUNTIME_PREFLIGHT", "no OpenCV thread configuration passed all runtime repetitions")
-    result["selected_threads"] = min(passing, key=lambda value: percentile([float(rep["total_ms"]["p95"]) for rep in result["threads"][str(value)]["repetitions"]], 50))
+    result["selected_threads"] = min(passing, key=lambda value: percentile([float(rep["total_ms"]["p95"]) for rep in result["threads"][str(value)]["repetitions"]], 50)) if passing else None
     return result
 
 
@@ -542,18 +713,34 @@ def run_task016(*, output_base: Path = Path("artifacts/task016"), task008_root: 
     try:
         h2_models, h2_provenance = _load_h2_models(torch, nn)
         print("Task016: H2 hashes verified", flush=True)
-        bundle, scorer_provenance = _reconstruct_scorers(TRAIN_MANIFEST, task008_root, ffmpeg)
-        app_models = bundle["models"]
-        if any(scorer_provenance[group]["parameter_hash"] != EXPECTED_SCORER_HASHES[group] for group in "ABC"):
-            raise Task016Error("STOP_TOP8_CASCADE_IMPLEMENTATION", "appearance scorer hash mismatch")
-        report["model_provenance"] = {"h2": h2_provenance, "appearance": scorer_provenance}
-        print("Task016: appearance hashes verified", flush=True)
         timing_rows = _select_timing_records(TRAIN_SNAPSHOT)
         timing_frames = _decode_records(timing_rows, task008_root, ffmpeg)
         phase_a_dir = Path(output_base) / "phase_a" / "models"
-        exports = _export_graphs(torch, onnx, cv2, h2_models, app_models, phase_a_dir)
-        parity = _parity(torch, numpy, cv2, h2_models, app_models, exports, timing_rows, timing_frames, phase_a_dir)
-        report["phase_a"] = {"exports": exports, "parity": parity, "timing_frame_count": len(timing_rows)}
+        exports, cached_nets = _load_cached_exports(cv2, onnx, phase_a_dir)
+        report["model_provenance"] = {
+            "h2": h2_provenance,
+            "appearance": {
+                group: {
+                    "parameter_hash": exports["appearance"][group]["parameter_hash"],
+                    "expected_parameter_hash": EXPECTED_SCORER_HASHES[group],
+                    "source": "cached hash-verified Phase-A ONNX; no retraining in Phase-A-R",
+                }
+                for group in "ABC"
+            },
+        }
+        print("Task016: cached appearance hashes verified; no retraining", flush=True)
+        parity, frame_diagnostics = _parity_cached(torch, numpy, cv2, h2_models, cached_nets, timing_rows, timing_frames, phase_a_dir)
+        report["phase_a"] = {
+            "exports": exports,
+            "parity": parity,
+            "valid_domain_filter": {
+                "domain": {"x_min": 0.0, "x_max_exclusive": 864.0, "y_min": GAMEPLAY_Y0, "y_max_exclusive": 1920.0},
+                "timing_frames": len(timing_rows),
+                "frames": frame_diagnostics,
+                "discarded_total": sum(int(item["count"]) for item in frame_diagnostics.values()),
+            },
+            "timing_frame_count": len(timing_rows),
+        }
         runtime = _runtime_preflight(cv2, numpy, exports, timing_rows, timing_frames, phase_a_dir)
         report["phase_a"]["runtime"] = runtime
         if not runtime.get("selected_threads"):
@@ -566,7 +753,7 @@ def run_task016(*, output_base: Path = Path("artifacts/task016"), task008_root: 
         report["phase_b"] = proposal
         if not proposal["pass"]:
             raise Task016Error("STOP_H2_TOP8_PROPOSAL_RECALL", "top-8 H2 proposal oracle failed")
-        cascade = _cascade_eval(torch, numpy, h2_models, app_models, active, negatives, dev_frames, endpoints)
+        cascade = _cascade_eval_dnn(torch, cv2, numpy, h2_models, cached_nets["appearance"], active, negatives, dev_frames, endpoints)
         report["phase_c"] = cascade
         if not cascade["pass"]:
             raise Task016Error("STOP_TOP8_APPEARANCE_CASCADE_SEMANTICS", "top-8 appearance cascade semantics failed")

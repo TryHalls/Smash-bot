@@ -42,6 +42,39 @@ class Task016CascadeTests(unittest.TestCase):
         tied = [(row["cell_y"], row["cell_x"]) for row in result[:2]]
         self.assertEqual(tied, [(5, 6), (5, 7)])
 
+    def test_padding_band_is_discarded_without_clipping_and_next_peak_fills_top8(self) -> None:
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("NumPy unavailable")
+        import numpy as np
+
+        heat = np.full((1, 1, 104, 54), -20.0, dtype=np.float32)
+        heat[0, 0, 103, 4] = 10.0  # invalid y after offset decode
+        heat[0, 0, 10, 4] = 9.0
+        offsets = np.zeros((1, 2, 104, 54), dtype=np.float32)
+        offsets[0, 1, 103, 4] = 1.0
+        diagnostics: list[dict[str, float | int]] = []
+        points = _top8_from_arrays(np, (heat, offsets, np.zeros((1, 1), dtype=np.float32)), diagnostics)
+        self.assertTrue(diagnostics)
+        self.assertEqual(diagnostics[0]["cell_y"], 103)
+        self.assertGreater(float(diagnostics[0]["decoded_y"]), 1920.0)
+        self.assertEqual(points[0]["cell_y"], 10)
+        self.assertEqual(points[0]["rank"], 1)
+        self.assertNotEqual(points[0]["y"], 1919.0)
+
+    def test_fewer_than_eight_valid_maxima_are_returned_without_fabrication(self) -> None:
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("NumPy unavailable")
+        import numpy as np
+
+        heat = np.full((1, 1, 104, 54), -20.0, dtype=np.float32)
+        heat[0, 0, 103, 4] = 10.0
+        offsets = np.zeros((1, 2, 104, 54), dtype=np.float32)
+        offsets[0, 1, :, :] = 200.0
+        diagnostics: list[dict[str, float | int]] = []
+        points = _top8_from_arrays(np, (heat, offsets, np.zeros((1, 1), dtype=np.float32)), diagnostics)
+        self.assertEqual(points, [])
+        self.assertGreater(len(diagnostics), 0)
+
     @unittest.skipUnless(importlib.util.find_spec("cv2") is not None, "OpenCV unavailable")
     def test_fast_patch_is_byte_equivalent_to_frozen_canonical_patch(self) -> None:
         import cv2

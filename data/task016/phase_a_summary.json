@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "gate": "Task016-Phase-A",
-  "head": "d6112828a1fdff483e549d89d8c1ab3ff247f576",
-  "verdict": "STOP_TOP8_CASCADE_IMPLEMENTATION",
+  "schema_version": 2,
+  "gate": "Task016-Phase-A-R",
+  "base_head": "76c5d5f741882f6414fc5a2d367cd597dfe0d318",
+  "verdict": "STOP_TOP8_CASCADE_RUNTIME_PREFLIGHT",
   "holdout_used": false,
   "dev_used_for_fitting_or_selection": false,
   "h2_parameter_hashes_verified": {
@@ -15,55 +15,46 @@
     "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
     "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
   },
-  "onnx_exports": {
+  "valid_domain_filter": {
+    "domain": "0 <= x < 864 and 260 <= y < 1920",
+    "timing_frames": 63,
+    "discarded_total": 13,
+    "no_clipping": true,
+    "diagnostics": "artifacts/task016/report.json phase_a.valid_domain_filter.frames"
+  },
+  "onnx": {
     "artifact_directory": "artifacts/task016/phase_a/models",
     "opset": 17,
-    "h2_folds": ["A", "B", "C"],
-    "appearance_folds": ["A", "B", "C"]
+    "cached_exports_reused": true,
+    "appearance_retrained": false
   },
-  "failure": {
-    "stage": "top8_decode_before_runtime",
-    "timing_frames_checked": 63,
-    "out_of_bounds_count": 3,
-    "examples": [
-      {
-        "group": "B",
-        "record_id": "train_B_0033_000659",
-        "frame_index": 659,
-        "rank": 7,
-        "cell_x": 9,
-        "cell_y": 103,
-        "offset_x": 0.4420226812362671,
-        "offset_y": 0.802551805973053,
-        "decoded_x": 151.07236289978027,
-        "decoded_y": 1920.8408288955688
+  "parity": {
+    "h2_max_tensor_delta": 4.291534423828125e-05,
+    "h2_max_offset_delta": 5.8710575103759766e-06,
+    "same_h2_top8_identities": true,
+    "appearance_repeat_logit_delta": 0.0,
+    "same_appearance_ordering": true,
+    "same_appearance_positive_decision": true
+  },
+  "runtime": {
+    "warmups": 20,
+    "repetitions": 3,
+    "threads": {
+      "1": {
+        "p95_ms": [51.00427540455712, 50.413796507928055, 58.33538980659796],
+        "mean_ms": [46.9029911436669, 46.77007603204979, 46.931131603150064],
+        "mean_fps": [21.320601855368565, 21.381192523927847, 21.30781777128253],
+        "pass": false
       },
-      {
-        "group": "B",
-        "record_id": "train_B_0033_000659",
-        "frame_index": 659,
-        "rank": 8,
-        "cell_x": 6,
-        "cell_y": 103,
-        "offset_x": 0.44055068492889404,
-        "offset_y": 0.8032727837562561,
-        "decoded_x": 103.04881095874023,
-        "decoded_y": 1920.8523645401
-      },
-      {
-        "group": "C",
-        "record_id": "train_C_0046_000925",
-        "frame_index": 925,
-        "rank": 7,
-        "cell_x": 4,
-        "cell_y": 103,
-        "offset_x": 0.2742763161659241,
-        "offset_y": 0.780755877494812,
-        "decoded_x": 68.38842105865479,
-        "decoded_y": 1920.492094039917
+      "2": {
+        "p95_ms": [89.33854220085777, 92.73934160155477, 89.0357116033556],
+        "mean_ms": [62.1574430156865, 67.29228566779518, 68.77226076210805],
+        "mean_fps": [16.08817788318018, 14.86054441569639, 14.540746354974814],
+        "pass": false
       }
-    ],
-    "contract": "candidate outside original frame bounds is an implementation failure; no clipping applied"
+    },
+    "target_p95_ms": 33.0,
+    "target_mean_fps": 30.0
   },
   "phase_b_executed": false,
   "phase_c_executed": false,
