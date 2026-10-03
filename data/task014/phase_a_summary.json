@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "task": "task014-bidirectional-teacher",
+  "gate": "Task014-Phase-A",
+  "verdict": "STOP_BIDIR_TEACHER_PRECISION",
+  "source_report": "artifacts/task014/phase_a/report.json",
+  "source_report_sha256": "92688636943b874b70418928c6636a6ed30879df089617614ef4e6acdf3c9f00",
+  "provenance": {
+    "report_head": "fa6e208adf08af5543940f2b59103e88dc1dd335",
+    "report_code_commit": "fa6e208adf08af5543940f2b59103e88dc1dd335",
+    "expected_base": "fa6e208adf08af5543940f2b59103e88dc1dd335",
+    "dev_used_for_fitting_or_selection": false,
+    "holdout_used": false
+  },
+  "counts": {
+    "hidden_records": 144,
+    "hidden_visible": 117,
+    "hidden_invisible": 27,
+    "global_emitted_visible": 21,
+    "global_coverage": 0.1794871794871795,
+    "precision_at_10": 1.0,
+    "precision_at_20": 1.0,
+    "invisible_fp": 0
+  },
+  "groups": {
+    "A": {
+      "hidden_records": 47,
+      "visible": 38,
+      "invisible": 9,
+      "emitted_visible": 10,
+      "coverage": 0.2631578947368421,
+      "precision_at_10": 1.0,
+      "precision_at_20": 1.0
+    },
+    "B": {
+      "hidden_records": 51,
+      "visible": 43,
+      "invisible": 8,
+      "emitted_visible": 3,
+      "coverage": 0.06976744186046512,
+      "precision_at_10": 1.0,
+      "precision_at_20": 1.0
+    },
+    "C": {
+      "hidden_records": 46,
+      "visible": 36,
+      "invisible": 10,
+      "emitted_visible": 8,
+      "coverage": 0.2222222222222222,
+      "precision_at_10": 1.0,
+      "precision_at_20": 1.0
+    }
+  },
+  "integrity": {
+    "canonical_mapping_failures": 0,
+    "forward_backward_disagreement_count": 2
+  },
+  "scorer_hashes": {
+    "A": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+    "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+    "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
+  },
+  "phase_b_executed": false,
+  "phase_c_executed": false,
+  "phase_d_executed": false
+}
