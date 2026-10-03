@@ -213,9 +213,7 @@ def _candidate_from_point(record: dict[str, Any], point: dict[str, Any]) -> Shut
     )
 
 
-def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    heat = numpy.asarray(outputs[0])[0, 0]
-    offsets = numpy.asarray(outputs[1])[0]
+def _local_maxima_reference(numpy: Any, heat: Any) -> list[tuple[float, int, int]]:
     local: list[tuple[float, int, int]] = []
     for cell_y in range(GRID_H):
         for cell_x in range(GRID_W):
@@ -225,6 +223,34 @@ def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: li
             if value >= float(numpy.max(heat[y0:y1, x0:x1])):
                 local.append((value, cell_y, cell_x))
     local.sort(key=lambda item: (-item[0], item[1] * GRID_W + item[2]))
+    return local
+
+
+def _local_maxima_vectorized(numpy: Any, heat: Any) -> list[tuple[float, int, int]]:
+    """Vectorized equivalent of the reference valid 3x3-max predicate."""
+    neighborhood = numpy.full_like(heat, -numpy.inf)
+    for delta_y in (-1, 0, 1):
+        source_y0 = max(0, -delta_y)
+        source_y1 = min(GRID_H, GRID_H - delta_y)
+        target_y0 = max(0, delta_y)
+        target_y1 = min(GRID_H, GRID_H + delta_y)
+        for delta_x in (-1, 0, 1):
+            source_x0 = max(0, -delta_x)
+            source_x1 = min(GRID_W, GRID_W - delta_x)
+            target_x0 = max(0, delta_x)
+            target_x1 = min(GRID_W, GRID_W + delta_x)
+            numpy.maximum(
+                neighborhood[target_y0:target_y1, target_x0:target_x1],
+                heat[source_y0:source_y1, source_x0:source_x1],
+                out=neighborhood[target_y0:target_y1, target_x0:target_x1],
+            )
+    coordinates = numpy.argwhere(heat >= neighborhood)
+    local = [(float(heat[int(cell_y), int(cell_x)]), int(cell_y), int(cell_x)) for cell_y, cell_x in coordinates]
+    local.sort(key=lambda item: (-item[0], item[1] * GRID_W + item[2]))
+    return local
+
+
+def _decode_top8(numpy: Any, local: list[tuple[float, int, int]], offsets: Any, diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for original_rank, (heatmap_logit, cell_y, cell_x) in enumerate(local, start=1):
         off_x = float(offsets[0, cell_y, cell_x])
@@ -258,6 +284,18 @@ def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: li
     return result
 
 
+def _top8_from_arrays_reference(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    heat = numpy.asarray(outputs[0])[0, 0]
+    offsets = numpy.asarray(outputs[1])[0]
+    return _decode_top8(numpy, _local_maxima_reference(numpy, heat), offsets, diagnostics)
+
+
+def _top8_from_arrays(numpy: Any, outputs: tuple[Any, Any, Any], diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    heat = numpy.asarray(outputs[0])[0, 0]
+    offsets = numpy.asarray(outputs[1])[0]
+    return _decode_top8(numpy, _local_maxima_vectorized(numpy, heat), offsets, diagnostics)
+
+
 def _h2_torch(torch: Any, numpy: Any, model: Any, frame_bgr: Any, diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     value = _preprocess_train_frame(frame_bgr)
     with torch.inference_mode():
@@ -267,18 +305,99 @@ def _h2_torch(torch: Any, numpy: Any, model: Any, frame_bgr: Any, diagnostics: l
 
 
 def _fast_patch(cv2: Any, numpy: Any, frame_bgr: Any, candidate: ShuttleCandidate) -> tuple[Any, dict[str, int]]:
-    cx = math.floor(float(candidate.x) + 0.5)
-    cy = math.floor(float(candidate.y) + 0.5)
-    left, top = cx - 48, cy - 48
-    right, bottom = left + 96, top + 96
-    padding = {
-        "pad_left": max(0, -left), "pad_top": max(0, -top),
-        "pad_right": max(0, right - 864), "pad_bottom": max(0, bottom - 1920),
-    }
-    padded = cv2.copyMakeBorder(frame_bgr, padding["pad_top"], padding["pad_bottom"], padding["pad_left"], padding["pad_right"], cv2.BORDER_REFLECT_101)
-    source = padded[top + padding["pad_top"]:bottom + padding["pad_top"], left + padding["pad_left"]:right + padding["pad_left"]]
-    rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
-    return numpy.ascontiguousarray(cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA), dtype=numpy.uint8), padding
+    patches, paddings = _fast_patches(frame_bgr, [candidate])
+    return patches[0], paddings[0]
+
+
+def _fast_patches(frame_bgr: Any, candidates: list[ShuttleCandidate]) -> tuple[list[Any], list[dict[str, int]]]:
+    import cv2  # type: ignore[import-not-found]
+    import numpy
+
+    height, width = frame_bgr.shape[:2]
+    patches: list[Any] = []
+    paddings: list[dict[str, int]] = []
+    for candidate in candidates:
+        cx = math.floor(float(candidate.x) + 0.5)
+        cy = math.floor(float(candidate.y) + 0.5)
+        left, top = cx - 48, cy - 48
+        right, bottom = left + 96, top + 96
+        padding = {
+            "pad_left": max(0, -left),
+            "pad_top": max(0, -top),
+            "pad_right": max(0, right - width),
+            "pad_bottom": max(0, bottom - height),
+        }
+        if any(padding.values()):
+            source_frame = cv2.copyMakeBorder(
+                frame_bgr,
+                padding["pad_top"], padding["pad_bottom"],
+                padding["pad_left"], padding["pad_right"],
+                cv2.BORDER_REFLECT_101,
+            )
+            source = source_frame[
+                top + padding["pad_top"] : bottom + padding["pad_top"],
+                left + padding["pad_left"] : right + padding["pad_left"],
+            ]
+        else:
+            source = frame_bgr[top:bottom, left:right]
+        if source.shape[:2] != (96, 96):
+            raise Task016Error("STOP_IMPLEMENTATION", "optimized canonical patch geometry did not produce 96x96")
+        rgb = cv2.cvtColor(source, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA)
+        patches.append(numpy.ascontiguousarray(resized, dtype=numpy.uint8))
+        paddings.append(padding)
+    return patches, paddings
+
+
+def _equivalence_preflight(torch: Any, numpy: Any, timing_rows: list[dict[str, Any]], frames: dict[str, Any], h2_models: dict[str, Any]) -> dict[str, Any]:
+    """Fail-closed equivalence proof for the two Phase A-R2 hot-path changes."""
+    checked_frames = 0
+    checked_patches = 0
+    for row in timing_rows:
+        frame = frames[str(row["record_id"])] ["frame_bgr"]
+        value = _preprocess_train_frame(frame)
+        with torch.inference_mode():
+            outputs = tuple(item.detach().cpu().numpy() for item in h2_models[str(row["train_group"])](torch.from_numpy(numpy.ascontiguousarray(value[None], dtype=numpy.float32))))
+        reference_heat = numpy.asarray(outputs[0])[0, 0]
+        reference_local = _local_maxima_reference(numpy, reference_heat)
+        optimized_local = _local_maxima_vectorized(numpy, reference_heat)
+        if reference_local != optimized_local:
+            raise Task016Error("STOP_IMPLEMENTATION", f"local-max equivalence mismatch at {row['record_id']}")
+        reference_points = _top8_from_arrays_reference(numpy, outputs)
+        optimized_points = _top8_from_arrays(numpy, outputs)
+        if reference_points != optimized_points:
+            raise Task016Error("STOP_IMPLEMENTATION", f"valid top8 equivalence mismatch at {row['record_id']}")
+        candidates = [_candidate_from_point(row, point) for point in optimized_points]
+        optimized_patches, optimized_padding = _fast_patches(frame, candidates)
+        for candidate, patch, padding in zip(candidates, optimized_patches, optimized_padding):
+            reference_patch, reference_padding, _digest = canonical_patch(frame, candidate)
+            if reference_padding != padding or not numpy.array_equal(reference_patch, patch):
+                raise Task016Error("STOP_IMPLEMENTATION", f"canonical patch equivalence mismatch at {row['record_id']}")
+            checked_patches += 1
+        checked_frames += 1
+
+    synthetic_cases = []
+    heat = numpy.full((GRID_H, GRID_W), -20.0, dtype=numpy.float32)
+    offsets = numpy.zeros((2, GRID_H, GRID_W), dtype=numpy.float32)
+    heat[0, 0] = 4.0
+    heat[GRID_H - 1, GRID_W - 1] = 4.0
+    synthetic_cases.append((heat.copy(), offsets.copy()))
+    heat = numpy.full((GRID_H, GRID_W), -20.0, dtype=numpy.float32)
+    heat[10:12, 10:12] = 5.0
+    heat[30, 30] = 5.0
+    synthetic_cases.append((heat.copy(), offsets.copy()))
+    heat = numpy.full((GRID_H, GRID_W), -20.0, dtype=numpy.float32)
+    heat[0, 53] = 3.0
+    heat[103, 0] = 3.0
+    heat[50, 20] = 3.0
+    synthetic_cases.append((heat.copy(), offsets.copy()))
+    for index, (heat_case, offsets_case) in enumerate(synthetic_cases):
+        outputs = (heat_case[None, None], offsets_case[None], numpy.zeros((1, 1), dtype=numpy.float32))
+        if _local_maxima_reference(numpy, heat_case) != _local_maxima_vectorized(numpy, heat_case):
+            raise Task016Error("STOP_IMPLEMENTATION", f"synthetic local-max equivalence mismatch in case {index}")
+        if _top8_from_arrays_reference(numpy, outputs) != _top8_from_arrays(numpy, outputs):
+            raise Task016Error("STOP_IMPLEMENTATION", f"synthetic top8 equivalence mismatch in case {index}")
+    return {"frames": checked_frames, "patches": checked_patches, "synthetic_cases": len(synthetic_cases), "local_maxima_exact": True, "valid_top8_exact": True, "patch_bytes_exact": True}
 
 
 def _app_batch(numpy: Any, patches: list[Any]) -> Any:
@@ -393,7 +512,7 @@ def _parity(torch: Any, numpy: Any, cv2: Any, h2_models: dict[str, Any], app_mod
         ids_d = [(item["cell_x"], item["cell_y"]) for item in dnn_points]
         same_top8 = same_top8 and ids_t == ids_d
         candidates = [_candidate_from_point(row, point) for point in torch_points]
-        patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+        patches, _paddings = _fast_patches(frame, candidates)
         app_input = _app_batch(numpy, patches)
         app_tensor = torch.from_numpy(app_input)
         with torch.inference_mode():
@@ -456,7 +575,7 @@ def _parity_cached(torch: Any, numpy: Any, cv2: Any, h2_models: dict[str, Any], 
         same_top8 = same_top8 and [(p["cell_x"], p["cell_y"]) for p in torch_points] == [(p["cell_x"], p["cell_y"]) for p in dnn_points]
         frame_diagnostics[str(row["record_id"])] = {"discarded": torch_diag, "count": len(torch_diag), "same_discarded": torch_diag == dnn_diag}
         candidates = [_candidate_from_point(row, point) for point in torch_points]
-        patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+        patches, _paddings = _fast_patches(frame, candidates)
         if not patches:
             continue
         app_input = _app_batch(numpy, patches)
@@ -498,7 +617,7 @@ def _cascade_eval_dnn(torch: Any, cv2: Any, numpy: Any, h2_models: dict[str, Any
         frame = frames[str(row["record_id"])] ["frame_bgr"]
         points = _h2_torch(torch, numpy, h2_models[group], frame)
         candidates = [_candidate_from_point(row, point) for point in points]
-        patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+        patches, _paddings = _fast_patches(frame, candidates)
         if not patches:
             return None, [], points
         app_input = _app_batch(numpy, patches)
@@ -558,7 +677,7 @@ def _dnn_pipeline(cv2: Any, numpy: Any, frame: Any, record: dict[str, Any], h2_n
     points = _top8_from_arrays(numpy, h2_outputs)
     top_end = time.perf_counter()
     candidates = [_candidate_from_point(record, point) for point in points]
-    patches = [_fast_patch(cv2, numpy, frame, candidate)[0] for candidate in candidates]
+    patches, _paddings = _fast_patches(frame, candidates)
     patch_end = time.perf_counter()
     app_input = _app_batch(numpy, patches) if patches else numpy.empty((0, 3, 64, 64), dtype=numpy.float32)
     app_prep_end = time.perf_counter()
@@ -729,9 +848,12 @@ def run_task016(*, output_base: Path = Path("artifacts/task016"), task008_root: 
             },
         }
         print("Task016: cached appearance hashes verified; no retraining", flush=True)
+        optimization_equivalence = _equivalence_preflight(torch, numpy, timing_rows, timing_frames, h2_models)
+        print("Task016: exact local-max and patch equivalence verified", flush=True)
         parity, frame_diagnostics = _parity_cached(torch, numpy, cv2, h2_models, cached_nets, timing_rows, timing_frames, phase_a_dir)
         report["phase_a"] = {
             "exports": exports,
+            "optimization_equivalence": optimization_equivalence,
             "parity": parity,
             "valid_domain_filter": {
                 "domain": {"x_min": 0.0, "x_max_exclusive": 864.0, "y_min": GAMEPLAY_Y0, "y_max_exclusive": 1920.0},

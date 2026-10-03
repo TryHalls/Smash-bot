@@ -1,7 +1,7 @@
 {
-  "schema_version": 2,
-  "gate": "Task016-Phase-A-R",
-  "base_head": "76c5d5f741882f6414fc5a2d367cd597dfe0d318",
+  "schema_version": 3,
+  "gate": "Task016-Phase-A-R2",
+  "base_head": "2a06c2a729a738162a83556f5ca40d5863c947bf",
   "verdict": "STOP_TOP8_CASCADE_RUNTIME_PREFLIGHT",
   "holdout_used": false,
   "dev_used_for_fitting_or_selection": false,
@@ -15,18 +15,20 @@
     "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
     "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
   },
+  "optimization_equivalence": {
+    "frames": 63,
+    "patches": 504,
+    "synthetic_cases": 3,
+    "local_maxima_exact": true,
+    "valid_top8_exact": true,
+    "patch_bytes_exact": true,
+    "padding_exact": true
+  },
   "valid_domain_filter": {
     "domain": "0 <= x < 864 and 260 <= y < 1920",
-    "timing_frames": 63,
     "discarded_total": 13,
     "no_clipping": true,
     "diagnostics": "artifacts/task016/report.json phase_a.valid_domain_filter.frames"
-  },
-  "onnx": {
-    "artifact_directory": "artifacts/task016/phase_a/models",
-    "opset": 17,
-    "cached_exports_reused": true,
-    "appearance_retrained": false
   },
   "parity": {
     "h2_max_tensor_delta": 4.291534423828125e-05,
@@ -39,22 +41,23 @@
   "runtime": {
     "warmups": 20,
     "repetitions": 3,
+    "frames": 63,
+    "target_p95_ms": 33.0,
+    "target_mean_fps": 30.0,
     "threads": {
       "1": {
-        "p95_ms": [51.00427540455712, 50.413796507928055, 58.33538980659796],
-        "mean_ms": [46.9029911436669, 46.77007603204979, 46.931131603150064],
-        "mean_fps": [21.320601855368565, 21.381192523927847, 21.30781777128253],
+        "p95_ms": [36.01912020385498, 34.523865301162004, 33.019698804127984],
+        "mean_ms": [26.126799000878005, 26.44523385831798, 25.95631781058194],
+        "mean_fps": [38.27487630483912, 37.813997235099656, 38.52626583237154],
         "pass": false
       },
       "2": {
-        "p95_ms": [89.33854220085777, 92.73934160155477, 89.0357116033556],
-        "mean_ms": [62.1574430156865, 67.29228566779518, 68.77226076210805],
-        "mean_fps": [16.08817788318018, 14.86054441569639, 14.540746354974814],
+        "p95_ms": [63.120209699263796, 74.39461980393389, 59.70872069301549],
+        "mean_ms": [32.135689412363774, 41.92983290427254, 33.769619127269834],
+        "mean_fps": [31.118050313719532, 23.849367639576325, 29.612415711034014],
         "pass": false
       }
-    },
-    "target_p95_ms": 33.0,
-    "target_mean_fps": 30.0
+    }
   },
   "phase_b_executed": false,
   "phase_c_executed": false,

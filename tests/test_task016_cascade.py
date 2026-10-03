@@ -8,7 +8,10 @@ from smashbot_diagnostics.task016_cascade import (
     ACTIVE_BURSTS,
     TOP_K,
     _fast_patch,
+    _local_maxima_reference,
+    _local_maxima_vectorized,
     _top8_from_arrays,
+    _top8_from_arrays_reference,
 )
 
 
@@ -41,6 +44,21 @@ class Task016CascadeTests(unittest.TestCase):
         result = _top8_from_arrays(np, (heat, offsets, np.zeros((1, 1), dtype=np.float32)))
         tied = [(row["cell_y"], row["cell_x"]) for row in result[:2]]
         self.assertEqual(tied, [(5, 6), (5, 7)])
+
+    def test_vectorized_local_maxima_matches_reference_on_border_and_plateau(self) -> None:
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("NumPy unavailable")
+        import numpy as np
+
+        heat = np.full((104, 54), -20.0, dtype=np.float32)
+        heat[0, 0] = 4.0
+        heat[103, 53] = 4.0
+        heat[10:12, 10:12] = 5.0
+        heat[30, 30] = 5.0
+        self.assertEqual(_local_maxima_reference(np, heat), _local_maxima_vectorized(np, heat))
+        offsets = np.zeros((1, 2, 104, 54), dtype=np.float32)
+        outputs = (heat[None, None], offsets, np.zeros((1, 1), dtype=np.float32))
+        self.assertEqual(_top8_from_arrays_reference(np, outputs), _top8_from_arrays(np, outputs))
 
     def test_padding_band_is_discarded_without_clipping_and_next_peak_fills_top8(self) -> None:
         if importlib.util.find_spec("numpy") is None:
