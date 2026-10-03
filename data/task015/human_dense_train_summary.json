@@ -11,7 +11,7 @@
     "C": 200
   },
   "new_visible_total": 601,
-  "provenance_code_commit": "6f01ea8ee70d300ee3d7fec1a1afa185e26cf408",
+  "provenance_code_commit": "bdccd847a84682cd2c51888d97ed97570ab7ac90",
   "qa": {
     "conflicts": [],
     "distance_by_group": {
@@ -68,6 +68,6 @@
   "schema_version": 1,
   "session_sha256": "2c0e275451c807f19421659a14ef3f1e58b703615f80c003bd520dc1f7d0586a",
   "snapshot": "data/task015/human_dense_train.json",
-  "snapshot_sha256": "798a6c8afe81a8923470cbd620c00658cb2b9fffddc3dafa491eabf995358163",
+  "snapshot_sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3",
   "visible_total": 743
 }

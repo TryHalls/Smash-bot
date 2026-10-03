@@ -334,14 +334,20 @@ def _load_inputs(records: list[dict[str, Any]], task008_root: Path, ffmpeg: str)
         source = Path(task008_root) / source_run
         metadata = load_frame_metadata(source / "packets.json", source_run=source_run, width=FRAME_WIDTH, height=FRAME_HEIGHT, pixel_format="rgb24")
         by_index = {int(record["frame_index"]): record for record in source_records}
-        with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=ffmpeg, pixel_format="rgb24") as stream:
-            for decoded in stream.iter_selected(sorted(by_index)):
-                record = by_index[int(decoded.frame_index)]
-                if int(decoded.pts_us) != int(record["pts_us"]):
-                    raise Task015DenseError(f"PTS mismatch at {source_run}:{decoded.frame_index}")
-                rgb = numpy.frombuffer(decoded.pixels, dtype=numpy.uint8).reshape((FRAME_HEIGHT, FRAME_WIDTH, 3))
-                bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                values[str(record["record_id"])] = _preprocess_train_frame(bgr)
+        indices = sorted(by_index)
+        # Keep FFmpeg's exact frame-index selection, but bound the select
+        # expression.  A single expression containing hundreds of terms can
+        # be rejected by FFmpeg before it emits even frame zero.
+        for start in range(0, len(indices), 64):
+            chunk = indices[start : start + 64]
+            with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=ffmpeg, pixel_format="rgb24") as stream:
+                for decoded in stream.iter_selected(chunk):
+                    record = by_index[int(decoded.frame_index)]
+                    if int(decoded.pts_us) != int(record["pts_us"]):
+                        raise Task015DenseError(f"PTS mismatch at {source_run}:{decoded.frame_index}")
+                    rgb = numpy.frombuffer(decoded.pixels, dtype=numpy.uint8).reshape((FRAME_HEIGHT, FRAME_WIDTH, 3))
+                    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                    values[str(record["record_id"])] = _preprocess_train_frame(bgr)
         if len([key for key in values if key in {str(record["record_id"]) for record in source_records}]) != len(source_records):
             raise Task015DenseError(f"decode cardinality mismatch for {source_run}")
     return values
