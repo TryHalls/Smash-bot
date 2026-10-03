@@ -1,0 +1,73 @@
+{
+  "anchors": 180,
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": false,
+  "holdout_used": false,
+  "invisible_total": 38,
+  "new_human_labels": 601,
+  "new_visible_by_group": {
+    "A": 201,
+    "B": 200,
+    "C": 200
+  },
+  "new_visible_total": 601,
+  "provenance_code_commit": "6f01ea8ee70d300ee3d7fec1a1afa185e26cf408",
+  "qa": {
+    "conflicts": [],
+    "distance_by_group": {
+      "A": {
+        "count": 10,
+        "max": 5.888704735454795,
+        "mean": 3.795381969092605,
+        "p50": 4.2937909894018595,
+        "p95": 5.34741620411352
+      },
+      "B": {
+        "count": 10,
+        "max": 5.4981501930546175,
+        "mean": 2.423102770007072,
+        "p50": 1.8881543552830578,
+        "p95": 4.7489470505408855
+      },
+      "C": {
+        "count": 10,
+        "max": 5.796477990946762,
+        "mean": 3.44169814912633,
+        "p50": 3.4838779299554403,
+        "p95": 5.672935001058861
+      }
+    },
+    "distance_px": {
+      "count": 30,
+      "max": 5.888704735454795,
+      "mean": 3.220060962742002,
+      "p50": 3.2676381256076987,
+      "p95": 5.672935001058861
+    },
+    "gates": {
+      "max_le_20": true,
+      "p50_le_5": true,
+      "p95_le_10": true,
+      "visibility_conflicts_zero": true
+    },
+    "group_counts": {
+      "A": 10,
+      "B": 10,
+      "C": 10
+    },
+    "labels_complete": 30,
+    "passed": true,
+    "qa_session_sha256": "7de55d589ed25e1927e2614cb2ba5419dcc4dc61e3af5ade742b43242ee1aa4c",
+    "qa_source_session_sha256": "2c0e275451c807f19421659a14ef3f1e58b703615f80c003bd520dc1f7d0586a",
+    "records": 30,
+    "session_sha256": "2c0e275451c807f19421659a14ef3f1e58b703615f80c003bd520dc1f7d0586a",
+    "visibility_state_conflicts": 0
+  },
+  "qa_session_sha256": "7de55d589ed25e1927e2614cb2ba5419dcc4dc61e3af5ade742b43242ee1aa4c",
+  "record_count": 781,
+  "schema_version": 1,
+  "session_sha256": "2c0e275451c807f19421659a14ef3f1e58b703615f80c003bd520dc1f7d0586a",
+  "snapshot": "data/task015/human_dense_train.json",
+  "snapshot_sha256": "798a6c8afe81a8923470cbd620c00658cb2b9fffddc3dafa491eabf995358163",
+  "visible_total": 743
+}
