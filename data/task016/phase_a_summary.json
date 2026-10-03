@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "gate": "Task016-Phase-A",
+  "head": "d6112828a1fdff483e549d89d8c1ab3ff247f576",
+  "verdict": "STOP_TOP8_CASCADE_IMPLEMENTATION",
+  "holdout_used": false,
+  "dev_used_for_fitting_or_selection": false,
+  "h2_parameter_hashes_verified": {
+    "A": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+    "B": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+    "C": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3"
+  },
+  "appearance_parameter_hashes_verified": {
+    "A": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+    "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+    "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
+  },
+  "onnx_exports": {
+    "artifact_directory": "artifacts/task016/phase_a/models",
+    "opset": 17,
+    "h2_folds": ["A", "B", "C"],
+    "appearance_folds": ["A", "B", "C"]
+  },
+  "failure": {
+    "stage": "top8_decode_before_runtime",
+    "timing_frames_checked": 63,
+    "out_of_bounds_count": 3,
+    "examples": [
+      {
+        "group": "B",
+        "record_id": "train_B_0033_000659",
+        "frame_index": 659,
+        "rank": 7,
+        "cell_x": 9,
+        "cell_y": 103,
+        "offset_x": 0.4420226812362671,
+        "offset_y": 0.802551805973053,
+        "decoded_x": 151.07236289978027,
+        "decoded_y": 1920.8408288955688
+      },
+      {
+        "group": "B",
+        "record_id": "train_B_0033_000659",
+        "frame_index": 659,
+        "rank": 8,
+        "cell_x": 6,
+        "cell_y": 103,
+        "offset_x": 0.44055068492889404,
+        "offset_y": 0.8032727837562561,
+        "decoded_x": 103.04881095874023,
+        "decoded_y": 1920.8523645401
+      },
+      {
+        "group": "C",
+        "record_id": "train_C_0046_000925",
+        "frame_index": 925,
+        "rank": 7,
+        "cell_x": 4,
+        "cell_y": 103,
+        "offset_x": 0.2742763161659241,
+        "offset_y": 0.780755877494812,
+        "decoded_x": 68.38842105865479,
+        "decoded_y": 1920.492094039917
+      }
+    ],
+    "contract": "candidate outside original frame bounds is an implementation failure; no clipping applied"
+  },
+  "phase_b_executed": false,
+  "phase_c_executed": false,
+  "phase_d_executed": false,
+  "source_report": "artifacts/task016/report.json"
+}
