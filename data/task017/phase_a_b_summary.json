@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "task": "017-stateful-chromebook-perception",
+  "head": "38c2684d9d1cd60497428d060c78da51254386b3",
+  "verdict": "STOP_STATEFUL_GLOBAL_PROPOSAL",
+  "holdout_used": false,
+  "dev_used_for_fitting_or_selection": false,
+  "phase_a": {
+    "train_frames": 63,
+    "warmups": 20,
+    "repetitions": 3,
+    "threads": 1,
+    "local": {
+      "gate": {
+        "p95_ms_le": 15.0,
+        "mean_fps_ge": 60.0
+      },
+      "max_repetition_p95_ms": 12.158181103586683,
+      "min_repetition_mean_fps": 171.16714262846415,
+      "pass": true,
+      "proposal_equivalence": {
+        "frames": 63,
+        "local_candidates": 321,
+        "half_extent_px": 240,
+        "radius_px": 120.0,
+        "ground_truth_used": false
+      }
+    },
+    "global": {
+      "gate": {
+        "p95_ms_le": 45.0,
+        "mean_ms_le": 33.0
+      },
+      "max_repetition_p95_ms": 39.41012330615194,
+      "max_repetition_mean_ms": 25.453192381685348,
+      "pass": true
+    },
+    "parity": {
+      "h2_model_sha256": {
+        "A": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+        "B": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+        "C": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3"
+      },
+      "appearance_model_sha256": {
+        "A": "8799bb8093fb461eba17fe6c0b5d7e4c1930c4ae73dab426d00fd01c469d5eab",
+        "B": "5ec760b59d399c3db1c32afef28ce3b84200d0c6bc1d412dcd209d81ce21b5c7",
+        "C": "36f6caace1987108ecd329ac4a134f04fd4c3831254842352677d8dc27997372"
+      },
+      "h2_max_tensor_delta": 4.291534423828125e-05,
+      "h2_max_offset_delta": 5.8710575103759766e-06,
+      "same_h2_top8_identities": true,
+      "same_appearance_ordering": true,
+      "same_appearance_positive_decision": true,
+      "valid_domain_discarded_total": 13,
+      "valid_domain_frames": 63
+    }
+  },
+  "phase_b": {
+    "frames": 63,
+    "recall_at_20": {
+      "matched": 60,
+      "total": 63,
+      "rate": 0.9523809523809523
+    },
+    "recall_at_10": {
+      "matched": 59,
+      "total": 63,
+      "rate": 0.9365079365079365
+    },
+    "localization": {
+      "p50_px": 4.232245152759693,
+      "p95_px": 13.06478526562865,
+      "max_px": 49.72193525439562
+    },
+    "by_burst_recall_at_20": {
+      "A_01": 1.0,
+      "B_01": 0.9523809523809523,
+      "C_01": 0.9047619047619048
+    },
+    "acquisition_endpoints": [
+      {"burst_id": "A_01", "frame_index": 79, "nearest_error_px": 3.276893518890919, "pass": true},
+      {"burst_id": "A_01", "frame_index": 80, "nearest_error_px": 4.262495717239944, "pass": true},
+      {"burst_id": "B_01", "frame_index": 78, "nearest_error_px": 2.2613037500548354, "pass": true},
+      {"burst_id": "B_01", "frame_index": 79, "nearest_error_px": 5.047288165764635, "pass": true},
+      {"burst_id": "C_01", "frame_index": 351, "nearest_error_px": 20.483840543338218, "pass": false},
+      {"burst_id": "C_01", "frame_index": 352, "nearest_error_px": 2.445964093553947, "pass": true}
+    ],
+    "pass": false,
+    "failure": "C_01 frame 351 exceeds the frozen 20 px acquisition endpoint limit"
+  },
+  "phase_c_executed": false,
+  "phase_d_executed": false
+}
