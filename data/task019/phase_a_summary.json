@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task": "019",
+  "verdict": "STOP_H2_DISTRIBUTION_TRAIN_DATA",
+  "manifest": {
+    "path": "data/task019/h2_candidate_manifest_train.json",
+    "sha256": "b8c997719967b58e8f634220b632e1ce30831b89e1284ce075139d62e7d16d3f",
+    "records": 781,
+    "visible": 743,
+    "invisible": 38,
+    "candidates": 6248,
+    "labels": {
+      "positive": 530,
+      "ignore": 77,
+      "negative": 5641
+    },
+    "ground_truth_sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3"
+  },
+  "oracle": {
+    "global_at_20": 0.7900403768506057,
+    "global_at_10": 0.7133243606998654,
+    "by_group_at_20": {
+      "A": 0.9395161290322581,
+      "B": 0.9317269076305221,
+      "C": 0.4959349593495935
+    },
+    "by_group_at_10": {
+      "A": 0.8911290322580645,
+      "B": 0.8393574297188755,
+      "C": 0.4065040650406504
+    }
+  },
+  "fold_trainable_counts": {
+    "fold_A": {"positive": 309, "negative": 3789},
+    "fold_B": {"positive": 321, "negative": 3802},
+    "fold_C": {"positive": 430, "negative": 3691}
+  },
+  "label_status": {
+    "no_positive_in_band_frames": 70,
+    "proposal_miss_frames": 143,
+    "invisible_candidate_rows": 304
+  },
+  "proposal_contract": {
+    "task016_ar2": true,
+    "presence_head_used": false,
+    "ground_truth_used_for_proposals": false,
+    "dev_used": false,
+    "holdout_used": false
+  },
+  "h2_parameter_hashes": {
+    "A": "bf65bcea62c16ffa42bc8f2dda38cbce306d7932c7f663e7722f5057d144ac5c",
+    "B": "72625d2e6950288c4f7357839a0a6f75109b38fa328493b064c1c294d57f855d",
+    "C": "1245d516f7054dedb01a5794592df9a92cda9297aea69e3757218c189fb73ef3"
+  },
+  "ffmpeg": "/usr/bin/ffmpeg",
+  "phase_b_executed": false,
+  "phase_c_executed": false,
+  "phase_d_executed": false,
+  "phase_e_executed": false,
+  "head": "01dd16bfaa2f5ba6d0451c6d929fc53a4cf4a22a"
+}
