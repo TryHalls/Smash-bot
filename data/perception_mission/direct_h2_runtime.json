@@ -1,0 +1,148 @@
+{
+  "architecture": "all-TRAIN Task012 H2 top-1 direct point detector",
+  "code_commit": "cfa77ebb01818ac8d4ab828cec9590cd28811e0c",
+  "by_burst": {
+    "A_01": {
+      "emitted": 20,
+      "frames": 21,
+      "global_path_only": true,
+      "localization": {
+        "count": 20,
+        "max": 6.418069993929904,
+        "mean": 3.6253974091744317,
+        "p50": 3.459204950127231,
+        "p95": 5.6774620586985485
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.9523809523809523,
+      "recall_at_20": 0.9523809523809523
+    },
+    "B_01": {
+      "emitted": 19,
+      "frames": 21,
+      "global_path_only": true,
+      "localization": {
+        "count": 19,
+        "max": 19.47825892752049,
+        "mean": 7.589886473293781,
+        "p50": 6.3618434188795305,
+        "p95": 14.180345043422893
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.7142857142857143,
+      "recall_at_20": 0.9047619047619048
+    },
+    "C_01": {
+      "emitted": 20,
+      "frames": 21,
+      "global_path_only": true,
+      "localization": {
+        "count": 20,
+        "max": 7.060996798518138,
+        "mean": 2.7320552016364528,
+        "p50": 2.339641284898966,
+        "p95": 4.625730315168626
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.9523809523809523,
+      "recall_at_20": 0.9523809523809523
+    }
+  },
+  "confirmed_negative_fp": 0,
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": true,
+  "holdout_used": false,
+  "localization": {
+    "count": 59,
+    "max": 19.47825892752049,
+    "mean": 4.5992694103186365,
+    "p50": 3.7667316187101276,
+    "p95": 11.594739965495844
+  },
+  "negative_checks": [
+    {
+      "burst_id": "C_NEG_01",
+      "confirmed_observation": false
+    },
+    {
+      "burst_id": "C_NEG_03",
+      "confirmed_observation": false
+    },
+    {
+      "burst_id": "C_NEG_05",
+      "confirmed_observation": false
+    },
+    {
+      "burst_id": "C_NEG_07",
+      "confirmed_observation": false
+    },
+    {
+      "burst_id": "C_NEG_09",
+      "confirmed_observation": false
+    }
+  ],
+  "onnx": {
+    "path": "models/perception_mission/direct_h2/all_train_h2.onnx",
+    "sha256": "9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d"
+  },
+  "parity": {
+    "max_decoded_coordinate_delta_px": 2.574920654296875e-05,
+    "max_offset_delta": 5.0067901611328125e-06,
+    "max_tensor_delta": 4.1961669921875e-05,
+    "onnx_sha256": "9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d",
+    "parameter_hash": "6cf22829471f7f19a4dc2a73d29900b8daf92c96ef475b97072c382995b824b4",
+    "same_top1_cell_identity": true,
+    "same_top8_cell_identities": true,
+    "torch_checkpoint": "artifacts/perception_mission/h2_all_train/all_train_h2.pt"
+  },
+  "preprocessing": "Task012 H2 432x832 INTER_AREA, gameplay y=260, RGB [-1,1]",
+  "recall_at_10": 0.873015873015873,
+  "recall_at_20": 0.9365079365079365,
+  "runtime": {
+    "all_repetitions_pass_30fps": true,
+    "repetitions": [
+      {
+        "count": 68,
+        "max": 66.16056599887088,
+        "mean": 21.82768836727893,
+        "mean_fps": 45.813371676089275,
+        "p50": 17.355032003251836,
+        "p95": 53.48458664302596,
+        "repetition": 1
+      },
+      {
+        "count": 68,
+        "max": 117.06244200468063,
+        "mean": 27.94181744235068,
+        "mean_fps": 35.7886526910138,
+        "p50": 19.131068998831324,
+        "p95": 51.941626998450374,
+        "repetition": 2
+      },
+      {
+        "count": 68,
+        "max": 38.92897100013215,
+        "mean": 19.91719340987723,
+        "mean_fps": 50.20787715522636,
+        "p50": 18.125100497854874,
+        "p95": 29.055920052633155,
+        "repetition": 3
+      }
+    ],
+    "warmups": 20,
+    "scheduler": {
+      "fifo_backlog": false,
+      "latest_frame_only": true,
+      "max_pending": 1,
+      "contract_tested": true
+    }
+  },
+  "schema_version": 1,
+  "temporal_contract": {
+    "confirmations": 2,
+    "gate_px": 120.0,
+    "global_path_only": true,
+    "max_coast_misses": 2,
+    "predictions_are_not_observations": true
+  }
+}
