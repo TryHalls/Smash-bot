@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ from typing import Any
 from . import perception_mission as mission
 from . import task012_phase_b as phase_b
 from . import task016_cascade as cascade
+from .perception_models import ShuttleCandidate
 
 
 CHECKPOINT_ONNX = Path("models/perception_mission/direct_h2/all_train_h2.onnx")
@@ -87,6 +89,52 @@ class CausalH2Beam:
         self._paths = expanded[: self.width]
         best = self._paths[0]
         return best[0][-1], {"edge_count": len(expanded), "path_count": len(self._paths), "reset": False}
+
+
+class BeamH2Detector:
+    """Global H2 detector whose output is the causal beam endpoint."""
+
+    def __init__(self, onnx_path: Path = CHECKPOINT_ONNX, *, threads: int = 1, cv2_module: Any = None, numpy_module: Any = None):
+        if cv2_module is None or numpy_module is None:
+            cv2_module, numpy_module, _torch, _nn, _onnx = cascade._imports()
+        self.cv2 = cv2_module
+        self.numpy = numpy_module
+        self.cv2.setNumThreads(int(threads))
+        self.net = self.cv2.dnn.readNetFromONNX(str(onnx_path))
+        self.net.setPreferableBackend(self.cv2.dnn.DNN_BACKEND_OPENCV)
+        self.net.setPreferableTarget(self.cv2.dnn.DNN_TARGET_CPU)
+        self.beam = CausalH2Beam()
+        self._last_frame: int | None = None
+        self._last_pts: int | None = None
+
+    def infer(self, frame_bgr: Any, frame_index: int, pts_us: int) -> tuple[ShuttleCandidate | None, float, dict[str, Any]]:
+        if frame_bgr.shape[:2] != (1920, 864):
+            raise ValueError("expected BGR frame dimensions 864x1920")
+        if self._last_frame is not None and int(frame_index) <= self._last_frame:
+            raise ValueError("frame_index must increase strictly")
+        if self._last_pts is not None and int(pts_us) <= self._last_pts:
+            raise ValueError("device PTS must increase strictly")
+        self._last_frame, self._last_pts = int(frame_index), int(pts_us)
+        start = time.perf_counter()
+        value = phase_b._preprocess_train_frame(frame_bgr)
+        self.net.setInput(self.numpy.ascontiguousarray(value[None], dtype=self.numpy.float32))
+        outputs = tuple(self.net.forward(name) for name in ("heatmap_logits", "offsets", "presence_logit"))
+        proposals = cascade._top8_from_arrays(self.numpy, outputs)
+        for index, proposal in enumerate(proposals):
+            proposal["candidate_index"] = index
+        point, diagnostic = self.beam.update(proposals)
+        elapsed = (time.perf_counter() - start) * 1000.0
+        if point is None:
+            return None, elapsed, diagnostic
+        candidate = ShuttleCandidate(
+            frame_index=int(frame_index),
+            pts_us=int(pts_us),
+            x=float(point["x"]),
+            y=float(point["y"]),
+            confidence=1.0,
+            area_px=None,
+        )
+        return candidate, elapsed, diagnostic
 
 
 def _percentile(values: list[float], p: float) -> float | None:
