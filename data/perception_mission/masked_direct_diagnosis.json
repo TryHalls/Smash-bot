@@ -1,0 +1,74 @@
+{
+  "evaluations": {
+    "DEV1": {
+      "by_burst": {},
+      "count": 0,
+      "emitted_visible": 0,
+      "frames": 68,
+      "max": null,
+      "mean": null,
+      "negative_fp": 1,
+      "p50": null,
+      "p95": null,
+      "recall_at_10": 0.0,
+      "recall_at_20": 0.0,
+      "visible": 63
+    },
+    "DEV2": {
+      "by_burst": {},
+      "count": 0,
+      "emitted_visible": 0,
+      "frames": 68,
+      "max": null,
+      "mean": null,
+      "negative_fp": 2,
+      "p50": null,
+      "p95": null,
+      "recall_at_10": 0.0,
+      "recall_at_20": 0.0,
+      "visible": 59
+    },
+    "DEV3": {
+      "by_burst": {},
+      "count": 1,
+      "emitted_visible": 1,
+      "frames": 77,
+      "max": 159.81545862102766,
+      "mean": 159.81545862102766,
+      "negative_fp": 1,
+      "p50": 159.81545862102766,
+      "p95": 159.81545862102766,
+      "recall_at_10": 0.0,
+      "recall_at_20": 0.0,
+      "visible": 67
+    }
+  },
+  "experiment": "masked_rgb_yellow_white_direct_all_train",
+  "input": {
+    "channels": 5,
+    "normalization": "/127.5-1",
+    "rgb_plus_yellow_white_masks": "existing HSV/morphology, downscaled INTER_AREA"
+  },
+  "provenance": {
+    "dev_used_for_fitting": false,
+    "dev_used_for_selection": true,
+    "holdout_used": false,
+    "train_snapshot_sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3",
+    "v3_used_for_fitting": false,
+    "v3_used_for_selection": false
+  },
+  "schema_version": 1,
+  "train": {
+    "invisible": 38,
+    "loss": {
+      "heatmap": 0.24963880894126111,
+      "offset": 0.027322130349301345,
+      "presence": 0.06510283617200223,
+      "total": 0.34206377326602666
+    },
+    "parameter_count": 7696,
+    "parameter_hash": "aad51e1745106d63edc16e3c6a35213bb767f932a27e82b513b70edc7f74aa64",
+    "records": 781,
+    "visible": 743
+  }
+}

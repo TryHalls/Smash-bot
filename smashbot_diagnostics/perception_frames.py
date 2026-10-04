@@ -110,11 +110,13 @@ class FFmpegFrameStream:
         *,
         ffmpeg: str = "ffmpeg",
         pixel_format: str = "rgb24",
+        finalize_timeout_s: float = 5.0,
     ):
         self.source_h264 = Path(source_h264)
         self.metadata = sorted(list(metadata), key=lambda item: item.frame_index)
         self.ffmpeg = ffmpeg
         self.pixel_format = pixel_format
+        self.finalize_timeout_s = float(finalize_timeout_s)
         if not self.metadata:
             raise FrameStreamError("frame stream requires metadata")
         if any(item.pixel_format != pixel_format for item in self.metadata):
@@ -276,7 +278,7 @@ class FFmpegFrameStream:
                 )
             self._start_stdout_drain(process.stdout)
             try:
-                return_code = process.wait(timeout=5)
+                return_code = process.wait(timeout=self.finalize_timeout_s)
             except subprocess.TimeoutExpired as exc:
                 raise FrameStreamError("FFmpeg did not terminate after expected frames") from exc
             if self._stdout_drain_thread is not None:

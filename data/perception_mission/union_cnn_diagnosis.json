@@ -1,0 +1,455 @@
+{
+  "evaluations": {
+    "DEV1": {
+      "by_burst": {
+        "A_01": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 21,
+          "localization": {
+            "count": 21,
+            "max": 410.7582721568228,
+            "mean": 339.5711417909962,
+            "p50": 400.5138024170987,
+            "p95": 410.34983185240947
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 20,
+          "oracle_at_20": 21,
+          "recall_at_10": 0.0,
+          "recall_at_20": 0.0,
+          "visible": 21
+        },
+        "B_01": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 21,
+          "localization": {
+            "count": 21,
+            "max": 562.8906713323914,
+            "mean": 136.43606871752587,
+            "p50": 3.247478892497431,
+            "p95": 562.798203759422
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 21,
+          "oracle_at_20": 21,
+          "recall_at_10": 0.5714285714285714,
+          "recall_at_20": 0.5714285714285714,
+          "visible": 21
+        },
+        "C_01": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 21,
+          "localization": {
+            "count": 21,
+            "max": 646.0772294329144,
+            "mean": 34.95396530219285,
+            "p50": 1.976044773171933,
+            "p95": 48.73142685560662
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 19,
+          "oracle_at_20": 19,
+          "recall_at_10": 0.9047619047619048,
+          "recall_at_20": 0.9047619047619048,
+          "visible": 21
+        },
+        "C_NEG_01": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_03": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_05": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_07": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_09": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        }
+      },
+      "emitted_visible": 63,
+      "frames": 68,
+      "localization": {
+        "count": 63,
+        "max": 646.0772294329144,
+        "mean": 170.32039193690497,
+        "p50": 48.73142685560662,
+        "p95": 542.4698773662424
+      },
+      "negative_fp": 4,
+      "oracle_at_10": 60,
+      "oracle_at_20": 61,
+      "recall_at_10": 0.49206349206349204,
+      "recall_at_20": 0.49206349206349204,
+      "visible": 63
+    },
+    "DEV2": {
+      "by_burst": {
+        "A_02": {
+          "by_burst": {},
+          "emitted_visible": 17,
+          "frames": 21,
+          "localization": {
+            "count": 17,
+            "max": 95.88101657484017,
+            "mean": 12.638906667727156,
+            "p50": 1.8752018675297377,
+            "p95": 90.50070596582567
+          },
+          "negative_fp": 4,
+          "oracle_at_10": 17,
+          "oracle_at_20": 17,
+          "recall_at_10": 0.8823529411764706,
+          "recall_at_20": 0.8823529411764706,
+          "visible": 17
+        },
+        "B_02": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 21,
+          "localization": {
+            "count": 21,
+            "max": 630.805127897865,
+            "mean": 180.16024921781332,
+            "p50": 2.755351209552313,
+            "p95": 630.2790697586299
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 21,
+          "oracle_at_20": 21,
+          "recall_at_10": 0.6666666666666666,
+          "recall_at_20": 0.6666666666666666,
+          "visible": 21
+        },
+        "C_02": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 21,
+          "localization": {
+            "count": 21,
+            "max": 751.449284829882,
+            "mean": 72.96638570807507,
+            "p50": 2.115247839327933,
+            "p95": 745.0036379178754
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 21,
+          "oracle_at_20": 21,
+          "recall_at_10": 0.9047619047619048,
+          "recall_at_20": 0.9047619047619048,
+          "visible": 21
+        },
+        "C_NEG_02": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_04": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_06": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_08": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        },
+        "C_NEG_10": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 1,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 0,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        }
+      },
+      "emitted_visible": 59,
+      "frames": 68,
+      "localization": {
+        "count": 59,
+        "max": 751.449284829882,
+        "mean": 93.73763977618674,
+        "p50": 2.271503353814553,
+        "p95": 630.3316755725534
+      },
+      "negative_fp": 8,
+      "oracle_at_10": 59,
+      "oracle_at_20": 59,
+      "recall_at_10": 0.8135593220338984,
+      "recall_at_20": 0.8135593220338984,
+      "visible": 59
+    },
+    "DEV3": {
+      "by_burst": {
+        "A_03": {
+          "by_burst": {},
+          "emitted_visible": 23,
+          "frames": 24,
+          "localization": {
+            "count": 23,
+            "max": 679.160108573819,
+            "mean": 264.76701750520454,
+            "p50": 303.71843933098495,
+            "p95": 645.8866051974013
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 21,
+          "oracle_at_20": 22,
+          "recall_at_10": 0.391304347826087,
+          "recall_at_20": 0.391304347826087,
+          "visible": 23
+        },
+        "B_03": {
+          "by_burst": {},
+          "emitted_visible": 22,
+          "frames": 24,
+          "localization": {
+            "count": 22,
+            "max": 879.99736352668,
+            "mean": 332.7078703244793,
+            "p50": 270.9302573558617,
+            "p95": 740.5712637610511
+          },
+          "negative_fp": 2,
+          "oracle_at_10": 18,
+          "oracle_at_20": 20,
+          "recall_at_10": 0.4090909090909091,
+          "recall_at_20": 0.4090909090909091,
+          "visible": 22
+        },
+        "C_03": {
+          "by_burst": {},
+          "emitted_visible": 21,
+          "frames": 24,
+          "localization": {
+            "count": 22,
+            "max": 788.5944186651552,
+            "mean": 368.578873394458,
+            "p50": 440.1153916694318,
+            "p95": 782.2917125496214
+          },
+          "negative_fp": 1,
+          "oracle_at_10": 15,
+          "oracle_at_20": 22,
+          "recall_at_10": 0.2727272727272727,
+          "recall_at_20": 0.2727272727272727,
+          "visible": 22
+        },
+        "V2_NEGATIVE": {
+          "by_burst": {},
+          "emitted_visible": 0,
+          "frames": 5,
+          "localization": {
+            "count": 0,
+            "max": null,
+            "mean": null,
+            "p50": null,
+            "p95": null
+          },
+          "negative_fp": 5,
+          "oracle_at_10": 0,
+          "oracle_at_20": 0,
+          "recall_at_10": null,
+          "recall_at_20": null,
+          "visible": 0
+        }
+      },
+      "emitted_visible": 66,
+      "frames": 77,
+      "localization": {
+        "count": 67,
+        "max": 879.99736352668,
+        "mean": 321.1634293199451,
+        "p50": 357.07345486753945,
+        "p95": 736.9588359418079
+      },
+      "negative_fp": 9,
+      "oracle_at_10": 54,
+      "oracle_at_20": 64,
+      "recall_at_10": 0.3582089552238806,
+      "recall_at_20": 0.3582089552238806,
+      "visible": 67
+    }
+  },
+  "experiment": "separate_yellow_white_union_tiny_candidate_cnn_all_train",
+  "proposal": {
+    "families": [
+      "yellow",
+      "white"
+    ],
+    "negative_cap_per_frame": 8,
+    "separate_connected_components": true
+  },
+  "provenance": {
+    "dev_used_for_fitting": false,
+    "dev_used_for_selection": true,
+    "holdout_used": false,
+    "train_snapshot_sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3",
+    "v3_used_for_fitting": false,
+    "v3_used_for_selection": false
+  },
+  "schema_version": 1,
+  "train": {
+    "counts": {
+      "frames": 781,
+      "ignore": 1190,
+      "negative": 100933,
+      "positive": 685,
+      "proposals": 102808
+    },
+    "fit_rows": 6933,
+    "loss": 5.8604180940684436e-05,
+    "matrix_bytes": 85192704,
+    "negative": 6248,
+    "parameter_count": 54089,
+    "parameter_hash": "ed5dc6f50eecdd7d7f9a2a90e70c7c0eab14fc7a7026cf7cab86b1efcb615778",
+    "positive": 685
+  }
+}

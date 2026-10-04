@@ -932,9 +932,9 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
                     raise AnnotationError(f"annotation/subset identity mismatch for {record_id}: {field}")
         self._annotation_by_id = annotation_by_id
         self._train_cache: TrainSourceCache | None = None
-        if self.dataset_role == "train":
+        if self.dataset_role in {"train", "independent_eval"}:
             if task008_root is None or cache_dir is None:
-                raise AnnotationError("TRAIN annotation UI requires --task008-root and --cache-dir")
+                raise AnnotationError("source-cache annotation UI requires --task008-root and --cache-dir")
             self._train_cache = TrainSourceCache(cache_dir, task008_root, ffmpeg)
         self._cursor = next(
             (
@@ -1016,9 +1016,9 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
 
     def image_for(self, record_id: str) -> Path:
         record = self._by_id[record_id]
-        if self.dataset_role == "train":
+        if self.dataset_role in {"train", "independent_eval"}:
             if self._train_cache is None:
-                raise AnnotationError("TRAIN source cache is not configured")
+                raise AnnotationError("source annotation cache is not configured")
             source_records = [item for item in self.records if item.get("source_run") == record.get("source_run")]
             return self._train_cache.path_for(record["source_run"], record_id, source_records)
         if "image_path" not in record:
@@ -1038,9 +1038,9 @@ class AnnotationHTTPServer(ThreadingHTTPServer):
 
         with self._lock:
             record = self._by_id[record_id]
-            if self.dataset_role == "train":
+            if self.dataset_role in {"train", "independent_eval"}:
                 if self._train_cache is None:
-                    raise AnnotationError("TRAIN source cache is not configured")
+                    raise AnnotationError("source annotation cache is not configured")
                 source_records = [item for item in self.records if item.get("source_run") == record.get("source_run")]
                 return self._train_cache.read_bytes(record["source_run"], record_id, source_records)
             return self.image_for(record_id).read_bytes()
