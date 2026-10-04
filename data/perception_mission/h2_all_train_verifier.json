@@ -1,0 +1,1862 @@
+{
+  "dataset": {
+    "candidates": 6248,
+    "dev_used": false,
+    "ground_truth_used_for_proposals": false,
+    "holdout_used": false,
+    "label_stats": {
+      "ignore": 15,
+      "negative": 5502,
+      "no_positive_in_band": 12,
+      "positive": 731,
+      "proposal_miss": 0
+    },
+    "patch_cache_bytes": 76775424,
+    "records": 781
+  },
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": false,
+  "experiment": "all_train_h2_distribution_verifier",
+  "fit": {
+    "architecture": "Task019 TinyCandidateCNN 54089 params",
+    "epochs": 40,
+    "final_loss": null,
+    "negative": 5502,
+    "parameter_hash": "f12e3542d859e77e8db3d5fd4e579af6e58e89ae502375dd78d4520ec6c2b507",
+    "pos_weight": 7.5266757865937075,
+    "positive": 731,
+    "rows": 6233,
+    "seed": 20261001
+  },
+  "global_dev": {
+    "by_burst": {
+      "A_01": {
+        "emitted": 20,
+        "frames": 21,
+        "localization": {
+          "count": 20,
+          "max": 45.13741638622905,
+          "mean": 10.20025542937768,
+          "p50": 4.500379953780742,
+          "p95": 44.997458546489895
+        },
+        "recall_at_10": 0.8095238095238095,
+        "recall_at_20": 0.8095238095238095
+      },
+      "B_01": {
+        "emitted": 21,
+        "frames": 21,
+        "localization": {
+          "count": 21,
+          "max": 19.478261998969064,
+          "mean": 7.106258730017745,
+          "p50": 6.318953500200233,
+          "p95": 13.591686736099838
+        },
+        "recall_at_10": 0.8095238095238095,
+        "recall_at_20": 1.0
+      },
+      "C_01": {
+        "emitted": 20,
+        "frames": 21,
+        "localization": {
+          "count": 20,
+          "max": 4.49755736699014,
+          "mean": 2.592055696076213,
+          "p50": 2.3396308012554834,
+          "p95": 4.485965613234493
+        },
+        "recall_at_10": 0.9523809523809523,
+        "recall_at_20": 0.9523809523809523
+      }
+    },
+    "emitted": 61,
+    "frames": 63,
+    "localization": {
+      "count": 61,
+      "max": 45.13741638622905,
+      "mean": 6.640617308843454,
+      "p50": 4.26102667986437,
+      "p95": 19.478261998969064
+    },
+    "negative_fp": 1,
+    "recall_at_10": 0.8571428571428571,
+    "recall_at_20": 0.9206349206349206,
+    "rows": [
+      {
+        "burst_id": "A_01",
+        "error_px": 8.339807318796035,
+        "frame_index": 78,
+        "rank": 1,
+        "record_id": "A_A_01_000078",
+        "score": 18.51694679260254,
+        "selected": [
+          428.53667163848877,
+          1193.5764813423157
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 2.0085170009877653,
+        "frame_index": 79,
+        "rank": 1,
+        "record_id": "A_A_01_000079",
+        "score": 19.565895080566406,
+        "selected": [
+          428.01110458374023,
+          1192.0574131011963
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 4.788658592450619,
+        "frame_index": 80,
+        "rank": 1,
+        "record_id": "A_A_01_000080",
+        "score": 19.232412338256836,
+        "selected": [
+          427.83847999572754,
+          1191.803401708603
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 3.766730515625388,
+        "frame_index": 81,
+        "rank": 1,
+        "record_id": "A_A_01_000081",
+        "score": 18.9315185546875,
+        "selected": [
+          428.21302795410156,
+          1191.8729417324066
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 4.423321026558635,
+        "frame_index": 82,
+        "rank": 1,
+        "record_id": "A_A_01_000082",
+        "score": 17.8028621673584,
+        "selected": [
+          428.3350248336792,
+          1191.8043253421783
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 5.203031951870843,
+        "frame_index": 83,
+        "rank": 1,
+        "record_id": "A_A_01_000083",
+        "score": 17.270015716552734,
+        "selected": [
+          428.1188554763794,
+          1191.8482332229614
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 4.153130864601364,
+        "frame_index": 84,
+        "rank": 1,
+        "record_id": "A_A_01_000084",
+        "score": 17.3945369720459,
+        "selected": [
+          428.41950511932373,
+          1192.100790977478
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 1.7277434860761247,
+        "frame_index": 85,
+        "rank": 1,
+        "record_id": "A_A_01_000085",
+        "score": 18.837135314941406,
+        "selected": [
+          428.5194625854492,
+          1192.1029334068298
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 5.638480613807597,
+        "frame_index": 86,
+        "rank": 1,
+        "record_id": "A_A_01_000086",
+        "score": 16.969446182250977,
+        "selected": [
+          428.4051446914673,
+          1192.0391726493835
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 2.818944615363948,
+        "frame_index": 87,
+        "rank": 1,
+        "record_id": "A_A_01_000087",
+        "score": 16.399112701416016,
+        "selected": [
+          428.2533960342407,
+          1192.1105680465698
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 3.1516799728932776,
+        "frame_index": 88,
+        "rank": 1,
+        "record_id": "A_A_01_000088",
+        "score": 16.20961570739746,
+        "selected": [
+          428.34231662750244,
+          1192.1777572631836
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 2.6690978446768217,
+        "frame_index": 89,
+        "rank": 1,
+        "record_id": "A_A_01_000089",
+        "score": 16.826398849487305,
+        "selected": [
+          428.33426570892334,
+          1192.2563977241516
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 4.582592299228598,
+        "frame_index": 90,
+        "rank": 1,
+        "record_id": "A_A_01_000090",
+        "score": 16.187301635742188,
+        "selected": [
+          429.10038661956787,
+          1193.8680872917175
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 2.880490126128115,
+        "frame_index": 91,
+        "rank": 1,
+        "record_id": "A_A_01_000091",
+        "score": 15.228439331054688,
+        "selected": [
+          428.92852115631104,
+          1194.2477617263794
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 2.610358123348121,
+        "frame_index": 92,
+        "rank": 1,
+        "record_id": "A_A_01_000092",
+        "score": 15.868326187133789,
+        "selected": [
+          429.0221061706543,
+          1194.0212874412537
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 4.577438881002848,
+        "frame_index": 93,
+        "rank": 1,
+        "record_id": "A_A_01_000093",
+        "score": 14.629335403442383,
+        "selected": [
+          429.0927677154541,
+          1194.174873828888
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 44.99009234439836,
+        "frame_index": 94,
+        "rank": 1,
+        "record_id": "A_A_01_000094",
+        "score": 7.21693754196167,
+        "selected": [
+          408.4537363052368,
+          1224.4689621925354
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 45.13741638622905,
+        "frame_index": 95,
+        "rank": 1,
+        "record_id": "A_A_01_000095",
+        "score": 7.868166446685791,
+        "selected": [
+          408.0737781524658,
+          1223.9239547252655
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 44.11948848064968,
+        "frame_index": 96,
+        "rank": 1,
+        "record_id": "A_A_01_000096",
+        "score": 6.553783416748047,
+        "selected": [
+          406.9222888946533,
+          1223.6836609840393
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": 6.418088142860408,
+        "frame_index": 97,
+        "rank": 1,
+        "record_id": "A_A_01_000097",
+        "score": 10.442850112915039,
+        "selected": [
+          451.35560750961304,
+          1115.6248741149902
+        ]
+      },
+      {
+        "burst_id": "A_01",
+        "error_px": null,
+        "frame_index": 98,
+        "rank": 1,
+        "record_id": "A_A_01_000098",
+        "score": -0.5058681964874268,
+        "selected": null
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 0.3854211741184705,
+        "frame_index": 78,
+        "rank": 1,
+        "record_id": "B_B_01_000078",
+        "score": 2.7874197959899902,
+        "selected": [
+          313.73152256011963,
+          795.6443223953247
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 11.552399969727668,
+        "frame_index": 79,
+        "rank": 1,
+        "record_id": "B_B_01_000079",
+        "score": 11.412630081176758,
+        "selected": [
+          325.53277015686035,
+          798.384651184082
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 0.8919692658760617,
+        "frame_index": 80,
+        "rank": 1,
+        "record_id": "B_B_01_000080",
+        "score": 1.3501414060592651,
+        "selected": [
+          315.55275440216064,
+          810.8929357528687
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 13.591686736099838,
+        "frame_index": 81,
+        "rank": 1,
+        "record_id": "B_B_01_000081",
+        "score": 11.321083068847656,
+        "selected": [
+          327.3588671684265,
+          813.944314956665
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 9.669162886727559,
+        "frame_index": 82,
+        "rank": 1,
+        "record_id": "B_B_01_000082",
+        "score": 12.405800819396973,
+        "selected": [
+          326.7429165840149,
+          826.6278586387634
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 8.981430264664704,
+        "frame_index": 83,
+        "rank": 1,
+        "record_id": "B_B_01_000083",
+        "score": 15.881172180175781,
+        "selected": [
+          327.1163830757141,
+          840.7653121948242
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 8.224363709897123,
+        "frame_index": 84,
+        "rank": 1,
+        "record_id": "B_B_01_000084",
+        "score": 13.654698371887207,
+        "selected": [
+          327.2368974685669,
+          845.2677211761475
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 5.833414505645476,
+        "frame_index": 85,
+        "rank": 1,
+        "record_id": "B_B_01_000085",
+        "score": 16.294767379760742,
+        "selected": [
+          325.356885433197,
+          856.2557625770569
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 7.006312779249624,
+        "frame_index": 86,
+        "rank": 1,
+        "record_id": "B_B_01_000086",
+        "score": 17.274415969848633,
+        "selected": [
+          327.0705146789551,
+          861.9030494689941
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 6.312819514492856,
+        "frame_index": 87,
+        "rank": 1,
+        "record_id": "B_B_01_000087",
+        "score": 16.6868839263916,
+        "selected": [
+          325.75698375701904,
+          871.6201586723328
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 11.97581753274879,
+        "frame_index": 88,
+        "rank": 1,
+        "record_id": "B_B_01_000088",
+        "score": 18.190570831298828,
+        "selected": [
+          329.8464756011963,
+          875.3952975273132
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 7.751801439190655,
+        "frame_index": 89,
+        "rank": 1,
+        "record_id": "B_B_01_000089",
+        "score": 18.891803741455078,
+        "selected": [
+          327.0357995033264,
+          887.4361619949341
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 5.894837481940871,
+        "frame_index": 90,
+        "rank": 1,
+        "record_id": "B_B_01_000090",
+        "score": 13.650015830993652,
+        "selected": [
+          328.2056541442871,
+          901.7293834686279
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 6.318953500200233,
+        "frame_index": 91,
+        "rank": 1,
+        "record_id": "B_B_01_000091",
+        "score": 16.10835075378418,
+        "selected": [
+          327.87812423706055,
+          905.4791040420532
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 2.4001516709626816,
+        "frame_index": 92,
+        "rank": 1,
+        "record_id": "B_B_01_000092",
+        "score": 22.95626449584961,
+        "selected": [
+          326.50756549835205,
+          918.9216763973236
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 6.36184753460288,
+        "frame_index": 93,
+        "rank": 1,
+        "record_id": "B_B_01_000093",
+        "score": 22.611963272094727,
+        "selected": [
+          326.31804180145264,
+          923.2408967018127
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 3.701443188142045,
+        "frame_index": 94,
+        "rank": 1,
+        "record_id": "B_B_01_000094",
+        "score": 19.55967903137207,
+        "selected": [
+          325.956120967865,
+          936.2185173034668
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 4.638168168246734,
+        "frame_index": 95,
+        "rank": 1,
+        "record_id": "B_B_01_000095",
+        "score": 6.4945855140686035,
+        "selected": [
+          327.0832920074463,
+          941.8490743637085
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 19.478261998969064,
+        "frame_index": 96,
+        "rank": 1,
+        "record_id": "B_B_01_000096",
+        "score": 6.316517353057861,
+        "selected": [
+          339.3201479911804,
+          942.5510873794556
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 3.4573290689030833,
+        "frame_index": 97,
+        "rank": 1,
+        "record_id": "B_B_01_000097",
+        "score": 5.315343856811523,
+        "selected": [
+          325.6476926803589,
+          965.6643093824387
+        ]
+      },
+      {
+        "burst_id": "B_01",
+        "error_px": 4.803840939966216,
+        "frame_index": 98,
+        "rank": 1,
+        "record_id": "B_B_01_000098",
+        "score": 7.868588924407959,
+        "selected": [
+          327.50883197784424,
+          968.7560477256775
+        ]
+      },
+      {
+        "burst_id": "C_NEG_01",
+        "error_px": null,
+        "frame_index": 69,
+        "rank": 1,
+        "record_id": "C_C_NEG_01_000069",
+        "score": 2.866466522216797,
+        "selected": [
+          631.692355632782,
+          825.8670845031738
+        ]
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "error_px": null,
+        "frame_index": 208,
+        "rank": 1,
+        "record_id": "C_C_NEG_03_000208",
+        "score": -14.495119094848633,
+        "selected": null
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "error_px": null,
+        "frame_index": 369,
+        "rank": 1,
+        "record_id": "C_C_NEG_05_000369",
+        "score": -14.460014343261719,
+        "selected": null
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "error_px": null,
+        "frame_index": 525,
+        "rank": 1,
+        "record_id": "C_C_NEG_07_000525",
+        "score": -14.422578811645508,
+        "selected": null
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "error_px": null,
+        "frame_index": 649,
+        "rank": 1,
+        "record_id": "C_C_NEG_09_000649",
+        "score": -13.00075912475586,
+        "selected": null
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 4.26102667986437,
+        "frame_index": 351,
+        "rank": 1,
+        "record_id": "C_C_01_000351",
+        "score": 16.743810653686523,
+        "selected": [
+          443.71906757354736,
+          918.0871148109436
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 1.7720615358735181,
+        "frame_index": 352,
+        "rank": 1,
+        "record_id": "C_C_01_000352",
+        "score": 17.23101234436035,
+        "selected": [
+          434.5638515949249,
+          886.889319896698
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.8692194459093416,
+        "frame_index": 353,
+        "rank": 1,
+        "record_id": "C_C_01_000353",
+        "score": 6.651790618896484,
+        "selected": [
+          420.4161329269409,
+          860.3648719787598
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 1.6504471602499495,
+        "frame_index": 354,
+        "rank": 1,
+        "record_id": "C_C_01_000354",
+        "score": 23.22662925720215,
+        "selected": [
+          413.68712520599365,
+          830.463303565979
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 0.9162985291542247,
+        "frame_index": 355,
+        "rank": 1,
+        "record_id": "C_C_01_000355",
+        "score": 26.38496971130371,
+        "selected": [
+          403.5089542865753,
+          801.2796792984009
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 0.6673615746257548,
+        "frame_index": 356,
+        "rank": 1,
+        "record_id": "C_C_01_000356",
+        "score": 27.852235794067383,
+        "selected": [
+          395.9815664291382,
+          769.0476140975952
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 1.1170992932344956,
+        "frame_index": 357,
+        "rank": 1,
+        "record_id": "C_C_01_000357",
+        "score": 28.411088943481445,
+        "selected": [
+          385.0619124174118,
+          739.1031064987183
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 1.2463233422732027,
+        "frame_index": 358,
+        "rank": 1,
+        "record_id": "C_C_01_000358",
+        "score": 32.9080696105957,
+        "selected": [
+          378.51350116729736,
+          709.4864156246185
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 1.2934844985448521,
+        "frame_index": 359,
+        "rank": 1,
+        "record_id": "C_C_01_000359",
+        "score": 28.61428451538086,
+        "selected": [
+          369.2491273880005,
+          677.9368735551834
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 3.4815042451096834,
+        "frame_index": 360,
+        "rank": 1,
+        "record_id": "C_C_01_000360",
+        "score": 31.878982543945312,
+        "selected": [
+          363.41095542907715,
+          646.8250179290771
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.831595961102203,
+        "frame_index": 361,
+        "rank": 1,
+        "record_id": "C_C_01_000361",
+        "score": 28.028730392456055,
+        "selected": [
+          353.5464677810669,
+          616.3634667396545
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.537282055470915,
+        "frame_index": 362,
+        "rank": 1,
+        "record_id": "C_C_01_000362",
+        "score": 28.072187423706055,
+        "selected": [
+          350.7372102737427,
+          589.9832067489624
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.141979547040052,
+        "frame_index": 363,
+        "rank": 1,
+        "record_id": "C_C_01_000363",
+        "score": 19.969600677490234,
+        "selected": [
+          342.7111830711365,
+          559.5429039001465
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 4.49755736699014,
+        "frame_index": 364,
+        "rank": 1,
+        "record_id": "C_C_01_000364",
+        "score": 16.682147979736328,
+        "selected": [
+          336.76810252666473,
+          530.8969144821167
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 4.128869935213964,
+        "frame_index": 365,
+        "rank": 1,
+        "record_id": "C_C_01_000365",
+        "score": 16.880483627319336,
+        "selected": [
+          334.848180770874,
+          480.4939088821411
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": null,
+        "frame_index": 366,
+        "rank": 1,
+        "record_id": "C_C_01_000366",
+        "score": -1.8266962766647339,
+        "selected": null
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 4.269026742511655,
+        "frame_index": 367,
+        "rank": 1,
+        "record_id": "C_C_01_000367",
+        "score": 8.55395221710205,
+        "selected": [
+          321.4590312242508,
+          408.0903458595276
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 3.602607767572856,
+        "frame_index": 368,
+        "rank": 1,
+        "record_id": "C_C_01_000368",
+        "score": 16.901905059814453,
+        "selected": [
+          321.4701746702194,
+          389.6706726551056
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.012111666637376,
+        "frame_index": 369,
+        "rank": 1,
+        "record_id": "C_C_01_000369",
+        "score": 17.436729431152344,
+        "selected": [
+          321.1090589761734,
+          373.4900907278061
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 4.485355520931564,
+        "frame_index": 370,
+        "rank": 1,
+        "record_id": "C_C_01_000370",
+        "score": 14.856928825378418,
+        "selected": [
+          321.6353384256363,
+          359.29985332489014
+        ]
+      },
+      {
+        "burst_id": "C_01",
+        "error_px": 2.0599010532141495,
+        "frame_index": 371,
+        "rank": 1,
+        "record_id": "C_C_01_000371",
+        "score": 6.530796527862549,
+        "selected": [
+          324.3048963546753,
+          347.7234082221985
+        ]
+      }
+    ]
+  },
+  "holdout_used": false,
+  "schema_version": 1,
+  "stateful": {
+    "by_burst": {
+      "A_01": {
+        "emitted": 20,
+        "frames": 21,
+        "localization": {
+          "count": 20,
+          "max": 6.7030666747400565,
+          "mean": 2.678313956862369,
+          "p50": 2.3917453147863923,
+          "p95": 6.198139544982613
+        },
+        "longest_miss": 1,
+        "recall_at_10": 0.9523809523809523,
+        "recall_at_20": 0.9523809523809523
+      },
+      "B_01": {
+        "emitted": 19,
+        "frames": 21,
+        "localization": {
+          "count": 19,
+          "max": 3.528044897841618,
+          "mean": 1.7691061904539545,
+          "p50": 1.5422008990557319,
+          "p95": 3.4062522632600785
+        },
+        "longest_miss": 2,
+        "recall_at_10": 0.9047619047619048,
+        "recall_at_20": 0.9047619047619048
+      },
+      "C_01": {
+        "emitted": 16,
+        "frames": 21,
+        "localization": {
+          "count": 16,
+          "max": 50.92778895803764,
+          "mean": 5.214969870868767,
+          "p50": 2.0384615995358297,
+          "p95": 15.773526795470978
+        },
+        "longest_miss": 5,
+        "recall_at_10": 0.7142857142857143,
+        "recall_at_20": 0.7142857142857143
+      }
+    },
+    "confirmed_negative_fp": 0,
+    "localization": {
+      "count": 55,
+      "max": 50.92778895803764,
+      "mean": 3.1021602670867785,
+      "p50": 2.0231247426373624,
+      "p95": 4.690276915431159
+    },
+    "negative_checks": [
+      {
+        "burst_id": "C_NEG_01",
+        "confirmed_emission": false,
+        "internal_seed": [
+          631.692355632782,
+          825.8670845031738
+        ]
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "confirmed_emission": false,
+        "internal_seed": null
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "confirmed_emission": false,
+        "internal_seed": null
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "confirmed_emission": false,
+        "internal_seed": null
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "confirmed_emission": false,
+        "internal_seed": null
+      }
+    ],
+    "recall_at_10": 0.8571428571428571,
+    "recall_at_20": 0.8571428571428571,
+    "runtime": {
+      "mean_fps": 25.83274038539694,
+      "processing_ms": {
+        "count": 63,
+        "max": 513.7216820003232,
+        "mean": 38.71056593613633,
+        "p50": 9.450408993870951,
+        "p95": 388.3031584991835
+      }
+    },
+    "traces": {
+      "A_01": [
+        {
+          "emitted_observation": null,
+          "event": "internal_seed",
+          "frame_index": 78,
+          "internal_seed": [
+            428.53667163848877,
+            1193.5764813423157
+          ],
+          "path": "global",
+          "processing_ms": 513.7216820003232,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            424.2,
+            1195.7
+          ],
+          "event": "emitted_local",
+          "frame_index": 79,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 22.632293999777175,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            424.1363636363636,
+            1194.8636363636365
+          ],
+          "event": "emitted_local",
+          "frame_index": 80,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.943891003378667,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.0
+          ],
+          "event": "emitted_local",
+          "frame_index": 81,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.450408993870951,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.0
+          ],
+          "event": "emitted_local",
+          "frame_index": 82,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.3318610076094046,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "event": "emitted_local",
+          "frame_index": 83,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.9879929934395477,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "event": "emitted_local",
+          "frame_index": 84,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 20.917165995342657,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "event": "emitted_local",
+          "frame_index": 85,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.7415299999993294,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "event": "emitted_local",
+          "frame_index": 86,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.682649993919767,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "event": "emitted_local",
+          "frame_index": 87,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.365498998202384,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "event": "emitted_local",
+          "frame_index": 88,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.437765001668595,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "event": "emitted_local",
+          "frame_index": 89,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 4.160109005169943,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "event": "emitted_local",
+          "frame_index": 90,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 4.921400992316194,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "event": "emitted_local",
+          "frame_index": 91,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.0528390052495524,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 92,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.402766002807766,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.5,
+            1193.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 93,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.2521739922231063,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            436.66666666666663,
+            1187.25
+          ],
+          "event": "emitted_local",
+          "frame_index": 94,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.035968006472103,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            436.67391304347825,
+            1187.195652173913
+          ],
+          "event": "emitted_local",
+          "frame_index": 95,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 12.761888996465132,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            436.66666666666663,
+            1187.0
+          ],
+          "event": "emitted_local",
+          "frame_index": 96,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.991756006143987,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            451.46000000000004,
+            1115.38
+          ],
+          "event": "emitted_local",
+          "frame_index": 97,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.938434001407586,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            474.3490566037736,
+            1028.0094339622642
+          ],
+          "event": "emitted_local",
+          "frame_index": 98,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.717532995040528,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        }
+      ],
+      "B_01": [
+        {
+          "emitted_observation": null,
+          "event": "internal_seed",
+          "frame_index": 78,
+          "internal_seed": [
+            313.73152256011963,
+            795.6443223953247
+          ],
+          "path": "global",
+          "processing_ms": 428.9232709998032,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            313.8636363636364,
+            805.0454545454545
+          ],
+          "event": "emitted_local",
+          "frame_index": 79,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 5.322387994965538,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            315.6428571428571,
+            813.2619047619048
+          ],
+          "event": "emitted_local",
+          "frame_index": 80,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 17.718214003252797,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            317.3,
+            821.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 81,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.5419280136702582,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            318.4090909090909,
+            831.5909090909091
+          ],
+          "event": "emitted_local",
+          "frame_index": 82,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.3147839973680675,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            319.83333333333337,
+            841.0714285714286
+          ],
+          "event": "emitted_local",
+          "frame_index": 83,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 4.006102011771873,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            319.3888888888889,
+            848.6111111111111
+          ],
+          "event": "emitted_local",
+          "frame_index": 84,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.958934011985548,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            320.72,
+            858.44
+          ],
+          "event": "emitted_local",
+          "frame_index": 85,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 21.93722799711395,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            320.83333333333337,
+            867.1666666666666
+          ],
+          "event": "emitted_local",
+          "frame_index": 86,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 22.722145993611775,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            321.72222222222223,
+            876.2777777777778
+          ],
+          "event": "emitted_local",
+          "frame_index": 87,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 19.734225992579013,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.2142857142857,
+            885.7857142857142
+          ],
+          "event": "emitted_local",
+          "frame_index": 88,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.611404995666817,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.75,
+            894.25
+          ],
+          "event": "emitted_local",
+          "frame_index": 89,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 16.12910100084264,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.75,
+            902.25
+          ],
+          "event": "emitted_local",
+          "frame_index": 90,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.298386000096798,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.73809523809524,
+            910.9761904761905
+          ],
+          "event": "emitted_local",
+          "frame_index": 91,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.8439710004022345,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.125,
+            920.125
+          ],
+          "event": "emitted_local",
+          "frame_index": 92,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 16.333844992914237,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            324.07894736842104,
+            928.8157894736842
+          ],
+          "event": "emitted_local",
+          "frame_index": 93,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.185708994162269,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.02631578947364,
+            937.1315789473684
+          ],
+          "event": "emitted_local",
+          "frame_index": 94,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.626395004801452,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "event": "prediction_or_miss",
+          "frame_index": 95,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.300179990124889,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.5,
+            956.25
+          ],
+          "event": "emitted_local",
+          "frame_index": 96,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.7295030013192445,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "COAST"
+        },
+        {
+          "emitted_observation": [
+            325.16666666666663,
+            965.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 97,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.440589994075708,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            326.1470588235294,
+            974.2647058823529
+          ],
+          "event": "emitted_local",
+          "frame_index": 98,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 20.131001001573168,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        }
+      ],
+      "C_01": [
+        {
+          "emitted_observation": null,
+          "event": "internal_seed",
+          "frame_index": 351,
+          "internal_seed": [
+            443.71906757354736,
+            918.0871148109436
+          ],
+          "path": "global",
+          "processing_ms": 442.7829850028502,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": null,
+          "event": "tentative_miss",
+          "frame_index": 352,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.73604899586644,
+          "stale": false,
+          "state_after": "ACQUIRE",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": null,
+          "event": "internal_seed",
+          "frame_index": 353,
+          "internal_seed": [
+            420.4161329269409,
+            860.3648719787598
+          ],
+          "path": "global",
+          "processing_ms": 486.69839699869044,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            413.8461538461538,
+            830.8076923076924
+          ],
+          "event": "emitted_local",
+          "frame_index": 354,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.763312995550223,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            403.9814814814815,
+            801.4259259259259
+          ],
+          "event": "emitted_local",
+          "frame_index": 355,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 17.042756007867865,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            395.1673640167364,
+            771.9037656903765
+          ],
+          "event": "emitted_local",
+          "frame_index": 356,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 13.25272599933669,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            386.23333333333335,
+            741.5333333333333
+          ],
+          "event": "emitted_local",
+          "frame_index": 357,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.155853002681397,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            377.92424242424244,
+            711.0454545454545
+          ],
+          "event": "emitted_local",
+          "frame_index": 358,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.581384003860876,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            369.9202898550725,
+            680.1231884057971
+          ],
+          "event": "emitted_local",
+          "frame_index": 359,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.693779009860009,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            361.8066666666667,
+            648.6066666666667
+          ],
+          "event": "emitted_local",
+          "frame_index": 360,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.3556789965368807,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            355.474358974359,
+            618.3461538461538
+          ],
+          "event": "emitted_local",
+          "frame_index": 361,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 2.819735003868118,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            349.043227665706,
+            588.5850144092219
+          ],
+          "event": "emitted_local",
+          "frame_index": 362,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.650037001236342,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            343.34444444444443,
+            559.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 363,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.501888998784125,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            339.5,
+            531.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 364,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 3.2556219957768917,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            332.0882352941177,
+            478.4019607843137
+          ],
+          "event": "emitted_local",
+          "frame_index": 365,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.277623994625174,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            327.1126126126126,
+            431.40090090090087
+          ],
+          "event": "emitted_local",
+          "frame_index": 366,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.706191998906434,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.5940170940171,
+            411.45726495726495
+          ],
+          "event": "emitted_local",
+          "frame_index": 367,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 13.450369995553046,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.0546218487395,
+            393.390756302521
+          ],
+          "event": "emitted_local",
+          "frame_index": 368,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 14.302997995400801,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            339.5,
+            422.5
+          ],
+          "event": "emitted_local",
+          "frame_index": 369,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 18.471814997610636,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "event": "prediction_or_miss",
+          "frame_index": 370,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 19.568410993088037,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "event": "prediction_or_miss",
+          "frame_index": 371,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.4411240057088435,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "COAST"
+        }
+      ]
+    }
+  }
+}

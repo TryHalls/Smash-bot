@@ -1,0 +1,103 @@
+{
+  "by_burst": {
+    "A_01": {
+      "emitted": 20,
+      "localization": {
+        "count": 20,
+        "max": 138.52234421944934,
+        "mean": 12.345928615523137,
+        "p50": 2.5866250657241694,
+        "p95": 66.89761917536373
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.8571428571428571,
+      "recall_at_20": 0.8571428571428571
+    },
+    "B_01": {
+      "emitted": 20,
+      "localization": {
+        "count": 20,
+        "max": 6.21743586243425,
+        "mean": 1.9915226740529692,
+        "p50": 1.5782700670045182,
+        "p95": 3.6625144460712513
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.9523809523809523,
+      "recall_at_20": 0.9523809523809523
+    },
+    "C_01": {
+      "emitted": 20,
+      "localization": {
+        "count": 20,
+        "max": 47.68406153829199,
+        "mean": 38.34268977986413,
+        "p50": 40.833548963079174,
+        "p95": 47.39339155253067
+      },
+      "longest_miss": 1,
+      "recall_at_10": 0.047619047619047616,
+      "recall_at_20": 0.047619047619047616
+    }
+  },
+  "checkpoint": "artifacts/perception_mission/h2_all_train/all_train_h2.pt",
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": false,
+  "experiment": "all_train_h2_internal_seed_frozen_local_yellow",
+  "global": {
+    "emitted": 60,
+    "frames": 63,
+    "localization": {
+      "count": 60,
+      "max": 138.52234421944934,
+      "mean": 17.560047023146744,
+      "p50": 2.971747880387009,
+      "p95": 47.39339155253067
+    },
+    "longest_miss": 1,
+    "recall_at_10": 0.6190476190476191,
+    "recall_at_20": 0.6190476190476191
+  },
+  "holdout_used": false,
+  "local_path": "Task011 yellow-only local ROI, minimum geometric distance to internal seed; no GT",
+  "model_parameter_hash": "6cf22829471f7f19a4dc2a73d29900b8daf92c96ef475b97072c382995b824b4",
+  "negative_checks": {
+    "confirmed_fp": 0,
+    "frames": 5,
+    "rows": [
+      {
+        "burst_id": "C_NEG_01",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "confirmed_emission": false
+      }
+    ]
+  },
+  "proposal_path": "Task012 H2 all-TRAIN checkpoint, top-8 internal hypotheses; no presence head",
+  "runtime": {
+    "mean_fps": 31.968911602192083,
+    "processing_ms": {
+      "count": 63,
+      "max": 1072.6654019963462,
+      "mean": 31.28038928705445,
+      "p50": 6.084407999878749,
+      "p95": 32.96746730775338
+    }
+  },
+  "schema_version": 1,
+  "state_machine": "Task018 TemporalConfirmedStateMachine"
+}

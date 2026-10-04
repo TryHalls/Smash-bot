@@ -1,0 +1,357 @@
+{
+  "dev": {
+    "by_group": {
+      "A": {
+        "localization": {
+          "count": 21,
+          "max": 8.339807318796035,
+          "mean": 3.8498941277119987,
+          "p50": 3.766730515625388,
+          "p95": 6.418088142860408
+        },
+        "oracle_at_10": 1.0,
+        "oracle_at_20": 1.0,
+        "records": 21
+      },
+      "B": {
+        "localization": {
+          "count": 21,
+          "max": 19.478261998969064,
+          "mean": 7.106258730017745,
+          "p50": 6.318953500200233,
+          "p95": 13.591686736099838
+        },
+        "oracle_at_10": 0.8095238095238095,
+        "oracle_at_20": 1.0,
+        "records": 21
+      },
+      "C": {
+        "localization": {
+          "count": 21,
+          "max": 7.060998506349996,
+          "mean": 2.804862496565441,
+          "p50": 2.537282055470915,
+          "p95": 4.49755736699014
+        },
+        "oracle_at_10": 1.0,
+        "oracle_at_20": 1.0,
+        "records": 21
+      }
+    },
+    "invisible": 5,
+    "localization": {
+      "count": 63,
+      "max": 19.478261998969064,
+      "mean": 4.587005118098393,
+      "p50": 3.9770807666091472,
+      "p95": 11.364076261427655
+    },
+    "oracle_at_10": {
+      "matched": 59,
+      "rate": 0.9365079365079365,
+      "total": 63
+    },
+    "oracle_at_20": {
+      "matched": 63,
+      "rate": 1.0,
+      "total": 63
+    },
+    "presence": {
+      "invisible_positive_count": 5,
+      "visible_positive_rate": 1.0
+    },
+    "records": 68,
+    "visible": 63
+  },
+  "dev_bursts": {
+    "A_01": {
+      "by_group": {
+        "A": {
+          "localization": {
+            "count": 21,
+            "max": 8.339807318796035,
+            "mean": 3.8498941277119987,
+            "p50": 3.766730515625388,
+            "p95": 6.418088142860408
+          },
+          "oracle_at_10": 1.0,
+          "oracle_at_20": 1.0,
+          "records": 21
+        }
+      },
+      "invisible": 0,
+      "localization": {
+        "count": 21,
+        "max": 8.339807318796035,
+        "mean": 3.8498941277119987,
+        "p50": 3.766730515625388,
+        "p95": 6.418088142860408
+      },
+      "oracle_at_10": {
+        "matched": 21,
+        "rate": 1.0,
+        "total": 21
+      },
+      "oracle_at_20": {
+        "matched": 21,
+        "rate": 1.0,
+        "total": 21
+      },
+      "presence": {
+        "invisible_positive_count": 0,
+        "visible_positive_rate": 1.0
+      },
+      "records": 21,
+      "visible": 21
+    },
+    "B_01": {
+      "by_group": {
+        "B": {
+          "localization": {
+            "count": 21,
+            "max": 19.478261998969064,
+            "mean": 7.106258730017745,
+            "p50": 6.318953500200233,
+            "p95": 13.591686736099838
+          },
+          "oracle_at_10": 0.8095238095238095,
+          "oracle_at_20": 1.0,
+          "records": 21
+        }
+      },
+      "invisible": 0,
+      "localization": {
+        "count": 21,
+        "max": 19.478261998969064,
+        "mean": 7.106258730017745,
+        "p50": 6.318953500200233,
+        "p95": 13.591686736099838
+      },
+      "oracle_at_10": {
+        "matched": 17,
+        "rate": 0.8095238095238095,
+        "total": 21
+      },
+      "oracle_at_20": {
+        "matched": 21,
+        "rate": 1.0,
+        "total": 21
+      },
+      "presence": {
+        "invisible_positive_count": 0,
+        "visible_positive_rate": 1.0
+      },
+      "records": 21,
+      "visible": 21
+    },
+    "C_01": {
+      "by_group": {
+        "C": {
+          "localization": {
+            "count": 21,
+            "max": 7.060998506349996,
+            "mean": 2.804862496565441,
+            "p50": 2.537282055470915,
+            "p95": 4.49755736699014
+          },
+          "oracle_at_10": 1.0,
+          "oracle_at_20": 1.0,
+          "records": 21
+        }
+      },
+      "invisible": 0,
+      "localization": {
+        "count": 21,
+        "max": 7.060998506349996,
+        "mean": 2.804862496565441,
+        "p50": 2.537282055470915,
+        "p95": 4.49755736699014
+      },
+      "oracle_at_10": {
+        "matched": 21,
+        "rate": 1.0,
+        "total": 21
+      },
+      "oracle_at_20": {
+        "matched": 21,
+        "rate": 1.0,
+        "total": 21
+      },
+      "presence": {
+        "invisible_positive_count": 0,
+        "visible_positive_rate": 1.0
+      },
+      "records": 21,
+      "visible": 21
+    }
+  },
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": false,
+  "experiment": "all_train_h2_coarse_seed",
+  "holdout_used": false,
+  "model": {
+    "architecture": "Task012 H2",
+    "batch_size": 8,
+    "checkpoint": "artifacts/perception_mission/h2_all_train/all_train_h2.pt",
+    "epochs": 40,
+    "losses": {
+      "heatmap": 0.053640155705996576,
+      "offset": 0.012059769568137261,
+      "presence": 0.15449777650008892,
+      "total": 0.22019770175752812
+    },
+    "parameter_hash": "6cf22829471f7f19a4dc2a73d29900b8daf92c96ef475b97072c382995b824b4",
+    "seed": 20261001,
+    "threads": 2
+  },
+  "negative_checks": {
+    "C_NEG_01": {
+      "by_group": {},
+      "invisible": 1,
+      "localization": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "oracle_at_10": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "oracle_at_20": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "presence": {
+        "invisible_positive_count": 1,
+        "visible_positive_rate": null
+      },
+      "records": 1,
+      "visible": 0
+    },
+    "C_NEG_03": {
+      "by_group": {},
+      "invisible": 1,
+      "localization": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "oracle_at_10": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "oracle_at_20": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "presence": {
+        "invisible_positive_count": 1,
+        "visible_positive_rate": null
+      },
+      "records": 1,
+      "visible": 0
+    },
+    "C_NEG_05": {
+      "by_group": {},
+      "invisible": 1,
+      "localization": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "oracle_at_10": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "oracle_at_20": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "presence": {
+        "invisible_positive_count": 1,
+        "visible_positive_rate": null
+      },
+      "records": 1,
+      "visible": 0
+    },
+    "C_NEG_07": {
+      "by_group": {},
+      "invisible": 1,
+      "localization": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "oracle_at_10": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "oracle_at_20": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "presence": {
+        "invisible_positive_count": 1,
+        "visible_positive_rate": null
+      },
+      "records": 1,
+      "visible": 0
+    },
+    "C_NEG_09": {
+      "by_group": {},
+      "invisible": 1,
+      "localization": {
+        "count": 0,
+        "max": null,
+        "mean": null,
+        "p50": null,
+        "p95": null
+      },
+      "oracle_at_10": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "oracle_at_20": {
+        "matched": 0,
+        "rate": null,
+        "total": 0
+      },
+      "presence": {
+        "invisible_positive_count": 1,
+        "visible_positive_rate": null
+      },
+      "records": 1,
+      "visible": 0
+    }
+  },
+  "schema_version": 1,
+  "train": {
+    "fit_only": true,
+    "invisible": 38,
+    "records": 781,
+    "visible": 743
+  },
+  "train_snapshot": {
+    "path": "data/task015/human_dense_train.json",
+    "records": 781,
+    "sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3",
+    "used_for_fitting": true
+  }
+}
