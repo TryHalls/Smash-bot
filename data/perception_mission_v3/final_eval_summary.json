@@ -1,0 +1,139 @@
+{
+  "by_burst": {
+    "V3_A": {
+      "emitted": 22,
+      "frames": 25,
+      "localization": {
+        "count": 22,
+        "max": 803.1584967714192,
+        "mean": 331.1208289892902,
+        "p50": 309.21143719771237,
+        "p95": 745.4519496474979
+      },
+      "longest_visible_miss": 1,
+      "processed_frames": 1088,
+      "recall_at_10": 0.08333333333333333,
+      "recall_at_20": 0.08333333333333333,
+      "visible": 24
+    },
+    "V3_B": {
+      "emitted": 20,
+      "frames": 25,
+      "localization": {
+        "count": 20,
+        "max": 1105.7489255265627,
+        "mean": 668.6213861943214,
+        "p50": 598.9881484951372,
+        "p95": 1022.1045428586851
+      },
+      "longest_visible_miss": 1,
+      "processed_frames": 1089,
+      "recall_at_10": 0.0,
+      "recall_at_20": 0.0,
+      "visible": 21
+    },
+    "V3_C": {
+      "emitted": 16,
+      "frames": 25,
+      "localization": {
+        "count": 16,
+        "max": 812.2502431707426,
+        "mean": 209.83646060227795,
+        "p50": 76.03065493920201,
+        "p95": 754.2384375494312
+      },
+      "longest_visible_miss": 1,
+      "processed_frames": 545,
+      "recall_at_10": 0.35294117647058826,
+      "recall_at_20": 0.35294117647058826,
+      "visible": 17
+    }
+  },
+  "dataset": {
+    "manifest_records": 83,
+    "negative_records": 8,
+    "records": 83,
+    "runtime_processed_active_frames": 2722,
+    "runtime_processed_negative_frames": 10,
+    "visible_active": 62
+  },
+  "experiment": "issue38_single_sealed_v3_replay",
+  "frozen_pipeline": {
+    "global": "all-TRAIN Task012 H2 top-8 internal seeds; valid-domain decode; no presence-head gating",
+    "global_seed_emitted": false,
+    "local": "Task011 full-resolution yellow-only ROI; radius=120; half_extent=240; nearest-to-seed/prediction",
+    "state_machine": "Task018 TemporalConfirmedStateMachine"
+  },
+  "gates": {
+    "confirmed_negative_fp_zero": true,
+    "each_burst_at_20": false,
+    "p50": false,
+    "p95": false,
+    "recall_at_10": false,
+    "recall_at_20": false,
+    "runtime_fps": true,
+    "runtime_mean": true,
+    "scheduling_debt": true,
+    "stale_zero": true
+  },
+  "global": {
+    "emitted_visible": 58,
+    "frames": 75,
+    "localization": {
+      "count": 58,
+      "max": 1105.7489255265627,
+      "mean": 414.0425746773666,
+      "p50": 445.96842202049964,
+      "p95": 897.346999046238
+    },
+    "longest_visible_miss": 1,
+    "recall_at_10": 0.12903225806451613,
+    "recall_at_20": 0.12903225806451613,
+    "visible": 62
+  },
+  "negative_checks": {
+    "confirmed_fp": 0,
+    "confirmed_fp_total": "0/8",
+    "frames": 8,
+    "internal_seed_count": 1,
+    "rows": [
+      {
+        "confirmed_emitted": false,
+        "internal_seed": true,
+        "processed_frames": 10,
+        "record_id": "V3_NEGATIVE",
+        "selected_frames": 8
+      }
+    ]
+  },
+  "pass": false,
+  "provenance": {
+    "dev_used_for_fitting": false,
+    "dev_used_for_selection": false,
+    "freeze_commit": "e984ed53c8c28bc6e07fd70aea8552f14985ce9f",
+    "ground_truth_sha256": "68c42c11b1980348dc88485bd240d7d3a266140d5cb1378a26ba63984e41fbd5",
+    "h2_parameter_hash": "6cf22829471f7f19a4dc2a73d29900b8daf92c96ef475b97072c382995b824b4",
+    "holdout_used": false,
+    "manifest_sha256": "a9f74338808deaaaf5fdebe5886eef5499ad315fe3b8507703dc4f42dbf88568",
+    "train_snapshot_sha256": "81c38f08dd0b6a3749e3b925b8824729929884a003bd99197fe85701b7ba37e3",
+    "v3_used_for_fitting": false,
+    "v3_used_for_selection": false
+  },
+  "runtime": {
+    "effective_fps": 236.68679039642595,
+    "fifo_backlog": false,
+    "latest_frame_semantics": true,
+    "max_scheduling_debt_ms": 30.928427993187682,
+    "mixed_mean_ms": 4.224992862191858,
+    "processing_ms": {
+      "count": 2722,
+      "max": 64.26142799318768,
+      "mean": 4.224992862191858,
+      "p50": 2.7839425019919872,
+      "p95": 11.312790960073462
+    },
+    "threads": 1
+  },
+  "schema_version": 1,
+  "verdict": "EXTERNAL_BLOCKER"
+}
