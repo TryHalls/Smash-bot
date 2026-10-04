@@ -1,6 +1,6 @@
 import unittest
 
-from smashbot_diagnostics.perception_mission_union_hog import _label
+from smashbot_diagnostics.perception_mission_union_hog import _label, _summarize
 
 
 class MissionUnionHogTests(unittest.TestCase):
@@ -19,6 +19,12 @@ class MissionUnionHogTests(unittest.TestCase):
 
         row = {"shuttle": {"visible": False}}
         self.assertEqual(_label([("yellow", Candidate()), ("white", Candidate())], row), ["negative", "negative"])
+
+    def test_summary_burst_breakdown_is_not_recursive(self):
+        item = {"visible": True, "best_error_px": 2.0, "emitted": True, "oracle_at_20": True, "oracle_at_10": True, "burst_id": "A"}
+        result = _summarize([item])
+        self.assertEqual(result["by_burst"]["A"]["frames"], 1)
+        self.assertEqual(result["by_burst"]["A"]["by_burst"], {})
 
 
 if __name__ == "__main__":

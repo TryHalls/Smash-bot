@@ -167,7 +167,7 @@ def _eval_frame(svm: Any, frame: Any, proposals: list[tuple[str, ShuttleCandidat
     }
 
 
-def _summarize(items: list[dict[str, Any]]) -> dict[str, Any]:
+def _summarize(items: list[dict[str, Any]], *, include_by_burst: bool = True) -> dict[str, Any]:
     visible = [item for item in items if item["visible"]]
     errors = [float(item["best_error_px"]) for item in visible if item["best_error_px"] is not None]
     return {
@@ -181,9 +181,9 @@ def _summarize(items: list[dict[str, Any]]) -> dict[str, Any]:
         "oracle_at_20": sum(item["oracle_at_20"] for item in visible),
         "oracle_at_10": sum(item["oracle_at_10"] for item in visible),
         "by_burst": {
-            burst: _summarize([item for item in items if item["burst_id"] == burst])
+            burst: _summarize([item for item in items if item["burst_id"] == burst], include_by_burst=False)
             for burst in sorted({str(item["burst_id"]) for item in items})
-        },
+        } if include_by_burst else {},
     }
 
 
