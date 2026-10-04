@@ -321,18 +321,20 @@ def run() -> dict[str, Any]:
     cv2.setNumThreads(1)
     records = [dict(row) for row in truth_rows]
     runtime_rows = _expand_runtime_rows(records)
-    frames = _decode(runtime_rows, numpy, cv2)
     by_burst = {burst: sorted([row for row in records if row["burst_id"] == burst], key=lambda item: int(item["frame_index"])) for burst in ACTIVE}
     traces: dict[str, list[dict[str, Any]]] = {}
     burst_results: dict[str, dict[str, Any]] = {}
     for burst, rows in by_burst.items():
         runtime_burst = [row for row in runtime_rows if row["burst_id"] == burst]
+        frames = _decode(runtime_burst, numpy, cv2)
         trace = _run_burst(runtime_burst, frames, net, numpy)["traces"]
         traces[burst] = trace
         burst_results[burst] = _burst_summary(rows, trace)
+        del frames
     negative_rows: list[dict[str, Any]] = []
     negative = [row for row in runtime_rows if row["burst_id"] == NEGATIVE]
     negative_selected = [row for row in records if row["burst_id"] == NEGATIVE]
+    frames = _decode(negative, numpy, cv2)
     negative_trace = _run_burst(negative, frames, net, numpy)["traces"]
     negative_rows.append({"record_id": NEGATIVE, "selected_frames": len(negative_selected), "processed_frames": len(negative_trace), "internal_seed": any(item["internal_seed"] is not None for item in negative_trace), "confirmed_emitted": any(item["emitted_observation"] is not None for item in negative_trace), "trace": negative_trace})
     all_errors = [value for burst, rows in by_burst.items() for value in _errors(rows, traces[burst])]
