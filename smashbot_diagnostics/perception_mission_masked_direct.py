@@ -89,8 +89,7 @@ def _target(row: dict[str, Any]) -> tuple[int | None, int | None, float | None, 
 
 
 def _cache(rows: list[dict[str, Any]], root: Path, *, chunk_size: int = 64) -> dict[str, Any]:
-    _torch, _nn, numpy = _torch()
-    _numpy, cv2 = temporal._numpy_cv2()
+    numpy, cv2 = temporal._numpy_cv2()
     cache: dict[str, Any] = {}
     for row, frame in _iter_rows(rows, root, chunk_size=chunk_size):
         cache[str(row["record_id"])] = _masked_input(frame, numpy, cv2)
