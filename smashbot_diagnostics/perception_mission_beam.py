@@ -118,7 +118,7 @@ class BeamH2Detector:
         start = time.perf_counter()
         value = phase_b._preprocess_train_frame(frame_bgr)
         self.net.setInput(self.numpy.ascontiguousarray(value[None], dtype=self.numpy.float32))
-        outputs = tuple(self.net.forward(name) for name in ("heatmap_logits", "offsets", "presence_logit"))
+        outputs = tuple(self.net.forward(["heatmap_logits", "offsets", "presence_logit"]))
         proposals = cascade._top8_from_arrays(self.numpy, outputs)
         for index, proposal in enumerate(proposals):
             proposal["candidate_index"] = index
