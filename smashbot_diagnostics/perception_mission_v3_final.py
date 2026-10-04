@@ -134,7 +134,13 @@ def _decode(rows: list[dict[str, Any]], numpy: Any, cv2: Any) -> dict[str, Any]:
         metadata = load_frame_metadata(source / "packets.json", source_run=source_run, width=864, height=1920, pixel_format="rgb24")
         by_index = {int(row["frame_index"]): row for row in source_rows}
         with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=FFMPEG, pixel_format="rgb24", finalize_timeout_s=30.0) as stream:
-            for decoded in stream.iter_selected(sorted(by_index)):
+            wanted = set(by_index)
+            last_wanted = max(wanted)
+            for decoded in stream.iter_sequential():
+                if decoded.frame_index not in wanted:
+                    if decoded.frame_index > last_wanted:
+                        break
+                    continue
                 row = by_index[int(decoded.frame_index)]
                 if int(row["pts_us"]) != int(decoded.pts_us):
                     raise RuntimeError(f"v3 PTS mismatch {source_run}:{decoded.frame_index}")
