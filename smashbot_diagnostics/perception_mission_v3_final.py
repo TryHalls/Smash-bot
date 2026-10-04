@@ -211,56 +211,78 @@ def _prediction(tracker: TemporalTracker, row: dict[str, Any], fallback: tuple[f
     return state.x + state.vx * delta, state.y + state.vy * delta
 
 
+def _step(machine: temporal.TemporalConfirmedStateMachine, tracker: TemporalTracker, row: dict[str, Any], frame: Any, net: Any, numpy: Any) -> dict[str, Any]:
+    before = machine.state
+    started = time.perf_counter()
+    seed = None
+    local = None
+    emitted = None
+    tracker_result = None
+    if before in {"ACQUIRE", "REACQUIRE"}:
+        seed = _h2_seed(net, frame, numpy)
+        decision = machine.step(int(row["frame_index"]), int(row["pts_us"]), global_seed=seed)
+    else:
+        center = machine.seed if before == "TENTATIVE" else _prediction(tracker, row, (432.0, 960.0))
+        local = _nearest_local(frame, row, center) if center is not None else None
+        if local is not None:
+            observation = ShuttleObservation(int(row["frame_index"]), int(row["pts_us"]), local[0], local[1], 1.0)
+            tracker_result = tracker.step(int(row["frame_index"]), int(row["pts_us"]), observation)
+            emitted = local if tracker_result.observed else None
+        elif tracker.state is not None:
+            tracker_result = tracker.step(int(row["frame_index"]), int(row["pts_us"]), None)
+        decision = machine.step(int(row["frame_index"]), int(row["pts_us"]), local_observation=emitted)
+        if decision.emitted is None:
+            emitted = None
+    elapsed = (time.perf_counter() - started) * 1000.0
+    if decision.emitted is not None and decision.path != "local":
+        raise RuntimeError("global seed was emitted")
+    return {
+        "record_id": row["record_id"],
+        "frame_index": int(row["frame_index"]),
+        "pts_us": int(row["pts_us"]),
+        "state_before": decision.state_before,
+        "state_after": decision.state_after,
+        "path": decision.path,
+        "internal_seed": seed,
+        "local_candidate": local,
+        "emitted_observation": decision.emitted,
+        "event": decision.event,
+        "tracker_kind": tracker_result.kind if tracker_result is not None else None,
+        "processing_ms": elapsed,
+        "scheduling_debt_ms": max(0.0, elapsed - MIXED_BUDGET_MS),
+        "heavy_attempts": int(decision.heavy_attempts),
+        "stale": False,
+    }
+
+
 def _run_burst(rows: list[dict[str, Any]], frames: dict[str, Any], net: Any, numpy: Any) -> dict[str, Any]:
     machine = temporal.TemporalConfirmedStateMachine()
     tracker = TemporalTracker()
+    traces = [_step(machine, tracker, row, frames[str(row["record_id"])]["frame_bgr"], net, numpy) for row in sorted(rows, key=lambda item: int(item["frame_index"]))]
+    return {"traces": traces}
+
+
+def _run_burst_stream(rows: list[dict[str, Any]], net: Any, numpy: Any, cv2: Any) -> dict[str, Any]:
+    source_run = str(rows[0]["source_run"])
+    source = CAPTURE_ROOT / source_run
+    metadata = load_frame_metadata(source / "packets.json", source_run=source_run, width=864, height=1920, pixel_format="rgb24")
+    by_index = {int(row["frame_index"]): row for row in rows}
+    last_index = max(by_index)
+    machine = temporal.TemporalConfirmedStateMachine()
+    tracker = TemporalTracker()
     traces: list[dict[str, Any]] = []
-    for row in sorted(rows, key=lambda item: int(item["frame_index"])):
-        frame = frames[str(row["record_id"])] ["frame_bgr"]
-        before = machine.state
-        started = time.perf_counter()
-        seed = None
-        local = None
-        emitted = None
-        tracker_result = None
-        if before in {"ACQUIRE", "REACQUIRE"}:
-            seed = _h2_seed(net, frame, numpy)
-            decision = machine.step(int(row["frame_index"]), int(row["pts_us"]), global_seed=seed)
-        else:
-            center = machine.seed if before == "TENTATIVE" else _prediction(tracker, row, (432.0, 960.0))
-            local = _nearest_local(frame, row, center) if center is not None else None
-            if local is not None:
-                observation = ShuttleObservation(int(row["frame_index"]), int(row["pts_us"]), local[0], local[1], 1.0)
-                tracker_result = tracker.step(int(row["frame_index"]), int(row["pts_us"]), observation)
-                if tracker_result.observed:
-                    emitted = local
-                else:
-                    emitted = None
-            elif tracker.state is not None:
-                tracker_result = tracker.step(int(row["frame_index"]), int(row["pts_us"]), None)
-            decision = machine.step(int(row["frame_index"]), int(row["pts_us"]), local_observation=emitted)
-            if decision.emitted is None:
-                emitted = None
-        elapsed = (time.perf_counter() - started) * 1000.0
-        if decision.emitted is not None and decision.path != "local":
-            raise RuntimeError("global seed was emitted")
-        traces.append({
-            "record_id": row["record_id"],
-            "frame_index": int(row["frame_index"]),
-            "pts_us": int(row["pts_us"]),
-            "state_before": decision.state_before,
-            "state_after": decision.state_after,
-            "path": decision.path,
-            "internal_seed": seed,
-            "local_candidate": local,
-            "emitted_observation": decision.emitted,
-            "event": decision.event,
-            "tracker_kind": tracker_result.kind if tracker_result is not None else None,
-            "processing_ms": elapsed,
-            "scheduling_debt_ms": max(0.0, elapsed - MIXED_BUDGET_MS),
-            "heavy_attempts": int(decision.heavy_attempts),
-            "stale": False,
-        })
+    with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=FFMPEG, pixel_format="rgb24", finalize_timeout_s=30.0) as stream:
+        for decoded in stream.iter_sequential():
+            if decoded.frame_index > last_index:
+                break
+            if decoded.frame_index not in by_index:
+                continue
+            rgb = numpy.frombuffer(decoded.pixels, dtype=numpy.uint8).reshape((1920, 864, 3))
+            frame = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            row = by_index[decoded.frame_index]
+            if int(row["pts_us"]) != int(decoded.pts_us):
+                raise RuntimeError(f"v3 PTS mismatch {source_run}:{decoded.frame_index}")
+            traces.append(_step(machine, tracker, row, frame, net, numpy))
     return {"traces": traces}
 
 
@@ -326,16 +348,13 @@ def run() -> dict[str, Any]:
     burst_results: dict[str, dict[str, Any]] = {}
     for burst, rows in by_burst.items():
         runtime_burst = [row for row in runtime_rows if row["burst_id"] == burst]
-        frames = _decode(runtime_burst, numpy, cv2)
-        trace = _run_burst(runtime_burst, frames, net, numpy)["traces"]
+        trace = _run_burst_stream(runtime_burst, net, numpy, cv2)["traces"]
         traces[burst] = trace
         burst_results[burst] = _burst_summary(rows, trace)
-        del frames
     negative_rows: list[dict[str, Any]] = []
     negative = [row for row in runtime_rows if row["burst_id"] == NEGATIVE]
     negative_selected = [row for row in records if row["burst_id"] == NEGATIVE]
-    frames = _decode(negative, numpy, cv2)
-    negative_trace = _run_burst(negative, frames, net, numpy)["traces"]
+    negative_trace = _run_burst_stream(negative, net, numpy, cv2)["traces"]
     negative_rows.append({"record_id": NEGATIVE, "selected_frames": len(negative_selected), "processed_frames": len(negative_trace), "internal_seed": any(item["internal_seed"] is not None for item in negative_trace), "confirmed_emitted": any(item["emitted_observation"] is not None for item in negative_trace), "trace": negative_trace})
     all_errors = [value for burst, rows in by_burst.items() for value in _errors(rows, traces[burst])]
     visible_total = sum(row["shuttle"]["visible"] is True for row in records if row["burst_id"] in ACTIVE)
