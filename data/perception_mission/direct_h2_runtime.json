@@ -1,5 +1,6 @@
 {
   "architecture": "all-TRAIN Task012 H2 top-1 direct point detector",
+  "code_commit": "cfa77ebb01818ac8d4ab828cec9590cd28811e0c",
   "by_burst": {
     "A_01": {
       "emitted": 20,
@@ -128,7 +129,13 @@
         "repetition": 3
       }
     ],
-    "warmups": 20
+    "warmups": 20,
+    "scheduler": {
+      "fifo_backlog": false,
+      "latest_frame_only": true,
+      "max_pending": 1,
+      "contract_tested": true
+    }
   },
   "schema_version": 1,
   "temporal_contract": {
