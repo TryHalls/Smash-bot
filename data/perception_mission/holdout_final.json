@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "status": "EXTERNAL_BLOCKER",
+  "split": "holdout",
+  "holdout_used": true,
+  "freeze_commit": "463d80d8ebd16584b0868a8514471dd2e22fd87d",
+  "model_sha256": "9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d",
+  "records": 68,
+  "visible_frames": 59,
+  "active_invisible_fp": 1,
+  "confirmed_negative_fp": 0,
+  "stale_accepted": 0,
+  "recall_at_20": 0.7627118644067796,
+  "recall_at_10": 0.7627118644067796,
+  "localization": {
+    "count": 47,
+    "mean": 7.643250172544715,
+    "p50": 2.8144310821832623,
+    "p95": 8.968842814619098,
+    "max": 120.788205573141
+  },
+  "by_burst": {
+    "A_02": {
+      "frames": 21,
+      "visible_frames": 17,
+      "emitted": 13,
+      "recall_at_20": 0.7647058823529411,
+      "recall_at_10": 0.7647058823529411,
+      "longest_miss": 3
+    },
+    "B_02": {
+      "frames": 21,
+      "visible_frames": 21,
+      "emitted": 14,
+      "recall_at_20": 0.5714285714285714,
+      "recall_at_10": 0.5714285714285714,
+      "longest_miss": 4
+    },
+    "C_02": {
+      "frames": 21,
+      "visible_frames": 21,
+      "emitted": 20,
+      "recall_at_20": 0.9523809523809523,
+      "recall_at_10": 0.9523809523809523,
+      "longest_miss": 1
+    }
+  },
+  "negative_checks": [
+    {"burst_id": "C_NEG_02", "confirmed_observation": false},
+    {"burst_id": "C_NEG_04", "confirmed_observation": false},
+    {"burst_id": "C_NEG_06", "confirmed_observation": false},
+    {"burst_id": "C_NEG_08", "confirmed_observation": false},
+    {"burst_id": "C_NEG_10", "confirmed_observation": false}
+  ],
+  "runtime": {
+    "frames": 68,
+    "warmups": 20,
+    "mean_ms": 21.89090808738884,
+    "p95_ms": 38.00969674630323,
+    "max_ms": 65.3395389963407,
+    "mean_fps": 45.68106521738805
+  },
+  "gate_result": {
+    "semantic_pass": false,
+    "runtime_pass": true,
+    "failure": "HOLDOUT recall and active-burst miss gates fail",
+    "required_external_action": "new independent evaluation set before another final claim"
+  }
+}
