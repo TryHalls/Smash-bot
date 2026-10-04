@@ -77,8 +77,11 @@ def _iter_frames(rows: list[dict[str, Any]], root: Path, ffmpeg: str) -> Iterabl
         metadata = load_frame_metadata(source / "packets.json", source_run=source_run, width=864, height=1920, pixel_format="rgb24")
         by_index = {int(row["frame_index"]): row for row in source_rows}
         indices = sorted(by_index)
-        for start in range(0, len(indices), 64):
-            chunk = indices[start : start + 64]
+        # Small exact-index chunks keep FFmpeg teardown bounded on the
+        # Chromebook for the historical short bursts; this changes no frame
+        # identity or proposal semantics.
+        for start in range(0, len(indices), 8):
+            chunk = indices[start : start + 8]
             with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=ffmpeg, pixel_format="rgb24") as stream:
                 for decoded in stream.iter_selected(chunk):
                     row = by_index[int(decoded.frame_index)]
