@@ -1,0 +1,36 @@
+{
+  "experiment": "causal_h2_top8_beam_runtime_dev",
+  "holdout_used_as_final": false,
+  "new_v2_manifest_used": false,
+  "repetitions": [
+    {
+      "count": 63,
+      "max_ms": 63.12684700242244,
+      "mean_fps": 44.89284814313208,
+      "mean_ms": 22.27526301765696,
+      "p50_ms": 16.633548017125577,
+      "p95_ms": 49.40881498623639,
+      "repetition": 1
+    },
+    {
+      "count": 63,
+      "max_ms": 57.602794986451045,
+      "mean_fps": 54.55277042632428,
+      "mean_ms": 18.330874714246463,
+      "p50_ms": 15.266646019881591,
+      "p95_ms": 28.67417299421504,
+      "repetition": 2
+    },
+    {
+      "count": 63,
+      "max_ms": 38.67740900022909,
+      "mean_fps": 61.0079206880643,
+      "mean_ms": 16.39131425430865,
+      "p50_ms": 14.870801009237766,
+      "p95_ms": 25.515799003187567,
+      "repetition": 3
+    }
+  ],
+  "threads": 1,
+  "warmups": 20
+}

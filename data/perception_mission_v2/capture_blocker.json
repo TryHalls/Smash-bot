@@ -1,0 +1,23 @@
+{
+  "status": "EXTERNAL_BLOCKER",
+  "mission": "issue-38",
+  "branch": "mission/perception-complete-v2",
+  "base_commit": "f68c366ce5f394ca1505e0d3106344aed8b7044e",
+  "new_independent_capture": {
+    "required": true,
+    "created": false,
+    "minimum": "3 fresh gameplay bursts from separate runs/sessions plus 5 fresh negative checks",
+    "old_sources_reused": false
+  },
+  "checks": {
+    "adb_executable": false,
+    "scrcpy_executable": false,
+    "usb_devices": "Linux Foundation root hubs only",
+    "adb_service_5037_or_5555": false,
+    "ffmpeg_executable": "/usr/bin/ffmpeg",
+    "free_bytes": 1620221952
+  },
+  "holdout_used": false,
+  "minimum_external_action": "Connect and authorize a phone plus provide adb/scrcpy capture capability, then create and seal the fresh independent evaluation set before any model analysis.",
+  "next_action_after_unblock": "Seal raw captures and record manifest by SHA-256, then continue R&D using TRAIN+DEV+old failed HOLDOUT reclassified as DEV2 while keeping the new set sealed."
+}

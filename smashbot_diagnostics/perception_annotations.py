@@ -801,7 +801,12 @@ document.getElementById('frame').addEventListener('click',event=>{if(READ_ONLY||
 function hideWarning(){document.getElementById('warning').style.display='none';pendingNavigation=null;}function stayHere(){hideWarning();}function skipAnyway(){const delta=pendingNavigation;hideWarning();if(delta)doMove(delta);}function requestMove(delta){if(!state)return;if(delta>0&&needsNavigationWarning(state.record)){pendingNavigation=delta;document.getElementById('warning').style.display='block';return;}doMove(delta);}function doMove(delta){beginFrameLoad();const epoch=navigationEpoch;return fetch('/state?move='+delta).then(r=>{if(!r.ok)throw new Error(`navigation failed (${r.status})`);return r.json();}).then(s=>{if(epoch!==navigationEpoch)return;state=s;render();}).catch(error=>{if(epoch===navigationEpoch)frameLoading(`Navigation failed — labeling disabled: ${error.message}`,true);});}function nextUnlabeled(){beginFrameLoad();const epoch=navigationEpoch;return fetch('/state?next_unlabeled=1').then(r=>{if(!r.ok)throw new Error(`navigation failed (${r.status})`);return r.json();}).then(s=>{if(epoch!==navigationEpoch)return;state=s;render();}).catch(error=>{if(epoch===navigationEpoch)frameLoading(`Navigation failed — labeling disabled: ${error.message}`,true);});}
 document.addEventListener('keydown',event=>{if(event.target.tagName==='INPUT'||event.target.tagName==='TEXTAREA')return;const key=event.key.toLowerCase();if(event.key==='ArrowLeft')requestMove(-1);else if(event.key==='ArrowRight')requestMove(1);else if(key==='v'&&frameReady)setVisible(true);else if(key==='n'&&frameReady)setVisible(false);else if(key==='a'&&frameReady)setActive(state.record.active_rally===null?true:!state.record.active_rally);else if(key==='o'&&frameReady)setFlag('occluded');else if(key==='m'&&frameReady)setFlag('ambiguous');else if(key==='u')nextUnlabeled();});load();
 </script></body></html>"""
-    title = "TASK 010 — TRAIN Labels" if dataset_role == "train" else "TASK 009 — Ground Truth"
+    if dataset_role == "train":
+        title = "TASK 010 — TRAIN Labels"
+    elif dataset_role == "independent_eval":
+        title = "TASK 038 — Independent Evaluation"
+    else:
+        title = "TASK 009 — Ground Truth"
     return (
         template.replace("__DISABLED__", " disabled" if read_only else "")
         .replace("__READONLY__", "true" if read_only else "false")

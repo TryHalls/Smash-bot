@@ -1,39 +1,102 @@
-# Perception closure mission — final result
+# Perception closure mission v2 — sealed independent evaluation
 
 Status: `EXTERNAL_BLOCKER`
 
-The frozen direct H2 temporal runtime was evaluated once on the sealed HOLDOUT after freeze commit `463d80d8ebd16584b0868a8514471dd2e22fd87d`. No model, threshold, scheduler, or code was changed after that freeze.
+This is the single final replay of the frozen Issue #38 v2 protocol.  The
+frozen H2/causal-beam system did not pass the independent evaluation, so no
+tuning or modified rerun is claimed.
 
-## Frozen system
+## Frozen provenance
 
-The system is the all-TRAIN Task012 H2 checkpoint exported to OpenCV DNN. It preprocesses the gameplay crop at 432x832, decodes the valid-domain top-1 heatmap point, and confirms an observation only on the next consecutive point within 120 px. The first point is internal only. PTS/frame identity is monotonic, predictions are not observations, and the handoff is latest-frame-only with no FIFO backlog.
+- Code/protocol freeze: `047ce940caf44d9ddb262a41464ce2ecb5f684c7`.
+- Evaluation code commit: recorded in `data/perception_mission/final_v2.json`.
+- Sealed manifest:
+  `data/perception_mission_v2/independent_eval_manifest.json`.
+- Manifest SHA-256:
+  `1284603ded6041398b4d3f503fc7392598e380d45d2bb8a4290c2853ffaf4f4c`.
+- Human-label source SHA-256 before and after replay:
+  `6d46807fe9c57c1e6b9e1ab07d438db2bb655fa570dbb0e6e6777cecfb60c8b9`.
+- Reusable label snapshot:
+  `data/perception_mission_v2/independent_eval_ground_truth.json`.
+- Frozen H2 export SHA-256:
+  `9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d`.
+- Historical HOLDOUT: not used; DEV: not used for this final evaluation.
 
-Model export: `models/perception_mission/direct_h2/all_train_h2.onnx`
-Export SHA-256: `9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d`
+The new set contained 77 labels: A_03 24 records, B_03 24, C_03 24, and
+five V2 negative checks.  There were 67 visible records and 10 explicitly
+invisible records; the five negative checks were all explicitly invisible.
 
-## Development evidence
+## Frozen runtime
 
-DEV passed the frozen development gates: 59/63 recall@20, 55/63 recall@10, p50 3.7667 px, p95 11.5947 px, A/B/C recall@20 of 20/21, 19/21, and 20/21, with 0/5 confirmed negative false positives. OpenCV runtime means were 21.83, 27.94, and 19.92 ms/frame across three repetitions, all above 30 FPS by mean throughput.
+The runtime processed every decoded frame of each independent H.264 source,
+while evaluating only the 77 human-labeled identities.  It used the frozen
+all-TRAIN H2 export, valid-domain top-8 proposals, causal beam width 8, the
+120 px consecutive-candidate gate, and the cumulative heatmap-logit minus
+normalized-step-distance score.  The first beam point was an internal seed;
+only the next confirmed point and later tracker observations were emitted.
+Predictions were never counted as observations.  OpenCV used one CPU thread;
+FFmpeg decode was excluded from the algorithm timer.
 
-## Sealed HOLDOUT result
+## Final semantic result
 
-The corrected sealed pass evaluated 68 records, with 59 visible frames:
+| Measure | Result | Gate | Status |
+| --- | ---: | ---: | --- |
+| Confirmed recall @20 | 33/67 = 0.4925373134328358 | >= 0.90 | FAIL |
+| Confirmed recall @10 | 29/67 = 0.43283582089552236 | >= 0.80 | FAIL |
+| Localization count | 61 emitted visible observations | — | — |
+| Localization p50 | 10.751040819232783 px | <= 10 px | FAIL |
+| Localization p95 | 716.1757291934575 px | <= 20 px | FAIL |
+| Localization max | 961.9203212971263 px | — | — |
+| Confirmed negative FP | 5/5 | 0/5 | FAIL |
+| Longest labeled-visible miss run | 1 | <= 2 | PASS |
+| Stale accepted | 0 | 0 | PASS |
 
-| Gate | Result | Status |
-| --- | ---: | --- |
-| Recall@20 | 45/59 = 0.7627118644 | FAIL |
-| Recall@10 | 45/59 = 0.7627118644 | FAIL |
-| Active burst @20 | A 13/17, B 12/21, C 20/21 | FAIL |
-| Localization p50 / p95 | 2.8144 / 8.9688 px | PASS |
-| Longest miss | 4 frames in B_02 | FAIL |
-| Confirmed negative FP | 0/5 | PASS |
-| Stale accepted | 0 | PASS |
-| Runtime mean / FPS | 21.8909 ms / 45.6811 FPS | PASS |
+Per active burst at 20 px:
 
-The full compact result is [holdout_final.json](/home/dylandev2402/Smash-bot/data/perception_mission/holdout_final.json).
+- A_03: 6/23 = 0.2608695652173913
+- B_03: 13/22 = 0.5909090909090909
+- C_03: 14/22 = 0.6363636363636364
 
-## Decision
+The dominant observed failure is persistent wrong-point emission: the beam
+often remains on a high-scoring distractor, so the temporal confirmation
+contract confirms a wrong point rather than producing a miss.  The negative
+stream likewise produced confirmed observations at all five labeled checks.
 
-`PERCEPTION_COMPLETE` cannot be claimed. The frozen architecture is runtime-safe and localized well when it emits, but it does not generalize semantically to the sealed HOLDOUT, especially in A_02/B_02. The issue contract prohibits modifying and rerunning against the same HOLDOUT as a new final claim.
+## Runtime result
 
-The minimum external action is a new independent evaluation set (and, if needed, new human labels/capture) after which a new architecture/freeze can be evaluated. No phone interaction, new capture, dependency install, production integration, or modified HOLDOUT rerun was performed.
+All 3,526 active-source frames were processed through the frozen algorithm
+path.  The measured active-frame timing was:
+
+- mean: `27.21840520497011 ms`
+- p50: `22.906622019945644 ms`
+- p95: `51.15286276122788 ms`
+- max: `127.53063999116421 ms`
+- effective mean throughput: `36.73984542699801 FPS`
+- maximum scheduling debt: `94.19763999116421 ms`
+
+Mean throughput passed the 30 FPS budget, but accumulated scheduling debt did
+not.  The p95/max values are retained as diagnostics; the final result is
+already invalid on semantic grounds and was not optimized or rerun.
+
+## Integrity and reproducibility
+
+- Runtime code received no ground-truth input.
+- Full source streams were decoded with the pinned FFmpeg path and device
+  PTS metadata; no PNG was used as model input.
+- `annotations.json` remained byte-identical throughout the replay.
+- No model, threshold, beam width, architecture, or training data changed.
+- No production integration, phone control, new capture, package install, or
+  model download was performed during final evaluation.
+- Full ignored replay evidence is under `artifacts/perception_mission_v2/final_eval/`;
+  compact tracked evidence is `data/perception_mission/final_v2.json`.
+
+## Conclusion and minimum external action
+
+`EXTERNAL_BLOCKER`
+
+The frozen architecture fails the new independent evaluation on both
+semantic accuracy and confirmed negative rejection.  This evaluation must
+not be tuned against or rerun as a modified final claim.  The minimum next
+step is a new architecture/protocol decision followed by a fresh independent
+capture/evaluation set with human labels; that new set must be sealed before
+its final replay.  The existing v2 set remains immutable evidence.

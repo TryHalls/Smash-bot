@@ -1,0 +1,1195 @@
+{
+  "beam": {
+    "A_03": {
+      "decoded_frames": 1180,
+      "emitted_observations": 1136,
+      "internal_seed_frames": 1,
+      "max_beam_paths": 8,
+      "reacquire_events": 0,
+      "source_run": "20261004T105510Z"
+    },
+    "B_03": {
+      "decoded_frames": 1177,
+      "emitted_observations": 1065,
+      "internal_seed_frames": 1,
+      "max_beam_paths": 8,
+      "reacquire_events": 0,
+      "source_run": "20261004T105646Z"
+    },
+    "C_03": {
+      "decoded_frames": 1169,
+      "emitted_observations": 1038,
+      "internal_seed_frames": 1,
+      "max_beam_paths": 8,
+      "reacquire_events": 0,
+      "source_run": "20261004T105820Z"
+    },
+    "V2_NEGATIVE": {
+      "decoded_frames": 187,
+      "emitted_observations": 186,
+      "internal_seed_frames": 1,
+      "max_beam_paths": 8,
+      "reacquire_events": 0,
+      "source_run": "20261004T110036Z"
+    }
+  },
+  "code_commit": "cadf3fae195621259776649e7d0a90a9b8138e28",
+  "dev_used": false,
+  "freeze_commit": "047ce940caf44d9ddb262a41464ce2ecb5f684c7",
+  "gate_results": {
+    "all_gates_pass": false,
+    "runtime_pass": false,
+    "semantic_pass": false
+  },
+  "gt_used_in_runtime": false,
+  "historical_holdout_used": false,
+  "holdout_used_as_final": false,
+  "label_validation": {
+    "active_invisible": {
+      "A_03": 1,
+      "B_03": 2,
+      "C_03": 2
+    },
+    "active_visible": {
+      "A_03": 23,
+      "B_03": 22,
+      "C_03": 22
+    },
+    "by_burst": {
+      "A_03": 24,
+      "B_03": 24,
+      "C_03": 24,
+      "V2_NEGATIVE": 5
+    },
+    "invisible": 10,
+    "negative_invisible": 5,
+    "negative_visible": 0,
+    "records": 77,
+    "visible": 67
+  },
+  "mission": "issue38-perception-complete-v2",
+  "protocol": {
+    "beam_width": 8,
+    "gate_px": 120.0,
+    "global_seed_emitted": false,
+    "open_cv_threads": 1,
+    "score": "cumulative heatmap logit - step_distance / 120"
+  },
+  "provenance": {
+    "annotations_sha256_after": "6d46807fe9c57c1e6b9e1ab07d438db2bb655fa570dbb0e6e6777cecfb60c8b9",
+    "annotations_sha256_before": "6d46807fe9c57c1e6b9e1ab07d438db2bb655fa570dbb0e6e6777cecfb60c8b9",
+    "ground_truth_snapshot": "data/perception_mission_v2/independent_eval_ground_truth.json",
+    "ground_truth_snapshot_sha256": "9b4efae74ce54bc844ba59df93c7411e46e00296b3514c5f2585087bad4e5f32",
+    "h2_onnx": "models/perception_mission/direct_h2/all_train_h2.onnx",
+    "h2_onnx_sha256": "9188b382776ca99ea89fbdbbed57aa90a08485dcf422683bb7ce5168d6b8392d",
+    "h2_parameter_hash": "6cf22829471f7f19a4dc2a73d29900b8daf92c96ef475b97072c382995b824b4",
+    "runtime_source_blobs": {
+      "smashbot_diagnostics/perception_mission_beam.py": "fc6a55f579ed411b16dd124236aee29635584fdf",
+      "smashbot_diagnostics/perception_tracker.py": "1c07ee0c32961bf423d50e7ab3571cac55322abe",
+      "smashbot_diagnostics/task016_cascade.py": "b3d989809631ead576db0b30228c9854ab3d6c71"
+    },
+    "sealed_manifest": "data/perception_mission_v2/independent_eval_manifest.json",
+    "sealed_manifest_sha256": "1284603ded6041398b4d3f503fc7392598e380d45d2bb8a4290c2853ffaf4f4c"
+  },
+  "runtime": {
+    "active_frames_processed": 3526,
+    "active_max_scheduling_debt_ms": 94.19763999116421,
+    "active_mean_fps": 36.73984542699801,
+    "active_processing_ms": {
+      "count": 3526,
+      "max": 127.53063999116421,
+      "mean": 27.21840520497011,
+      "p50": 22.906622019945644,
+      "p95": 51.15286276122788
+    },
+    "fifo_backlog": false,
+    "latest_frame_only": true,
+    "negative_frames_processed": 187,
+    "negative_processing_ms": {
+      "count": 187,
+      "max": 96.2962599878665,
+      "mean": 27.432754710982778,
+      "p50": 23.898211016785353,
+      "p95": 49.65241229801903
+    },
+    "pass": false,
+    "stale_accepted": 0,
+    "threads": 1,
+    "timed_path": "BGR frame already decoded -> frozen H2 preprocess/OpenCV DNN -> valid top-8 -> causal beam/state/tracker; FFmpeg decode excluded"
+  },
+  "schema_version": 1,
+  "semantic": {
+    "active": {
+      "by_burst": {
+        "A_03": {
+          "emitted_on_labeled_invisible": 1,
+          "frames_labeled": 24,
+          "invisible_frames": 1,
+          "localization": {
+            "count": 23,
+            "max": 935.6467349714079,
+            "mean": 451.2881562715448,
+            "p50": 570.9650475891614,
+            "p95": 795.1586493741918
+          },
+          "longest_visible_miss_run": 0,
+          "recall_at_10": {
+            "matched": 6,
+            "rate": 0.2608695652173913,
+            "total": 23
+          },
+          "recall_at_20": {
+            "matched": 6,
+            "rate": 0.2608695652173913,
+            "total": 23
+          },
+          "rows": [
+            {
+              "emitted": [
+                450.9709424972534,
+                949.1087675094604
+              ],
+              "error_px": 1.2608333752965548,
+              "event": "observation",
+              "frame_index": 47,
+              "record_id": "A_03_F0047",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.1879587173462,
+                306.1517810821533
+              ],
+              "error_px": 582.2353490046511,
+              "event": "observation",
+              "frame_index": 94,
+              "record_id": "A_03_F0094",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.7953615188599,
+                306.45258235931396
+              ],
+              "error_px": 529.1712183984575,
+              "event": "observation",
+              "frame_index": 141,
+              "record_id": "A_03_F0141",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.9922485351562,
+                306.42469024658203
+              ],
+              "error_px": 590.5128098224545,
+              "event": "observation",
+              "frame_index": 188,
+              "record_id": "A_03_F0188",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.8086614608765,
+                305.6397171020508
+              ],
+              "error_px": 935.6467349714079,
+              "event": "observation",
+              "frame_index": 236,
+              "record_id": "A_03_F0236",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                386.93871879577637,
+                1344.298999786377
+              ],
+              "error_px": 2.4620828062719933,
+              "event": "observation",
+              "frame_index": 283,
+              "record_id": "A_03_F0283",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                741.2534580230713,
+                969.9694366455078
+              ],
+              "error_px": null,
+              "event": "observation",
+              "frame_index": 330,
+              "record_id": "A_03_F0330",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": false
+            },
+            {
+              "emitted": [
+                730.034236907959,
+                972.0147609710693
+              ],
+              "error_px": 506.97745757349384,
+              "event": "observation",
+              "frame_index": 377,
+              "record_id": "A_03_F0377",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.8467817306519,
+                306.1618137359619
+              ],
+              "error_px": 654.9125395205796,
+              "event": "observation",
+              "frame_index": 424,
+              "record_id": "A_03_F0424",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                468.3112277984619,
+                971.5103378295898
+              ],
+              "error_px": 3.9124964564225526,
+              "event": "observation",
+              "frame_index": 472,
+              "record_id": "A_03_F0472",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                401.953164100647,
+                682.1365728378296
+              ],
+              "error_px": 3.583646782695159,
+              "event": "observation",
+              "frame_index": 519,
+              "record_id": "A_03_F0519",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                363.87725830078125,
+                811.8277025222778
+              ],
+              "error_px": 2.193628069063936,
+              "event": "observation",
+              "frame_index": 566,
+              "record_id": "A_03_F0566",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                450.1035614013672,
+                415.1541347503662
+              ],
+              "error_px": 4.15263306412583,
+              "event": "observation",
+              "frame_index": 613,
+              "record_id": "A_03_F0613",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.1108732223511,
+                306.37763023376465
+              ],
+              "error_px": 468.9630629718889,
+              "event": "observation",
+              "frame_index": 660,
+              "record_id": "A_03_F0660",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.0603628158569,
+                305.97518730163574
+              ],
+              "error_px": 653.2227052306716,
+              "event": "observation",
+              "frame_index": 708,
+              "record_id": "A_03_F0708",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.7790975570679,
+                306.3751554489136
+              ],
+              "error_px": 475.63503263242075,
+              "event": "observation",
+              "frame_index": 755,
+              "record_id": "A_03_F0755",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.5748291015625,
+                305.9665832519531
+              ],
+              "error_px": 600.6080587903444,
+              "event": "observation",
+              "frame_index": 802,
+              "record_id": "A_03_F0802",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.5915098190308,
+                305.9926586151123
+              ],
+              "error_px": 576.7908899222263,
+              "event": "observation",
+              "frame_index": 849,
+              "record_id": "A_03_F0849",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.8758525848389,
+                305.9345064163208
+              ],
+              "error_px": 803.9345293942736,
+              "event": "observation",
+              "frame_index": 896,
+              "record_id": "A_03_F0896",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.8510818481445,
+                306.3021116256714
+              ],
+              "error_px": 570.9650475891614,
+              "event": "observation",
+              "frame_index": 944,
+              "record_id": "A_03_F0944",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                710.9490127563477,
+                306.07163429260254
+              ],
+              "error_px": 498.0300267018503,
+              "event": "observation",
+              "frame_index": 991,
+              "record_id": "A_03_F0991",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.4554262161255,
+                305.95660972595215
+              ],
+              "error_px": 618.1781175039631,
+              "event": "observation",
+              "frame_index": 1038,
+              "record_id": "A_03_F1038",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.4988374710083,
+                306.10245513916016
+              ],
+              "error_px": 580.1029644703523,
+              "event": "observation",
+              "frame_index": 1085,
+              "record_id": "A_03_F1085",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                711.5807199478149,
+                306.0664863586426
+              ],
+              "error_px": 716.1757291934575,
+              "event": "observation",
+              "frame_index": 1132,
+              "record_id": "A_03_F1132",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            }
+          ],
+          "visible_frames": 23
+        },
+        "B_03": {
+          "emitted_on_labeled_invisible": 2,
+          "frames_labeled": 24,
+          "invisible_frames": 2,
+          "localization": {
+            "count": 19,
+            "max": 961.9203212971263,
+            "mean": 126.22895339901616,
+            "p50": 7.154488628157369,
+            "p95": 656.5062921331819
+          },
+          "longest_visible_miss_run": 1,
+          "recall_at_10": {
+            "matched": 12,
+            "rate": 0.5454545454545454,
+            "total": 22
+          },
+          "recall_at_20": {
+            "matched": 13,
+            "rate": 0.5909090909090909,
+            "total": 22
+          },
+          "rows": [
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 47,
+              "record_id": "B_03_F0047",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                374.3524923324585,
+                877.7784185409546
+              ],
+              "error_px": null,
+              "event": "observation",
+              "frame_index": 94,
+              "record_id": "B_03_F0094",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": false
+            },
+            {
+              "emitted": [
+                358.26909923553467,
+                861.6333923339844
+              ],
+              "error_px": 0.7135299455407508,
+              "event": "observation",
+              "frame_index": 141,
+              "record_id": "B_03_F0141",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                357.65704250335693,
+                864.6465740203857
+              ],
+              "error_px": 8.151231784083487,
+              "event": "observation",
+              "frame_index": 188,
+              "record_id": "B_03_F0188",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                409.7111186981201,
+                767.3092603683472
+              ],
+              "error_px": 117.5185239117675,
+              "event": "observation",
+              "frame_index": 235,
+              "record_id": "B_03_F0235",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                471.5275402069092,
+                970.8520002365112
+              ],
+              "error_px": 7.154488628157369,
+              "event": "observation",
+              "frame_index": 282,
+              "record_id": "B_03_F0282",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                319.23171043395996,
+                398.9771194458008
+              ],
+              "error_px": 2.2176948949944197,
+              "event": "observation",
+              "frame_index": 329,
+              "record_id": "B_03_F0329",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                402.2063798904419,
+                585.9419403076172
+              ],
+              "error_px": 5.196285421896856,
+              "event": "observation",
+              "frame_index": 376,
+              "record_id": "B_03_F0376",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                709.6922883987427,
+                1192.4584436416626
+              ],
+              "error_px": 622.5714000038541,
+              "event": "observation",
+              "frame_index": 423,
+              "record_id": "B_03_F0423",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                550.1202554702759,
+                826.0172643661499
+              ],
+              "error_px": 0.3161511996251324,
+              "event": "observation",
+              "frame_index": 470,
+              "record_id": "B_03_F0470",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                443.4602870941162,
+                762.4635648727417
+              ],
+              "error_px": 7.640373513897653,
+              "event": "observation",
+              "frame_index": 517,
+              "record_id": "B_03_F0517",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                373.32398223876953,
+                1023.8665542602539
+              ],
+              "error_px": 44.09605144706371,
+              "event": "observation",
+              "frame_index": 564,
+              "record_id": "B_03_F0564",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                342.43649673461914,
+                935.7120676040649
+              ],
+              "error_px": 3.117010628444087,
+              "event": "observation",
+              "frame_index": 612,
+              "record_id": "B_03_F0612",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                553.6087646484375,
+                714.312108039856
+              ],
+              "error_px": 6.727587420213907,
+              "event": "observation",
+              "frame_index": 659,
+              "record_id": "B_03_F0659",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                470.8836669921875,
+                1372.4786777496338
+              ],
+              "error_px": 50.3432459254213,
+              "event": "observation",
+              "frame_index": 706,
+              "record_id": "B_03_F0706",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                477.9909267425537,
+                920.5109949111938
+              ],
+              "error_px": 1.208778622671289,
+              "event": "observation",
+              "frame_index": 753,
+              "record_id": "B_03_F0753",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 800,
+              "record_id": "B_03_F0800",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                631.7074089050293,
+                1207.8732709884644
+              ],
+              "error_px": 541.0911540582674,
+              "event": "observation",
+              "frame_index": 847,
+              "record_id": "B_03_F0847",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                294.12505435943604,
+                1019.064263343811
+              ],
+              "error_px": 1.1781429559464467,
+              "event": "observation",
+              "frame_index": 894,
+              "record_id": "B_03_F0894",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                343.6440420150757,
+                1279.242075920105
+              ],
+              "error_px": 6.884836710652535,
+              "event": "observation",
+              "frame_index": 941,
+              "record_id": "B_03_F0941",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                794.1710653305054,
+                1008.0651359558105
+              ],
+              "error_px": null,
+              "event": "observation",
+              "frame_index": 988,
+              "record_id": "B_03_F0988",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": false
+            },
+            {
+              "emitted": [
+                859.7992420196533,
+                488.9887475967407
+              ],
+              "error_px": 961.9203212971263,
+              "event": "observation",
+              "frame_index": 1035,
+              "record_id": "B_03_F1035",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 1082,
+              "record_id": "B_03_F1082",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                421.64365100860596,
+                909.0917291641235
+              ],
+              "error_px": 10.303306211682369,
+              "event": "observation",
+              "frame_index": 1129,
+              "record_id": "B_03_F1129",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            }
+          ],
+          "visible_frames": 22
+        },
+        "C_03": {
+          "emitted_on_labeled_invisible": 1,
+          "frames_labeled": 24,
+          "invisible_frames": 2,
+          "localization": {
+            "count": 19,
+            "max": 409.74540619252247,
+            "mean": 65.76519086715628,
+            "p50": 4.365221714143295,
+            "p95": 395.12060963659565
+          },
+          "longest_visible_miss_run": 1,
+          "recall_at_10": {
+            "matched": 11,
+            "rate": 0.5,
+            "total": 22
+          },
+          "recall_at_20": {
+            "matched": 14,
+            "rate": 0.6363636363636364,
+            "total": 22
+          },
+          "rows": [
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 46,
+              "record_id": "C_03_F0046",
+              "state_after": "COAST",
+              "state_before": "TRACK",
+              "visible": false
+            },
+            {
+              "emitted": [
+                165.2369556427002,
+                1024.5638704299927
+              ],
+              "error_px": 267.1936684032802,
+              "event": "observation",
+              "frame_index": 93,
+              "record_id": "C_03_F0093",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 140,
+              "record_id": "C_03_F0140",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                473.53114318847656,
+                972.2591180801392
+              ],
+              "error_px": 72.02373805541674,
+              "event": "observation",
+              "frame_index": 187,
+              "record_id": "C_03_F0187",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                423.04925060272217,
+                910.2405223846436
+              ],
+              "error_px": 11.04212413792148,
+              "event": "observation",
+              "frame_index": 233,
+              "record_id": "C_03_F0233",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                496.23031520843506,
+                704.2116861343384
+              ],
+              "error_px": 1.4231895455642152,
+              "event": "observation",
+              "frame_index": 280,
+              "record_id": "C_03_F0280",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                860.8089141845703,
+                1206.9710521697998
+              ],
+              "error_px": null,
+              "event": "observation",
+              "frame_index": 327,
+              "record_id": "C_03_F0327",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": false
+            },
+            {
+              "emitted": [
+                808.4255905151367,
+                922.7857646942139
+              ],
+              "error_px": 393.4956322414926,
+              "event": "observation",
+              "frame_index": 374,
+              "record_id": "C_03_F0374",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                823.2116918563843,
+                923.9061880111694
+              ],
+              "error_px": 409.74540619252247,
+              "event": "observation",
+              "frame_index": 420,
+              "record_id": "C_03_F0420",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                427.64398193359375,
+                816.7482795715332
+              ],
+              "error_px": 0.932252507274062,
+              "event": "observation",
+              "frame_index": 467,
+              "record_id": "C_03_F0467",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                411.8928632736206,
+                1176.6097736358643
+              ],
+              "error_px": 0.4202621004574721,
+              "event": "observation",
+              "frame_index": 514,
+              "record_id": "C_03_F0514",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                482.6765966415405,
+                429.39716148376465
+              ],
+              "error_px": 4.263874604149243,
+              "event": "observation",
+              "frame_index": 561,
+              "record_id": "C_03_F0561",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                437.0309581756592,
+                614.3842134475708
+              ],
+              "error_px": 1.0216152107221264,
+              "event": "observation",
+              "frame_index": 607,
+              "record_id": "C_03_F0607",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                328.8416996002197,
+                872.1208534240723
+              ],
+              "error_px": 39.84840111486761,
+              "event": "observation",
+              "frame_index": 654,
+              "record_id": "C_03_F0654",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                396.41200828552246,
+                971.5841245651245
+              ],
+              "error_px": 4.943075055258277,
+              "event": "observation",
+              "frame_index": 701,
+              "record_id": "C_03_F0701",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                542.6501312255859,
+                871.8366584777832
+              ],
+              "error_px": 2.6475381790567556,
+              "event": "observation",
+              "frame_index": 748,
+              "record_id": "C_03_F0748",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 794,
+              "record_id": "C_03_F0794",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                408.16325187683105,
+                1145.2627067565918
+              ],
+              "error_px": 10.751040819232783,
+              "event": "observation",
+              "frame_index": 841,
+              "record_id": "C_03_F0841",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                466.369122505188,
+                763.8840379714966
+              ],
+              "error_px": 2.619133959914127,
+              "event": "observation",
+              "frame_index": 888,
+              "record_id": "C_03_F0888",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                437.13088607788086,
+                817.5360250473022
+              ],
+              "error_px": 18.282856181885354,
+              "event": "observation",
+              "frame_index": 935,
+              "record_id": "C_03_F0935",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                457.4754238128662,
+                856.1971797943115
+              ],
+              "error_px": 4.365221714143295,
+              "event": "observation",
+              "frame_index": 981,
+              "record_id": "C_03_F0981",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": [
+                338.1066722869873,
+                801.5380544662476
+              ],
+              "error_px": 1.9971730677782702,
+              "event": "observation",
+              "frame_index": 1028,
+              "record_id": "C_03_F1028",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            },
+            {
+              "emitted": null,
+              "error_px": null,
+              "event": "gated_prediction",
+              "frame_index": 1075,
+              "record_id": "C_03_F1075",
+              "state_after": "COAST",
+              "state_before": "COAST",
+              "visible": true
+            },
+            {
+              "emitted": [
+                544.421275138855,
+                753.4940872192383
+              ],
+              "error_px": 2.522423385032249,
+              "event": "observation",
+              "frame_index": 1122,
+              "record_id": "C_03_F1122",
+              "state_after": "TRACK",
+              "state_before": "TRACK",
+              "visible": true
+            }
+          ],
+          "visible_frames": 22
+        }
+      },
+      "frames_labeled": 72,
+      "invisible_frames": 5,
+      "localization": {
+        "count": 61,
+        "max": 961.9203212971263,
+        "mean": 229.95928418529186,
+        "p50": 10.751040819232783,
+        "p95": 716.1757291934575
+      },
+      "longest_visible_miss_run": 1,
+      "recall_at_10": {
+        "matched": 29,
+        "rate": 0.43283582089552236,
+        "total": 67
+      },
+      "recall_at_20": {
+        "matched": 33,
+        "rate": 0.4925373134328358,
+        "total": 67
+      },
+      "visible_frames": 67
+    },
+    "negative_checks": {
+      "checks": [
+        {
+          "confirmed_observation": true,
+          "event": "observation",
+          "frame_index": 31,
+          "internal_seed": false,
+          "record_id": "V2_NEG_01",
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "confirmed_observation": true,
+          "event": "observation",
+          "frame_index": 62,
+          "internal_seed": false,
+          "record_id": "V2_NEG_02",
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "confirmed_observation": true,
+          "event": "observation",
+          "frame_index": 93,
+          "internal_seed": false,
+          "record_id": "V2_NEG_03",
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "confirmed_observation": true,
+          "event": "observation",
+          "frame_index": 124,
+          "internal_seed": false,
+          "record_id": "V2_NEG_04",
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "confirmed_observation": true,
+          "event": "observation",
+          "frame_index": 155,
+          "internal_seed": false,
+          "record_id": "V2_NEG_05",
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        }
+      ],
+      "confirmed_fp": 5,
+      "frames": 5
+    },
+    "pass": false
+  },
+  "status": "EXTERNAL_BLOCKER",
+  "verdict": "FINAL_INDEPENDENT_EVALUATION_FAIL"
+}
