@@ -145,6 +145,40 @@ def _decode(rows: list[dict[str, Any]], numpy: Any, cv2: Any) -> dict[str, Any]:
     return result
 
 
+def _expand_runtime_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill the temporal gaps without adding labels or evaluator decisions."""
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["source_run"])].append(row)
+    expanded: list[dict[str, Any]] = []
+    for source_run, selected in sorted(grouped.items()):
+        source = CAPTURE_ROOT / source_run
+        metadata = load_frame_metadata(source / "packets.json", source_run=source_run, width=864, height=1920, pixel_format="rgb24")
+        packets = {item.frame_index: item for item in metadata}
+        selected_by_index = {int(row["frame_index"]): row for row in selected}
+        first = min(selected_by_index)
+        last = max(selected_by_index)
+        for frame_index in range(first, last + 1):
+            item = selected_by_index.get(frame_index)
+            if item is not None:
+                expanded.append(dict(item))
+                continue
+            packet = packets.get(frame_index)
+            if packet is None:
+                raise RuntimeError(f"runtime frame missing from packets metadata: {source_run}:{frame_index}")
+            expanded.append({
+                "record_id": f"runtime:{source_run}:{frame_index}",
+                "burst_id": selected[0]["burst_id"],
+                "source_run": source_run,
+                "frame_index": frame_index,
+                "pts_us": int(packet.pts_us),
+                "role": "runtime_gap",
+                "shuttle": {"visible": None, "center_x": None, "center_y": None, "ambiguous": False, "occluded": False},
+                "runtime_gap": True,
+            })
+    return expanded
+
+
 def _h2_seed(net: Any, frame: Any, numpy: Any) -> tuple[float, float] | None:
     value = h2_gate._preprocess_train_frame(frame)
     net.setInput(numpy.ascontiguousarray(value[None], dtype=numpy.float32))
@@ -229,7 +263,9 @@ def _errors(rows: list[dict[str, Any]], traces: list[dict[str, Any]]) -> list[fl
     values: list[float] = []
     for trace in traces:
         point = trace["emitted_observation"]
-        row = by_id[str(trace["record_id"])]
+        row = by_id.get(str(trace["record_id"]))
+        if row is None:
+            continue
         if point is not None and row["shuttle"]["visible"] is True:
             gt = row["shuttle"]
             values.append(math.hypot(float(point[0]) - float(gt["center_x"]), float(point[1]) - float(gt["center_y"])))
@@ -240,7 +276,7 @@ def _longest_miss(rows: list[dict[str, Any]], traces: list[dict[str, Any]]) -> i
     visible = {str(row["record_id"]): row["shuttle"]["visible"] is True for row in rows}
     longest = current = 0
     for trace in traces:
-        if visible[str(trace["record_id"])] and trace["emitted_observation"] is None:
+        if visible.get(str(trace["record_id"]), False) and trace["emitted_observation"] is None:
             current += 1
             longest = max(longest, current)
         else:
@@ -253,6 +289,7 @@ def _burst_summary(rows: list[dict[str, Any]], traces: list[dict[str, Any]]) -> 
     visible = sum(row["shuttle"]["visible"] is True for row in rows)
     return {
         "frames": len(rows),
+        "processed_frames": len(traces),
         "visible": visible,
         "emitted": len(errors),
         "recall_at_20": sum(value <= 20.0 for value in errors) / visible if visible else None,
@@ -277,19 +314,21 @@ def run() -> dict[str, Any]:
     net = _export_or_load_h2(torch, onnx, cv2, model)
     cv2.setNumThreads(1)
     records = [dict(row) for row in truth_rows]
-    frames = _decode(records, numpy, cv2)
+    runtime_rows = _expand_runtime_rows(records)
+    frames = _decode(runtime_rows, numpy, cv2)
     by_burst = {burst: sorted([row for row in records if row["burst_id"] == burst], key=lambda item: int(item["frame_index"])) for burst in ACTIVE}
     traces: dict[str, list[dict[str, Any]]] = {}
     burst_results: dict[str, dict[str, Any]] = {}
     for burst, rows in by_burst.items():
-        trace = _run_burst(rows, frames, net, numpy)["traces"]
+        runtime_burst = [row for row in runtime_rows if row["burst_id"] == burst]
+        trace = _run_burst(runtime_burst, frames, net, numpy)["traces"]
         traces[burst] = trace
         burst_results[burst] = _burst_summary(rows, trace)
     negative_rows: list[dict[str, Any]] = []
-    negative = [row for row in records if row["burst_id"] == NEGATIVE]
-    for row in negative:
-        trace = _run_burst([row], frames, net, numpy)["traces"]
-        negative_rows.append({"record_id": row["record_id"], "internal_seed": any(item["internal_seed"] is not None for item in trace), "confirmed_emitted": any(item["emitted_observation"] is not None for item in trace), "trace": trace})
+    negative = [row for row in runtime_rows if row["burst_id"] == NEGATIVE]
+    negative_selected = [row for row in records if row["burst_id"] == NEGATIVE]
+    negative_trace = _run_burst(negative, frames, net, numpy)["traces"]
+    negative_rows.append({"record_id": NEGATIVE, "selected_frames": len(negative_selected), "processed_frames": len(negative_trace), "internal_seed": any(item["internal_seed"] is not None for item in negative_trace), "confirmed_emitted": any(item["emitted_observation"] is not None for item in negative_trace), "trace": negative_trace})
     all_errors = [value for burst, rows in by_burst.items() for value in _errors(rows, traces[burst])]
     visible_total = sum(row["shuttle"]["visible"] is True for row in records if row["burst_id"] in ACTIVE)
     all_times = [float(item["processing_ms"]) for values in traces.values() for item in values]
@@ -316,7 +355,7 @@ def run() -> dict[str, Any]:
             "state_machine": "Task018 TemporalConfirmedStateMachine",
             "global_seed_emitted": False,
         },
-        "dataset": {"records": len(records), "visible_active": visible_total, "negative_records": len(negative), "manifest_records": len(manifest_rows)},
+        "dataset": {"records": len(records), "visible_active": visible_total, "negative_records": len(negative_selected), "manifest_records": len(manifest_rows), "runtime_processed_active_frames": sum(len([row for row in runtime_rows if row["burst_id"] == burst]) for burst in ACTIVE), "runtime_processed_negative_frames": len(negative)},
         "by_burst": burst_results,
         "global": {"frames": sum(len(rows) for rows in by_burst.values()), "visible": visible_total, "emitted_visible": len(all_errors), "recall_at_20": sum(value <= 20.0 for value in all_errors) / visible_total if visible_total else None, "recall_at_10": sum(value <= 10.0 for value in all_errors) / visible_total if visible_total else None, "localization": _stats(all_errors), "longest_visible_miss": max((_longest_miss(by_burst[burst], traces[burst]) for burst in ACTIVE), default=0)},
         "negative_checks": {"frames": len(negative_rows), "confirmed_fp": sum(int(row["confirmed_emitted"]) for row in negative_rows), "internal_seed_count": sum(int(row["internal_seed"]) for row in negative_rows), "rows": [{key: value for key, value in row.items() if key != "trace"} for row in negative_rows]},
