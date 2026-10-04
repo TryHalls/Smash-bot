@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,85 @@ def build_sealed_manifest(
         },
         "sources": sources,
         "records": records,
+    }
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    return payload
+
+
+def build_ground_truth_snapshot(
+    *,
+    sealed_manifest: Path = Path("data/perception_mission_v3/independent_eval_manifest.json"),
+    annotations: Path = Path("artifacts/perception_mission_v3/annotation/annotations.json"),
+    output: Path = Path("data/perception_mission_v3/independent_eval_ground_truth.json"),
+) -> dict[str, Any]:
+    """Freeze completed human labels without changing the annotation session."""
+
+    manifest = json.loads(Path(sealed_manifest).read_text(encoding="utf-8"))
+    labels = json.loads(Path(annotations).read_text(encoding="utf-8"))
+    if manifest.get("dataset", {}).get("status") != "SEALED":
+        raise ValueError("source manifest is not sealed")
+    sealed_rows = list(manifest.get("records", []))
+    label_rows = list(labels.get("records", []))
+    if len(sealed_rows) != 83 or len(label_rows) != 83:
+        raise ValueError("v3 snapshot requires exactly 83 records")
+    if [row.get("record_id") for row in sealed_rows] != [row.get("record_id") for row in label_rows]:
+        raise ValueError("annotation identities/order differ from sealed manifest")
+    frozen: list[dict[str, Any]] = []
+    for source, label in zip(sealed_rows, label_rows):
+        for field in ("source_run", "burst_id", "frame_index", "pts_us"):
+            if source.get(field) != label.get(field):
+                raise ValueError(f"identity mismatch for {source['record_id']}: {field}")
+        if label.get("active_rally") is None or label.get("shuttle", {}).get("visible") is None:
+            raise ValueError(f"unlabeled record remains: {source['record_id']}")
+        shuttle = label["shuttle"]
+        if shuttle["visible"] is True and (shuttle["center_x"] is None or shuttle["center_y"] is None) and not shuttle["ambiguous"]:
+            raise ValueError(f"visible record has no center: {source['record_id']}")
+        frozen.append(
+            {
+                "record_id": source["record_id"],
+                "burst_id": source["burst_id"],
+                "source_run": source["source_run"],
+                "frame_index": int(source["frame_index"]),
+                "pts_us": int(source["pts_us"]),
+                "role": source["role"],
+                "active_rally": label["active_rally"],
+                "shuttle": {
+                    "visible": shuttle["visible"],
+                    "center_x": shuttle["center_x"],
+                    "center_y": shuttle["center_y"],
+                    "ambiguous": shuttle["ambiguous"],
+                    "occluded": shuttle["occluded"],
+                },
+            }
+        )
+    by_burst = Counter(row["burst_id"] for row in frozen)
+    visible_by_burst = Counter(row["burst_id"] for row in frozen if row["shuttle"]["visible"] is True)
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "dataset": {
+            "name": "issue38-independent-evaluation-v3",
+            "status": "SEALED_HUMAN_GROUND_TRUTH",
+            "record_count": len(frozen),
+            "visible_count": sum(row["shuttle"]["visible"] is True for row in frozen),
+            "invisible_count": sum(row["shuttle"]["visible"] is False for row in frozen),
+            "records_by_burst": dict(sorted(by_burst.items())),
+            "visible_by_burst": dict(sorted(visible_by_burst.items())),
+            "width": 864,
+            "height": 1920,
+        },
+        "provenance": {
+            "sealed_manifest": "data/perception_mission_v3/independent_eval_manifest.json",
+            "sealed_manifest_sha256": sha256_file(Path(sealed_manifest)),
+            "annotation_session": "artifacts/perception_mission_v3/annotation/annotations.json",
+            "annotation_session_sha256": sha256_file(Path(annotations)),
+            "model_evaluation_before_sealing": False,
+            "dev_used_for_fitting_or_selection": False,
+            "holdout_used": False,
+            "human_labels_only": True,
+        },
+        "records": frozen,
     }
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
