@@ -24,6 +24,7 @@ from .perception_v1 import white_candidates, yellow_candidates
 
 TRAIN = Path("data/task015/human_dense_train.json")
 OUT = Path("data/perception_mission/union_hog_diagnosis.json")
+MODEL_OUT = Path("artifacts/mission_v3/union_hog/union_hog.svm")
 TASK008 = Path("artifacts/task008")
 FFMPEG = "/usr/bin/ffmpeg"
 
@@ -82,7 +83,7 @@ def _iter_frames(rows: list[dict[str, Any]], root: Path, ffmpeg: str) -> Iterabl
         # identity or proposal semantics.
         for start in range(0, len(indices), 8):
             chunk = indices[start : start + 8]
-            with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=ffmpeg, pixel_format="rgb24") as stream:
+            with FFmpegFrameStream(source / "capture.h264", metadata, ffmpeg=ffmpeg, pixel_format="rgb24", finalize_timeout_s=30.0) as stream:
                 for decoded in stream.iter_selected(chunk):
                     row = by_index[int(decoded.frame_index)]
                     if int(row["pts_us"]) != int(decoded.pts_us):
@@ -233,6 +234,8 @@ def run(*, output: Path = OUT, task008_root: Path = TASK008, ffmpeg: str = FFMPE
         # must be removed in the same order.
         raise RuntimeError("feature/label cardinality mismatch")
     svm, _positive_count = _train_svm(matrix, labels)
+    MODEL_OUT.parent.mkdir(parents=True, exist_ok=True)
+    svm.save(str(MODEL_OUT))
     raw = _score(svm, matrix)
     sign = 1 if float(raw[labels.reshape(-1) == 1].mean()) > float(raw[labels.reshape(-1) == -1].mean()) else -1
     eval_sets = {
