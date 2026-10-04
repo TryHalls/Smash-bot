@@ -34,6 +34,7 @@ WEIGHT_DECAY = 1e-4
 TORCH_THREADS = 2
 INPUT_CHANNELS = 6
 MODEL_NAME = "temporal_h2_2frame_presence_heatmap"
+FIT_MODES = ("lobo", "all-train")
 
 
 class MissionV3Error(RuntimeError):
@@ -283,6 +284,7 @@ def main() -> int:
     parser.add_argument("--task008-root", type=Path, default=Path("artifacts/task008"))
     parser.add_argument("--ffmpeg", default="/usr/bin/ffmpeg")
     parser.add_argument("--output", type=Path, default=Path("artifacts/mission_v3/temporal_research"))
+    parser.add_argument("--fit-mode", choices=FIT_MODES, default="lobo")
     args = parser.parse_args()
     torch, nn = _torch()
     numpy, _cv2 = _numpy_cv2()
@@ -290,14 +292,15 @@ def main() -> int:
     rows = [row for row in json.loads(args.train.read_text(encoding="utf-8"))["records"] if row.get("split") == "train"]
     cache = load_temporal_cache(rows, source_root=args.task008_root, ffmpeg=args.ffmpeg)
     folds: dict[str, Any] = {}
-    for held in "ABC":
-        fit = [row for row in rows if str(row.get("train_group")) != held]
+    held_values = ("A", "B", "C") if args.fit_mode == "lobo" else ("ALL",)
+    for held in held_values:
+        fit = rows if held == "ALL" else [row for row in rows if str(row.get("train_group")) != held]
         model, losses = train_once(torch, nn, numpy, fit, cache)
-        checkpoint = args.output / f"fold_{held}.pt"
+        checkpoint = args.output / ("all_train.pt" if held == "ALL" else f"fold_{held}.pt")
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         torch.save({"model": model.state_dict(), "parameter_hash": parameter_hash(torch, model)}, str(checkpoint))
         folds[held] = {"fit_records": len(fit), "fit_visible": sum(_target(row)[4] for row in fit), "fit_invisible": sum(not _target(row)[4] for row in fit), "parameter_hash": parameter_hash(torch, model), "parameter_count": parameter_count(torch, model), "loss": losses, "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest()}
-    report = {"schema_version": 1, "model": MODEL_NAME, "input_channels": INPUT_CHANNELS, "grid": [GRID_HEIGHT, GRID_WIDTH], "protocol": {"seed": SEED, "epochs": EPOCHS, "batch": BATCH_SIZE, "lr": LEARNING_RATE, "weight_decay": WEIGHT_DECAY, "torch_threads": TORCH_THREADS, "objectness_threshold": 0.0}, "provenance": {"v3_used_for_fitting": False, "v3_used_for_selection": False, "holdout_used": False}, "folds": folds}
+    report = {"schema_version": 1, "model": MODEL_NAME, "fit_mode": args.fit_mode, "input_channels": INPUT_CHANNELS, "grid": [GRID_HEIGHT, GRID_WIDTH], "protocol": {"seed": SEED, "epochs": EPOCHS, "batch": BATCH_SIZE, "lr": LEARNING_RATE, "weight_decay": WEIGHT_DECAY, "torch_threads": TORCH_THREADS, "objectness_threshold": 0.0}, "provenance": {"v3_used_for_fitting": False, "v3_used_for_selection": False, "holdout_used": False}, "folds": folds}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "training.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, sort_keys=True))
