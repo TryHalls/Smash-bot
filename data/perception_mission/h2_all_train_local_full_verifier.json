@@ -1,0 +1,933 @@
+{
+  "dataset": {
+    "candidates": 41838,
+    "dev_used": false,
+    "ground_truth_used_for_proposals": false,
+    "holdout_used": false,
+    "label_stats": {
+      "ignore": 300,
+      "negative": 40938,
+      "no_positive_in_band": 43,
+      "positive": 600,
+      "proposal_miss": 100
+    },
+    "patch_cache_bytes": 514105344,
+    "proposal_generator": "all-TRAIN full-frame Task011 direct yellow-only proposals; runtime scores local ROI",
+    "records": 781
+  },
+  "dev_used_for_fitting": false,
+  "dev_used_for_selection": false,
+  "experiment": "all_train_yellow_local_verifier_full_frame",
+  "fit": {
+    "architecture": "Task019 TinyCandidateCNN 54089 params",
+    "epochs": 40,
+    "final_loss": 0.004009255099459751,
+    "negative": 40938,
+    "parameter_hash": "5ff060e1bee085223771ddb1ec94c67a66ff80c3c89e9a963f77824912e5f714",
+    "positive": 600,
+    "rows": 41538,
+    "seed": 20261001
+  },
+  "holdout_used": false,
+  "schema_version": 1,
+  "stateful": {
+    "by_burst": {
+      "A_01": {
+        "emitted": 18,
+        "frames": 21,
+        "localization": {
+          "count": 18,
+          "max": 6.7030666747400565,
+          "mean": 2.6457101875818534,
+          "p50": 2.19562657579454,
+          "p95": 6.251289769167606
+        },
+        "longest_miss": 2,
+        "recall_at_10": 0.8571428571428571,
+        "recall_at_20": 0.8571428571428571
+      },
+      "B_01": {
+        "emitted": 20,
+        "frames": 21,
+        "localization": {
+          "count": 20,
+          "max": 6.21743586243425,
+          "mean": 1.9915226740529692,
+          "p50": 1.5782700670045182,
+          "p95": 3.6625144460712513
+        },
+        "longest_miss": 1,
+        "recall_at_10": 0.9523809523809523,
+        "recall_at_20": 0.9523809523809523
+      },
+      "C_01": {
+        "emitted": 17,
+        "frames": 21,
+        "localization": {
+          "count": 17,
+          "max": 4.055439407948758,
+          "mean": 2.0750660839472026,
+          "p50": 1.8978624166583782,
+          "p95": 3.820540669642269
+        },
+        "longest_miss": 3,
+        "recall_at_10": 0.8095238095238095,
+        "recall_at_20": 0.8095238095238095
+      }
+    },
+    "confirmed_negative_fp": 0,
+    "localization": {
+      "count": 55,
+      "max": 6.7030666747400565,
+      "mean": 2.2314429142660948,
+      "p50": 1.976044773171933,
+      "p95": 4.690276915431159
+    },
+    "negative_checks": [
+      {
+        "burst_id": "C_NEG_01",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_03",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_05",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_07",
+        "confirmed_emission": false
+      },
+      {
+        "burst_id": "C_NEG_09",
+        "confirmed_emission": false
+      }
+    ],
+    "recall_at_10": 0.873015873015873,
+    "recall_at_20": 0.873015873015873,
+    "runtime": {
+      "mean_fps": 40.833186787217365,
+      "processing_ms": {
+        "count": 63,
+        "max": 730.7387219916563,
+        "mean": 24.48988380973109,
+        "p50": 9.962570009520277,
+        "p95": 46.80832390877181
+      }
+    },
+    "traces": {
+      "A_01": [
+        {
+          "emitted_observation": null,
+          "frame_index": 78,
+          "internal_seed": [
+            428.53667163848877,
+            1193.57648229599
+          ],
+          "path": "global",
+          "processing_ms": 730.7387219916563,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            424.2,
+            1195.7
+          ],
+          "frame_index": 79,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 49.72551800892688,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            424.1363636363636,
+            1194.8636363636365
+          ],
+          "frame_index": 80,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.072461988893338,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.0
+          ],
+          "frame_index": 81,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.16852599766571,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.0
+          ],
+          "frame_index": 82,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 20.55357700737659,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "frame_index": 83,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 16.063349990872666,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "frame_index": 84,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 18.477738994988613,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "frame_index": 85,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.39516898849979,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "frame_index": 86,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.579825011314824,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.9117647058823,
+            1193.7941176470588
+          ],
+          "frame_index": 87,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.836916993255727,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "frame_index": 88,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.395319993724115,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "frame_index": 89,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.696957003441639,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "frame_index": 90,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.88468199991621,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.6111111111111,
+            1195.9444444444443
+          ],
+          "frame_index": 91,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.893072998034768,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            424.5,
+            1195.5
+          ],
+          "frame_index": 92,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.962570009520277,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            423.5,
+            1193.5
+          ],
+          "frame_index": 93,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.651637002709322,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            436.66666666666663,
+            1187.25
+          ],
+          "frame_index": 94,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 13.411189007456414,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "frame_index": 95,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.917095995973796,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "frame_index": 96,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.123849996598437,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "COAST"
+        },
+        {
+          "emitted_observation": [
+            451.46000000000004,
+            1115.38
+          ],
+          "frame_index": 97,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 19.474701010040008,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "COAST"
+        },
+        {
+          "emitted_observation": [
+            474.3490566037736,
+            1028.0094339622642
+          ],
+          "frame_index": 98,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 15.073414004291408,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        }
+      ],
+      "B_01": [
+        {
+          "emitted_observation": null,
+          "frame_index": 78,
+          "internal_seed": [
+            313.73152256011963,
+            795.6443223953247
+          ],
+          "path": "global",
+          "processing_ms": 58.978215005481616,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            313.8636363636364,
+            805.0454545454545
+          ],
+          "frame_index": 79,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.65325800946448,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            315.6428571428571,
+            813.2619047619048
+          ],
+          "frame_index": 80,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.862980001140386,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            317.3,
+            821.5
+          ],
+          "frame_index": 81,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 5.970615995465778,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            318.4090909090909,
+            831.5909090909091
+          ],
+          "frame_index": 82,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.808562990045175,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            319.83333333333337,
+            841.0714285714286
+          ],
+          "frame_index": 83,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.93397400493268,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            319.3888888888889,
+            848.6111111111111
+          ],
+          "frame_index": 84,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.545486994786188,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            320.72,
+            858.44
+          ],
+          "frame_index": 85,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.492027999134734,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            320.83333333333337,
+            867.1666666666666
+          ],
+          "frame_index": 86,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.181844012346119,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            321.72222222222223,
+            876.2777777777778
+          ],
+          "frame_index": 87,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.581805992638692,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.2142857142857,
+            885.7857142857142
+          ],
+          "frame_index": 88,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.3147049958352,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.75,
+            894.25
+          ],
+          "frame_index": 89,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 5.736800012527965,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            322.75,
+            902.25
+          ],
+          "frame_index": 90,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.650929987197742,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.73809523809524,
+            910.9761904761905
+          ],
+          "frame_index": 91,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.708026994601823,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.125,
+            920.125
+          ],
+          "frame_index": 92,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 4.6367239992832765,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            324.07894736842104,
+            928.8157894736842
+          ],
+          "frame_index": 93,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.266440997133031,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            323.02631578947364,
+            937.1315789473684
+          ],
+          "frame_index": 94,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.271613005083054,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            319.5,
+            943.5
+          ],
+          "frame_index": 95,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 18.610615996294655,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.5,
+            956.25
+          ],
+          "frame_index": 96,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.175492002512328,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.16666666666663,
+            965.5
+          ],
+          "frame_index": 97,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 7.2603900043759495,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            326.1470588235294,
+            974.2647058823529
+          ],
+          "frame_index": 98,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 13.494610000634566,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        }
+      ],
+      "C_01": [
+        {
+          "emitted_observation": null,
+          "frame_index": 351,
+          "internal_seed": [
+            443.71906757354736,
+            918.0871148109436
+          ],
+          "path": "global",
+          "processing_ms": 61.670509006944485,
+          "stale": false,
+          "state_after": "TENTATIVE",
+          "state_before": "ACQUIRE"
+        },
+        {
+          "emitted_observation": [
+            434.47093023255815,
+            886.7616279069767
+          ],
+          "frame_index": 352,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 20.12434200150892,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TENTATIVE"
+        },
+        {
+          "emitted_observation": [
+            423.7435897435897,
+            859.3179487179488
+          ],
+          "frame_index": 353,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.021350007969886,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            413.8461538461538,
+            830.8076923076924
+          ],
+          "frame_index": 354,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 17.49180199112743,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            403.9814814814815,
+            801.4259259259259
+          ],
+          "frame_index": 355,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 4.700423000031151,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            395.1673640167364,
+            771.9037656903765
+          ],
+          "frame_index": 356,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.002983010257594,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            386.23333333333335,
+            741.5333333333333
+          ],
+          "frame_index": 357,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.567802004516125,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            377.92424242424244,
+            711.0454545454545
+          ],
+          "frame_index": 358,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.195145990815945,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            369.9202898550725,
+            680.1231884057971
+          ],
+          "frame_index": 359,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.313377995975316,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            361.8066666666667,
+            648.6066666666667
+          ],
+          "frame_index": 360,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 5.857178010046482,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            355.474358974359,
+            618.3461538461538
+          ],
+          "frame_index": 361,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 6.9475680065806955,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            349.043227665706,
+            588.5850144092219
+          ],
+          "frame_index": 362,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 8.543454998289235,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            343.34444444444443,
+            559.5
+          ],
+          "frame_index": 363,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.340270993765444,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            339.5,
+            531.5
+          ],
+          "frame_index": 364,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 10.630198012222536,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            332.0882352941177,
+            478.4019607843137
+          ],
+          "frame_index": 365,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 18.468310998287052,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            327.1126126126126,
+            431.40090090090087
+          ],
+          "frame_index": 366,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 17.131023996626027,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.5940170940171,
+            411.45726495726495
+          ],
+          "frame_index": 367,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 13.901525002438575,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": [
+            325.0546218487395,
+            393.390756302521
+          ],
+          "frame_index": 368,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 14.314608997665346,
+          "stale": false,
+          "state_after": "TRACK",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "frame_index": 369,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 11.99488299607765,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "TRACK"
+        },
+        {
+          "emitted_observation": null,
+          "frame_index": 370,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.629371998016723,
+          "stale": false,
+          "state_after": "COAST",
+          "state_before": "COAST"
+        },
+        {
+          "emitted_observation": null,
+          "frame_index": 371,
+          "internal_seed": null,
+          "path": "local",
+          "processing_ms": 9.785137997823767,
+          "stale": false,
+          "state_after": "REACQUIRE",
+          "state_before": "COAST"
+        }
+      ]
+    }
+  }
+}
